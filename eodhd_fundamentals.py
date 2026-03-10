@@ -219,10 +219,12 @@ def compute_kennzahlen(data, hl, val, tech):
 
     # Growth helpers
     def ttm_growth(df, col):
-        """TTM: TTM[0] vs TTM[1] — rolling quarter-to-quarter on TTM series"""
+        """TTM: TTM[0] vs TTM[4] (same quarter last year), fallback TTM[1]"""
         try:
             s = df[col].dropna()
-            if len(s) >= 2 and s.iloc[1] != 0:
+            if len(s) >= 5 and s.iloc[4] != 0:
+                return (s.iloc[0] / s.iloc[4] - 1) * 100
+            elif len(s) >= 2 and s.iloc[1] != 0:
                 return (s.iloc[0] / s.iloc[1] - 1) * 100
         except: pass
         return None
