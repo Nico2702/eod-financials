@@ -361,10 +361,12 @@ with tab1:
         ("ROA",              fmt_pct(hl.get("ReturnOnAssetsTTM"))),
         ("ROE",              fmt_pct(hl.get("ReturnOnEquityTTM"))),
     ]
-    cols4 = st.columns(4)
-    for i, (label, value) in enumerate(highlights):
-        with cols4[i % 4]:
-            metric_card(label, value)
+    for row_start in range(0, len(highlights), 5):
+        row_items = highlights[row_start:row_start+5]
+        row_cols = st.columns(5)
+        for i, (label, value) in enumerate(row_items):
+            with row_cols[i]:
+                metric_card(label, value)
 
     if rat:
         st.markdown('<div class="section-header">Analyst Ratings</div>', unsafe_allow_html=True)
@@ -427,20 +429,21 @@ with tab2:
                 unsafe_allow_html=True
             )
 
-            # KPI cards — current TTM
+            # KPI cards — current TTM, 5 per row
             fields_to_show = TTM_FIELDS.get(stmt_choice, [])
-            n_cols = min(len(fields_to_show), 5)
-            ttm_cols = st.columns(n_cols)
-            for i, (lbl, field, fmt) in enumerate(fields_to_show):
-                raw_val = ttm_series.get(field)
-                if fmt == "$":
-                    display = fmt_num(raw_val, prefix="$")
-                elif fmt == "%":
-                    display = fmt_pct(raw_val)
-                else:
-                    display = fmt_num(raw_val, suffix="x", decimals=2) if raw_val is not None else "—"
-                with ttm_cols[i % n_cols]:
-                    metric_card(lbl, display)
+            for row_start in range(0, len(fields_to_show), 5):
+                row_fields = fields_to_show[row_start:row_start+5]
+                ttm_cols = st.columns(5)
+                for i, (lbl, field, fmt) in enumerate(row_fields):
+                    raw_val = ttm_series.get(field)
+                    if fmt == "$":
+                        display = fmt_num(raw_val, prefix="$")
+                    elif fmt == "%":
+                        display = fmt_pct(raw_val)
+                    else:
+                        display = fmt_num(raw_val, suffix="x", decimals=2) if raw_val is not None else "—"
+                    with ttm_cols[i]:
+                        metric_card(lbl, display)
 
             st.markdown("---")
 
