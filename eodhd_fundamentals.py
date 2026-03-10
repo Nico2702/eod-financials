@@ -119,11 +119,21 @@ def parse_financials(data: dict, statement: str, period: str) -> pd.DataFrame:
 
 # ── TTM Calculator ────────────────────────────────────────────────────────────
 def calculate_ttm(data: dict, statement: str) -> pd.Series:
+    """Current TTM (latest 4 quarters) as a Series — used for KPI cards."""
+    df = calculate_ttm_history(data, statement)
+    if df.empty:
+        return pd.Series(dtype=float)
+    latest = df.iloc[0].copy()
+    latest["_quarters_used"] = 4
+    latest["_latest_quarter"] = df.index[0]
+    return latest
+
+
+def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
     """
-    Trailing Twelve Months from last 4 quarterly reports.
-    - FLOW fields  → sum of last 4 quarters
-    - POINT fields → most recent quarter only
-    - MARGINS      → recalculated from TTM base values
+    Historical TTM: for every quarter Q, compute TTM(Q) = sum of Q + Q-1 + Q-2 + Q-3.
+    Returns a DataFrame indexed by quarter-end date, columns = all financial fields + derived margins.
+    Only quarters where all 4 trailing quarters are available are included.
     """
     SUM_FIELDS = {
         "totalRevenue", "costOfRevenue", "grossProfit",
@@ -148,64 +158,76 @@ def calculate_ttm(data: dict, statement: str) -> pd.Series:
     }
     try:
         quarterly = data["Financials"][statement].get("quarterly", {})
-        if not quarterly:
-            return pd.Series(dtype=float)
+        if not quarterly or len(quarterly) < 4:
+            return pd.DataFrame()
 
+        # Sort all quarters descending
         sorted_q = sorted(quarterly.keys(), reverse=True)
-        last4  = sorted_q[:4]
-        latest = sorted_q[0]
 
+        # Collect all numeric field names
         all_fields = set()
-        for q in last4:
+        for q in sorted_q:
             all_fields.update(quarterly[q].keys())
         all_fields -= {"date", "filing_date", "currency_symbol", "type", "period"}
 
-        ttm_data = {}
-        for field in all_fields:
-            if field in SUM_FIELDS:
-                vals = []
-                for q in last4:
-                    try: vals.append(float(quarterly[q].get(field)))
-                    except (TypeError, ValueError): pass
-                ttm_data[field] = sum(vals) if vals else None
-            elif field in LATEST_FIELDS:
-                try: ttm_data[field] = float(quarterly[latest].get(field))
-                except (TypeError, ValueError): ttm_data[field] = None
-            else:
-                vals = []
-                for q in last4:
-                    try: vals.append(float(quarterly[q].get(field)))
-                    except (TypeError, ValueError): pass
-                ttm_data[field] = sum(vals) if len(vals) == len(last4) else None
+        rows = []
+        # For each quarter (starting from index 0), use that quarter + next 3 older ones
+        for i in range(len(sorted_q) - 3):
+            window = sorted_q[i:i+4]   # [newest, Q-1, Q-2, Q-3]
+            latest = window[0]
 
-        # Derived margins & ratios
-        rev    = ttm_data.get("totalRevenue")
-        ni     = ttm_data.get("netIncome")
-        gp     = ttm_data.get("grossProfit")
-        oi     = ttm_data.get("operatingIncome")
-        ebitda = ttm_data.get("ebitda")
-        cfo    = ttm_data.get("totalCashFromOperatingActivities")
-        capex  = ttm_data.get("capitalExpenditures")
-        assets = ttm_data.get("totalAssets")
-        equity = ttm_data.get("totalStockholderEquity")
-        debt   = ttm_data.get("longTermDebt")
+            ttm_row = {"Date": latest}
+            for field in all_fields:
+                if field in SUM_FIELDS:
+                    vals = []
+                    for q in window:
+                        try: vals.append(float(quarterly[q].get(field)))
+                        except (TypeError, ValueError): pass
+                    ttm_row[field] = sum(vals) if vals else None
+                elif field in LATEST_FIELDS:
+                    try: ttm_row[field] = float(quarterly[latest].get(field))
+                    except (TypeError, ValueError): ttm_row[field] = None
+                else:
+                    vals = []
+                    for q in window:
+                        try: vals.append(float(quarterly[q].get(field)))
+                        except (TypeError, ValueError): pass
+                    ttm_row[field] = sum(vals) if len(vals) == 4 else None
 
-        ttm_data["grossMargin"]      = gp  / rev    if rev and gp     else None
-        ttm_data["operatingMargin"]  = oi  / rev    if rev and oi     else None
-        ttm_data["netMargin"]        = ni  / rev    if rev and ni     else None
-        ttm_data["ebitdaMargin"]     = ebitda / rev if rev and ebitda else None
-        ttm_data["roa"]              = ni / assets  if assets and ni  else None
-        ttm_data["roe"]              = ni / equity  if equity and ni  else None
-        fcf = (cfo + capex) if (cfo is not None and capex is not None) else cfo
-        ttm_data["freeCashFlowCalc"] = fcf
-        ttm_data["fcfMargin"]        = fcf / rev    if rev and fcf    else None
-        ttm_data["debtToEquity"]     = debt / equity if equity and debt else None
-        ttm_data["_quarters_used"]   = len(last4)
-        ttm_data["_latest_quarter"]  = latest
+            # Derived margins
+            rev    = ttm_row.get("totalRevenue")
+            ni     = ttm_row.get("netIncome")
+            gp     = ttm_row.get("grossProfit")
+            oi     = ttm_row.get("operatingIncome")
+            ebitda = ttm_row.get("ebitda")
+            cfo    = ttm_row.get("totalCashFromOperatingActivities")
+            capex  = ttm_row.get("capitalExpenditures")
+            assets = ttm_row.get("totalAssets")
+            equity = ttm_row.get("totalStockholderEquity")
+            debt   = ttm_row.get("longTermDebt")
 
-        return pd.Series(ttm_data)
+            ttm_row["grossMargin"]      = gp  / rev    if rev and gp     else None
+            ttm_row["operatingMargin"]  = oi  / rev    if rev and oi     else None
+            ttm_row["netMargin"]        = ni  / rev    if rev and ni     else None
+            ttm_row["ebitdaMargin"]     = ebitda / rev if rev and ebitda else None
+            ttm_row["roa"]              = ni / assets  if assets and ni  else None
+            ttm_row["roe"]              = ni / equity  if equity and ni  else None
+            fcf = (cfo + capex) if (cfo is not None and capex is not None) else cfo
+            ttm_row["freeCashFlowCalc"] = fcf
+            ttm_row["fcfMargin"]        = fcf / rev    if rev and fcf    else None
+            ttm_row["debtToEquity"]     = debt / equity if equity and debt else None
+
+            rows.append(ttm_row)
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows).set_index("Date")
+        df = df.apply(pd.to_numeric, errors="coerce")
+        return df
+
     except Exception:
-        return pd.Series(dtype=float)
+        return pd.DataFrame()
 
 # ── Chart helper ──────────────────────────────────────────────────────────────
 def plot_financials(df: pd.DataFrame, cols: list, title: str):
@@ -393,15 +415,19 @@ with tab2:
     # ── TTM view ──────────────────────────────────────────────────────
     if period_type == "TTM":
         ttm_series = calculate_ttm(data, stmt_choice)
+        ttm_history = calculate_ttm_history(data, stmt_choice)
+
         if not ttm_series.empty:
             q_used = int(ttm_series.get("_quarters_used", 0))
             q_date = ttm_series.get("_latest_quarter", "—")
             st.markdown(
                 f'<div class="section-header">TTM — Trailing Twelve Months '
                 f'<span style="font-weight:400; color:#8892a4;">'
-                f'(basierend auf {q_used} Quartalen · letztes: {q_date})</span></div>',
+                f'(letztes: {q_date} · rolling 4 Quartale)</span></div>',
                 unsafe_allow_html=True
             )
+
+            # KPI cards — current TTM
             fields_to_show = TTM_FIELDS.get(stmt_choice, [])
             n_cols = min(len(fields_to_show), 5)
             ttm_cols = st.columns(n_cols)
@@ -415,30 +441,32 @@ with tab2:
                     display = fmt_num(raw_val, suffix="x", decimals=2) if raw_val is not None else "—"
                 with ttm_cols[i % n_cols]:
                     metric_card(lbl, display)
-            # ── TTM Rohdaten-Tabelle ──────────────────────────────────
-            st.markdown('<div class="section-header">Rohdaten (TTM)</div>', unsafe_allow_html=True)
-            # Filter out internal meta fields, build single-column DataFrame
-            ttm_raw = {
-                k: v for k, v in ttm_series.items()
-                if not str(k).startswith("_") and v is not None
-            }
-            df_ttm = pd.DataFrame.from_dict(ttm_raw, orient="index", columns=["TTM"])
-            df_ttm.index.name = "Field"
-            # Format values for display
-            def fmt_ttm_val(v):
-                try:
-                    n = float(v)
-                    # Detect if likely a ratio/margin (between -10 and 10)
-                    if -10 < n < 10 and n != 0:
-                        return f"{n*100:.2f}%" if abs(n) < 1 else f"{n:.2f}x"
-                    return fmt_num(n)
-                except:
-                    return str(v)
-            df_ttm["TTM"] = df_ttm["TTM"].apply(fmt_ttm_val)
-            st.dataframe(df_ttm, use_container_width=True)
+
+            st.markdown("---")
+
+            # Historical TTM chart
+            if not ttm_history.empty:
+                chart_cols_map = {
+                    "Income_Statement": ["totalRevenue", "grossProfit", "ebitda", "netIncome"],
+                    "Balance_Sheet":    ["totalAssets", "totalLiab", "totalStockholderEquity", "cash"],
+                    "Cash_Flow":        ["totalCashFromOperatingActivities", "capitalExpenditures", "freeCashFlowCalc", "dividendsPaid"],
+                }
+                chart_cols = [c for c in chart_cols_map.get(stmt_choice, []) if c in ttm_history.columns]
+                if chart_cols:
+                    st.markdown('<div class="section-header">Historical TTM — Chart</div>', unsafe_allow_html=True)
+                    st.plotly_chart(
+                        plot_financials(ttm_history, chart_cols, f"{stmt_choice.replace('_',' ')} (TTM)"),
+                        use_container_width=True
+                    )
+
+                # Historical TTM raw table
+                st.markdown('<div class="section-header">Historical TTM — Rohdaten</div>', unsafe_allow_html=True)
+                display_df = ttm_history.T.copy()
+                display_df = display_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
+                st.dataframe(display_df, use_container_width=True)
 
         else:
-            st.info("Keine Quartalsdaten für TTM-Berechnung verfügbar.")
+            st.info("Keine Quartalsdaten für TTM-Berechnung verfügbar (mind. 4 Quartale benötigt).")
 
     # ── Annual / Quarterly view ───────────────────────────────────────
     else:
