@@ -532,7 +532,7 @@ def add_growth_rows(raw_df: pd.DataFrame, formatted_df: pd.DataFrame) -> pd.Data
                 else:
                     growth.append("—")
 
-        result[f"↳ Growth"] = growth
+        result[f"↳ {field} Growth"] = growth
 
     return pd.DataFrame(result, index=formatted_df.columns).T
 
