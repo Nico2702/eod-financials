@@ -503,43 +503,38 @@ def plot_financials(df: pd.DataFrame, cols: list, title: str):
     )
     return fig
 
-def add_growth_rows(df: pd.DataFrame) -> pd.DataFrame:
+def add_growth_rows(raw_df: pd.DataFrame, formatted_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Appends YoY/QoQ % growth rows for every numeric row in df.
-    df is indexed by field name, columns are date periods (newest left).
-    Growth = (current / previous - 1) * 100, shown as e.g. '+12.3%'
+    Interleaves a growth row directly after each base row.
     """
-    growth_rows = {}
-    numeric_df = df.copy()
+    result = {}
+    for field in raw_df.index:
+        # Base row
+        result[field] = formatted_df.loc[field].tolist() if field in formatted_df.index else ["—"] * len(formatted_df.columns)
 
-    # Try to convert formatted strings back to float for growth calc
-    def to_float(v):
-        try:
-            s = str(v).replace("$","").replace("B","e9").replace("M","e6").replace("T","e12").replace(",","").replace("%","").strip()
-            return float(s)
-        except:
-            return None
+        # Growth row
+        vals = []
+        for col in raw_df.columns:
+            try:
+                vals.append(float(raw_df.loc[field, col]))
+            except:
+                vals.append(None)
 
-    for field in numeric_df.index:
-        raw_vals = [to_float(numeric_df.loc[field, c]) for c in numeric_df.columns]
         growth = []
-        for i in range(len(raw_vals)):
-            if i == len(raw_vals) - 1:
-                growth.append("—")  # no previous period
+        for i in range(len(vals)):
+            if i == len(vals) - 1:
+                growth.append("—")
             else:
-                curr = raw_vals[i]
-                prev = raw_vals[i + 1]
+                curr, prev = vals[i], vals[i + 1]
                 if curr is not None and prev is not None and prev != 0:
                     pct = (curr / prev - 1) * 100
-                    sign = "+" if pct >= 0 else ""
-                    growth.append(f"{sign}{pct:.1f}%")
+                    growth.append(f"{'+'if pct>=0 else ''}{pct:.1f}%")
                 else:
                     growth.append("—")
-        growth_rows[f"{field} · Growth"] = growth
 
-    growth_df = pd.DataFrame(growth_rows, index=numeric_df.columns).T
-    growth_df.columns = numeric_df.columns
-    return pd.concat([numeric_df, growth_df])
+        result[f"↳ Growth"] = growth
+
+    return pd.DataFrame(result, index=formatted_df.columns).T
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -806,10 +801,10 @@ with tab2:
                 # Historical TTM raw table
                 st.markdown('<div class="section-header">Historical TTM — Rohdaten</div>', unsafe_allow_html=True)
                 show_growth_ttm = st.toggle("Growth anzeigen", key="growth_ttm")
-                display_df = ttm_history.T.copy()
-                display_df = display_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
+                raw_df = ttm_history.T.copy()
+                display_df = raw_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
                 if show_growth_ttm:
-                    display_df = add_growth_rows(display_df)
+                    display_df = add_growth_rows(raw_df, display_df)
                 st.dataframe(display_df, use_container_width=True)
 
         else:
@@ -838,10 +833,10 @@ with tab2:
                 )
             st.markdown('<div class="section-header">Rohdaten</div>', unsafe_allow_html=True)
             show_growth = st.toggle("Growth anzeigen", key="growth_hist")
-            display_df = df_fin.T.copy()
-            display_df = display_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
+            raw_df = df_fin.T.copy()
+            display_df = raw_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
             if show_growth:
-                display_df = add_growth_rows(display_df)
+                display_df = add_growth_rows(raw_df, display_df)
             st.dataframe(display_df, use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════
