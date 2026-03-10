@@ -213,34 +213,47 @@ def compute_kennzahlen(data, hl, val, tech):
     quick_r    = ((cur_ass - (inv or 0)) / cur_lia) if cur_ass and cur_lia and cur_lia > 0 else None
     cash_r     = (cash / cur_lia)       if cash and cur_lia and cur_lia > 0      else None
 
-    # Growth (compare TTM[0] vs TTM[4] = approx YoY)
-    def yoy_growth(df, col):
+    # Growth helpers
+    def qoq_growth(df, col):
+        """QoQ: TTM[0] vs TTM[1] — always available if >= 2 periods"""
         try:
             s = df[col].dropna()
-            if len(s) >= 5:
-                return (s.iloc[0] / s.iloc[4] - 1) * 100
-        except: pass
-        return None
-
-    rev_gr_yoy  = yoy_growth(ttm_is, "totalRevenue")
-    earn_gr_yoy = yoy_growth(ttm_is, "netIncome")
-    eps_gr_yoy  = yoy_growth(ttm_is, "netIncomeApplicableToCommonShares")
-    ebit_gr_yoy = yoy_growth(ttm_is, "operatingIncome")
-    ebitda_gr   = yoy_growth(ttm_is, "ebitda")
-    fcf_gr      = yoy_growth(ttm_cf, "freeCashFlowCalc")
-
-    # TTM growth (compare TTM[0] vs TTM[1])
-    def ttm_growth(df, col):
-        try:
-            s = df[col].dropna()
-            if len(s) >= 2:
+            if len(s) >= 2 and s.iloc[1] != 0:
                 return (s.iloc[0] / s.iloc[1] - 1) * 100
         except: pass
         return None
 
-    rev_gr_ttm  = ttm_growth(ttm_is, "totalRevenue")
-    earn_gr_ttm = ttm_growth(ttm_is, "netIncome")
-    eps_gr_ttm  = ttm_growth(ttm_is, "netIncomeApplicableToCommonShares")
+    def yoy_growth(df, col):
+        """YoY: TTM[0] vs TTM[4] if available, fallback to TTM[1]"""
+        try:
+            s = df[col].dropna()
+            if len(s) >= 5 and s.iloc[4] != 0:
+                return (s.iloc[0] / s.iloc[4] - 1) * 100
+            elif len(s) >= 2 and s.iloc[1] != 0:
+                return (s.iloc[0] / s.iloc[1] - 1) * 100
+        except: pass
+        return None
+
+    rev_gr_qoq   = qoq_growth(ttm_is, "totalRevenue")
+    rev_gr_yoy   = yoy_growth(ttm_is, "totalRevenue")
+    earn_gr_qoq  = qoq_growth(ttm_is, "netIncome")
+    earn_gr_yoy  = yoy_growth(ttm_is, "netIncome")
+    eps_gr_qoq   = qoq_growth(ttm_is, "netIncomeApplicableToCommonShares")
+    eps_gr_yoy   = yoy_growth(ttm_is, "netIncomeApplicableToCommonShares")
+    ebit_gr_qoq  = qoq_growth(ttm_is, "operatingIncome")
+    ebit_gr_yoy  = yoy_growth(ttm_is, "operatingIncome")
+    ebitda_gr_qoq= qoq_growth(ttm_is, "ebitda")
+    ebitda_gr_yoy= yoy_growth(ttm_is, "ebitda")
+    fcf_gr_qoq   = qoq_growth(ttm_cf, "freeCashFlowCalc")
+    fcf_gr_yoy   = yoy_growth(ttm_cf, "freeCashFlowCalc")
+
+    # Keep old names as aliases for Key Facts compatibility
+    rev_gr_ttm   = rev_gr_qoq
+    earn_gr_ttm  = earn_gr_qoq
+    eps_gr_ttm   = eps_gr_qoq
+    ebit_gr      = ebit_gr_yoy
+    ebitda_gr    = ebitda_gr_yoy
+    fcf_gr       = fcf_gr_yoy
 
     def fmt_x(v, decimals=2):
         if v is None: return "—"
@@ -275,15 +288,25 @@ def compute_kennzahlen(data, hl, val, tech):
         "ebitda_mar":(ebitda_mar,fmt_p(ebitda_mar),  [(35,"ap"),(25,"a"),(20,"am"),(15,"bp"),(10,"b"),(5,"bm"),(0,"cp")],           True),
         "fcf_mar":   (fcf_mar,   fmt_p(fcf_mar),     [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(5,"b"),(0,"bm"),(-5,"cp")],            True),
         # GROWTH
-        "rev_gr_ttm": (rev_gr_ttm,  fmt_p(rev_gr_ttm),  [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")], True),
-        "rev_gr_yoy": (rev_gr_yoy,  fmt_p(rev_gr_yoy),  [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")], True),
-        "earn_gr_ttm":(earn_gr_ttm, fmt_p(earn_gr_ttm), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
-        "earn_gr_yoy":(earn_gr_yoy, fmt_p(earn_gr_yoy), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
-        "eps_gr_ttm": (eps_gr_ttm,  fmt_p(eps_gr_ttm),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
-        "eps_gr_yoy": (eps_gr_yoy,  fmt_p(eps_gr_yoy),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
-        "ebit_gr":    (ebit_gr_yoy, fmt_p(ebit_gr_yoy), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
-        "ebitda_gr":  (ebitda_gr,   fmt_p(ebitda_gr),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
-        "fcf_gr":     (fcf_gr,      fmt_p(fcf_gr),      [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
+        "rev_gr_qoq":  (rev_gr_qoq,   fmt_p(rev_gr_qoq),   [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")], True),
+        "rev_gr_yoy":  (rev_gr_yoy,   fmt_p(rev_gr_yoy),   [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")], True),
+        "earn_gr_qoq": (earn_gr_qoq,  fmt_p(earn_gr_qoq),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "earn_gr_yoy": (earn_gr_yoy,  fmt_p(earn_gr_yoy),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "eps_gr_qoq":  (eps_gr_qoq,   fmt_p(eps_gr_qoq),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "eps_gr_yoy":  (eps_gr_yoy,   fmt_p(eps_gr_yoy),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "ebit_gr_qoq": (ebit_gr_qoq,  fmt_p(ebit_gr_qoq),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "ebit_gr_yoy": (ebit_gr_yoy,  fmt_p(ebit_gr_yoy),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "ebitda_gr_qoq":(ebitda_gr_qoq,fmt_p(ebitda_gr_qoq),[(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],        True),
+        "ebitda_gr_yoy":(ebitda_gr_yoy,fmt_p(ebitda_gr_yoy),[(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],        True),
+        "fcf_gr_qoq":  (fcf_gr_qoq,   fmt_p(fcf_gr_qoq),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "fcf_gr_yoy":  (fcf_gr_yoy,   fmt_p(fcf_gr_yoy),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        # keep old keys as aliases for Key Facts
+        "rev_gr_ttm":  (rev_gr_qoq,   fmt_p(rev_gr_qoq),   [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")], True),
+        "earn_gr_ttm": (earn_gr_qoq,  fmt_p(earn_gr_qoq),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "eps_gr_ttm":  (eps_gr_qoq,   fmt_p(eps_gr_qoq),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "ebit_gr":     (ebit_gr_yoy,  fmt_p(ebit_gr_yoy),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "ebitda_gr":   (ebitda_gr_yoy,fmt_p(ebitda_gr_yoy),[(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "fcf_gr":      (fcf_gr_yoy,   fmt_p(fcf_gr_yoy),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         # HEALTH
         "cash_r":    (cash_r,    fmt_n(cash_r),      [(1.5,"ap"),(1.0,"a"),(0.75,"am"),(0.5,"bp"),(0.25,"b"),(0,"bm")],        True),
         "cur_ratio": (cur_ratio, fmt_n(cur_ratio),   [(3,"ap"),(2,"a"),(1.5,"am"),(1.2,"bp"),(1.0,"b"),(0.75,"bm"),(0,"cp")],  True),
@@ -862,15 +885,18 @@ with tab1:
         ("FCF Margin",               "fcf_mar"),
     ]
     GROWTH_ROWS = [
-        ("Revenue Growth TTM",   "rev_gr_ttm"),
-        ("Revenue Growth YoY",   "rev_gr_yoy"),
-        ("Earnings Growth TTM",  "earn_gr_ttm"),
-        ("Earnings Growth YoY",  "earn_gr_yoy"),
-        ("EPS Growth TTM",       "eps_gr_ttm"),
-        ("EPS Growth YoY",       "eps_gr_yoy"),
-        ("EBIT Growth",          "ebit_gr"),
-        ("EBITDA Growth",        "ebitda_gr"),
-        ("FCF Growth",           "fcf_gr"),
+        ("Revenue QoQ",      "rev_gr_qoq"),
+        ("Revenue YoY",      "rev_gr_yoy"),
+        ("Earnings QoQ",     "earn_gr_qoq"),
+        ("Earnings YoY",     "earn_gr_yoy"),
+        ("EPS QoQ",          "eps_gr_qoq"),
+        ("EPS YoY",          "eps_gr_yoy"),
+        ("EBIT QoQ",         "ebit_gr_qoq"),
+        ("EBIT YoY",         "ebit_gr_yoy"),
+        ("EBITDA QoQ",       "ebitda_gr_qoq"),
+        ("EBITDA YoY",       "ebitda_gr_yoy"),
+        ("FCF QoQ",          "fcf_gr_qoq"),
+        ("FCF YoY",          "fcf_gr_yoy"),
     ]
     HEALTH_ROWS = [
         ("Cash Ratio",      "cash_r"),
