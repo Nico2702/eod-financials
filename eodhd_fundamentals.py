@@ -302,12 +302,12 @@ if fetch_btn or "fundamentals_data" not in st.session_state:
             st.stop()
 
 data = st.session_state["fundamentals_data"]
-g = data.get("General", {})
-hl = data.get("Highlights", {})
-val = data.get("Valuation", {})
-tech = data.get("Technicals", {})
-rat = data.get("AnalystRatings", {})
-earn = data.get("Earnings", {})
+g    = data.get("General")    or {}
+hl   = data.get("Highlights") or {}
+val  = data.get("Valuation")  or {}
+tech = data.get("Technicals") or {}
+rat  = data.get("AnalystRatings") or {}
+earn = data.get("Earnings")   or {}
 
 # ── Header ────────────────────────────────────────────────────────────────────
 col_logo, col_info = st.columns([1, 5])
