@@ -117,6 +117,119 @@ def parse_financials(data: dict, statement: str, period: str) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+def calculate_ttm(data: dict, statement: str) -> pd.Series:
+    """
+    Calculate Trailing Twelve Months from the last 4 quarterly reports.
+
+    Logic:
+    - FLOW fields (Revenue, Net Income, FCF …) → sum of last 4 quarters
+    - POINT-IN-TIME fields (Assets, Debt, Cash …) → value of most recent quarter
+    - Margin/Ratio fields → recalculated from TTM base values
+    """
+
+    # Fields that should be SUMMED over 4 quarters (flow = income/cashflow items)
+    SUM_FIELDS = {
+        "totalRevenue", "costOfRevenue", "grossProfit",
+        "researchDevelopment", "sellingGeneralAdministrative",
+        "totalOperatingExpenses", "operatingIncome", "ebitda",
+        "interestExpense", "totalOtherIncomeExpensenet",
+        "incomeBeforeTax", "incomeTaxExpense", "netIncome",
+        "netIncomeApplicableToCommonShares",
+        "depreciation", "depreciationAndAmortization",
+        "totalCashFromOperatingActivities", "capitalExpenditures",
+        "freeCashFlow", "dividendsPaid", "totalCashflowsFromInvestingActivities",
+        "totalCashFromFinancingActivities",
+    }
+
+    # Fields that should take the LATEST quarter value (point-in-time = balance sheet)
+    LATEST_FIELDS = {
+        "totalAssets", "totalCurrentAssets", "cash", "shortTermInvestments",
+        "netReceivables", "inventory", "otherCurrentAssets",
+        "totalCurrentLiabilities", "shortLongTermDebt", "longTermDebt",
+        "totalLiab", "totalStockholderEquity", "retainedEarnings",
+        "commonStock", "goodWill", "intangibleAssets",
+        "propertyPlantEquipment", "otherAssets",
+    }
+
+    try:
+        quarterly = data["Financials"][statement].get("quarterly", {})
+        if not quarterly or len(quarterly) < 1:
+            return pd.Series(dtype=float)
+
+        # Sort quarters descending → newest first
+        sorted_quarters = sorted(quarterly.keys(), reverse=True)
+        last4 = sorted_quarters[:4]   # last 4 quarters for summing
+        latest = sorted_quarters[0]   # most recent quarter for point-in-time
+
+        # Collect all field names across quarters
+        all_fields = set()
+        for q in last4:
+            all_fields.update(quarterly[q].keys())
+        all_fields -= {"date", "filing_date", "currency_symbol", "type", "period"}
+
+        ttm = {}
+        for field in all_fields:
+            if field in SUM_FIELDS:
+                # Sum last 4 quarters, skip if any is missing
+                vals = []
+                for q in last4:
+                    v = quarterly[q].get(field)
+                    try:
+                        vals.append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+                ttm[field] = sum(vals) if vals else None
+
+            elif field in LATEST_FIELDS:
+                # Take most recent quarter
+                v = quarterly[latest].get(field)
+                try:
+                    ttm[field] = float(v)
+                except (TypeError, ValueError):
+                    ttm[field] = None
+            else:
+                # Unknown field → try sum, fall back to latest
+                vals = []
+                for q in last4:
+                    v = quarterly[q].get(field)
+                    try:
+                        vals.append(float(v))
+                    except (TypeError, ValueError):
+                        pass
+                ttm[field] = sum(vals) if len(vals) == len(last4) else None
+
+        # ── Derived TTM Margins (recalculated from TTM base) ──────────────────
+        rev = ttm.get("totalRevenue")
+        ni  = ttm.get("netIncome")
+        gp  = ttm.get("grossProfit")
+        oi  = ttm.get("operatingIncome")
+        ebitda = ttm.get("ebitda")
+        cfo = ttm.get("totalCashFromOperatingActivities")
+        capex = ttm.get("capitalExpenditures")
+        assets = ttm.get("totalAssets")
+        equity = ttm.get("totalStockholderEquity")
+        debt   = ttm.get("longTermDebt")
+
+        ttm["grossMargin"]     = gp  / rev if rev and gp  else None
+        ttm["operatingMargin"] = oi  / rev if rev and oi  else None
+        ttm["netMargin"]       = ni  / rev if rev and ni  else None
+        ttm["ebitdaMargin"]    = ebitda / rev if rev and ebitda else None
+        ttm["roa"]             = ni / assets if assets and ni else None
+        ttm["roe"]             = ni / equity if equity and ni else None
+        ttm["freeCashFlow"]    = (cfo + capex) if cfo and capex else (cfo or None)
+        ttm["fcfMargin"]       = ttm["freeCashFlow"] / rev if rev and ttm.get("freeCashFlow") else None
+        ttm["debtToEquity"]    = debt / equity if equity and debt else None
+
+        # Meta
+        ttm["quarters_used"] = len(last4)
+        ttm["latest_quarter"] = latest
+
+        return pd.Series(ttm)
+
+    except Exception as e:
+        return pd.Series(dtype=float)
+
+
 def plot_financials(df: pd.DataFrame, cols: list, title: str, yformat="$B"):
     fig = go.Figure()
     colors = ["#6c8ebf", "#48bb78", "#fc8181", "#f6ad55", "#b794f4"]
@@ -263,6 +376,64 @@ with tab1:
 with tab2:
     stmt_choice = st.selectbox("Statement", ["Income_Statement", "Balance_Sheet", "Cash_Flow"])
     df_fin = parse_financials(data, stmt_choice, period_type)
+
+    # ── TTM Section ───────────────────────────────────────────────────────────
+    if stmt_choice in ("Income_Statement", "Cash_Flow", "Balance_Sheet"):
+        ttm = calculate_ttm(data, stmt_choice)
+        if not ttm.empty:
+            q_used = int(ttm.get("quarters_used", 0))
+            q_date = ttm.get("latest_quarter", "—")
+            st.markdown(
+                f'<div class="section-header">TTM — Trailing Twelve Months '
+                f'<span style="font-weight:400;color:#8892a4;">'
+                f'(basierend auf {q_used} Quartalen, letztes: {q_date})</span></div>',
+                unsafe_allow_html=True
+            )
+
+            # Which TTM fields to show per statement
+            ttm_display_map = {
+                "Income_Statement": [
+                    ("Revenue TTM",        "totalRevenue",      "$"),
+                    ("Gross Profit TTM",   "grossProfit",       "$"),
+                    ("Operating Income TTM","operatingIncome",  "$"),
+                    ("EBITDA TTM",         "ebitda",            "$"),
+                    ("Net Income TTM",     "netIncome",         "$"),
+                    ("Gross Margin TTM",   "grossMargin",       "%"),
+                    ("Operating Margin TTM","operatingMargin",  "%"),
+                    ("Net Margin TTM",     "netMargin",         "%"),
+                    ("EBITDA Margin TTM",  "ebitdaMargin",      "%"),
+                ],
+                "Cash_Flow": [
+                    ("CFO TTM",            "totalCashFromOperatingActivities", "$"),
+                    ("CapEx TTM",          "capitalExpenditures",              "$"),
+                    ("Free Cash Flow TTM", "freeCashFlow",                     "$"),
+                    ("FCF Margin TTM",     "fcfMargin",                        "%"),
+                ],
+                "Balance_Sheet": [
+                    ("Total Assets",       "totalAssets",       "$"),
+                    ("Total Equity",       "totalStockholderEquity", "$"),
+                    ("Long-term Debt",     "longTermDebt",      "$"),
+                    ("Cash",               "cash",              "$"),
+                    ("ROA TTM",            "roa",               "%"),
+                    ("ROE TTM",            "roe",               "%"),
+                    ("Debt/Equity TTM",    "debtToEquity",      "x"),
+                ],
+            }
+
+            fields_to_show = ttm_display_map.get(stmt_choice, [])
+            cols_ttm = st.columns(len(fields_to_show) if len(fields_to_show) <= 5 else 5)
+            for i, (label, field, fmt) in enumerate(fields_to_show):
+                val = ttm.get(field)
+                if fmt == "$":
+                    display = fmt_num(val, prefix="$")
+                elif fmt == "%":
+                    display = fmt_pct(val)
+                else:
+                    display = fmt_num(val, suffix="x", decimals=2) if val else "—"
+                with cols_ttm[i % 5]:
+                    metric_card(label, display)
+
+            st.markdown("---")
 
     if df_fin.empty:
         st.info("Keine Daten verfügbar.")
