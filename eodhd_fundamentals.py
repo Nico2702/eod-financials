@@ -536,6 +536,169 @@ def add_growth_rows(raw_df: pd.DataFrame, formatted_df: pd.DataFrame) -> pd.Data
 
     return pd.DataFrame(result, index=formatted_df.columns).T
 
+def compute_key_facts(hl, val, tech, kz):
+    """
+    Returns list of (label, value_str, sentiment) tuples.
+    sentiment: 'pos' | 'neg' | 'neu'
+    value_str: optional number shown next to badge, or None
+    """
+    facts = []
+
+    def fv(v):
+        try: return float(v)
+        except: return None
+
+    def get_kz_val(key):
+        if key in kz: return kz[key][0]
+        return None
+
+    mcap        = fv(hl.get("MarketCapitalization"))
+    ev          = fv(hl.get("EnterpriseValue"))
+    revenue     = fv(hl.get("RevenueTTM"))
+    gross_mar   = get_kz_val("gross_mar")
+    op_mar      = get_kz_val("op_mar")
+    net_mar     = get_kz_val("net_mar")
+    roe         = get_kz_val("roe")
+    roic        = get_kz_val("roic")
+    roce        = get_kz_val("roce")
+    de          = get_kz_val("de_ratio")
+    da          = get_kz_val("da_ratio")
+    fcf_yield   = get_kz_val("fcf_yield")
+    fcf_mar     = get_kz_val("fcf_mar")
+    cur_ratio   = get_kz_val("cur_ratio")
+    quick_r     = get_kz_val("quick_r")
+    rev_gr_yoy  = get_kz_val("rev_gr_yoy")
+    rev_gr_ttm  = get_kz_val("rev_gr_ttm")
+    earn_gr_yoy = get_kz_val("earn_gr_yoy")
+    fcf_gr      = get_kz_val("fcf_gr")
+    ebitda_mar  = get_kz_val("ebitda_mar")
+    pe          = fv(hl.get("PERatio"))
+    beta        = fv(tech.get("Beta"))
+    div_yield   = fv(hl.get("DividendYield"))
+    gp          = fv(hl.get("GrossProfitTTM"))
+    fcf_abs     = get_kz_val("fcf_mar")
+
+    currency = ""  # pulled from general if needed
+
+    # ── Profitability ───────────────────────────────────────────────
+    if gross_mar is not None:
+        if gross_mar > 60:   facts.append(("Exceptional Gross Margin", f"{gross_mar:.1f}%", "pos"))
+        elif gross_mar > 40: facts.append(("High Pricing Power", f"{gross_mar:.1f}%", "pos"))
+        elif gross_mar > 20: facts.append(("Moderate Gross Margin", f"{gross_mar:.1f}%", "neu"))
+        else:                facts.append(("Low Gross Margin", f"{gross_mar:.1f}%", "neg"))
+
+    if net_mar is not None:
+        if net_mar > 20:     facts.append(("Exceptional Profitability", f"{net_mar:.1f}%", "pos"))
+        elif net_mar > 10:   facts.append(("High Profitability", f"{net_mar:.1f}%", "pos"))
+        elif net_mar > 5:    facts.append(("Moderate Net Margin", f"{net_mar:.1f}%", "neu"))
+        elif net_mar > 0:    facts.append(("Low Net Margin", f"{net_mar:.1f}%", "neu"))
+        else:                facts.append(("Negative Net Margin", f"{net_mar:.1f}%", "neg"))
+
+    if ebitda_mar is not None:
+        if ebitda_mar > 30:  facts.append(("High Efficient Business", f"{ebitda_mar:.1f}%", "pos"))
+        elif ebitda_mar > 15:facts.append(("Decent EBITDA Margin", f"{ebitda_mar:.1f}%", "pos"))
+
+    # ── Returns ─────────────────────────────────────────────────────
+    if roe is not None:
+        if roe > 25:         facts.append(("Exceptional ROE", f"{roe:.1f}%", "pos"))
+        elif roe > 15:       facts.append(("Strong ROE", f"{roe:.1f}%", "pos"))
+        elif roe > 5:        facts.append(("Positive ROE", f"{roe:.1f}%", "pos"))
+        else:                facts.append(("Weak ROE", f"{roe:.1f}%", "neg"))
+
+    if roic is not None:
+        if roic > 15:        facts.append(("Exceptional ROIC", f"{roic:.1f}%", "pos"))
+        elif roic > 8:       facts.append(("Positive ROIC", f"{roic:.1f}%", "pos"))
+
+    # ── Growth ──────────────────────────────────────────────────────
+    if rev_gr_yoy is not None:
+        if rev_gr_yoy > 25:  facts.append(("Exceptional Revenue Growth", f"{rev_gr_yoy:.1f}%", "pos"))
+        elif rev_gr_yoy > 10:facts.append(("Strong Revenue Growth", f"{rev_gr_yoy:.1f}%", "pos"))
+        elif rev_gr_yoy > 3: facts.append(("Positive Revenue Growth", f"{rev_gr_yoy:.1f}%", "pos"))
+        elif rev_gr_yoy > -3:facts.append(("Flat Revenue Growth", f"{rev_gr_yoy:.1f}%", "neu"))
+        else:                facts.append(("Declining Revenue", f"{rev_gr_yoy:.1f}%", "neg"))
+
+    if earn_gr_yoy is not None:
+        if earn_gr_yoy > 50: facts.append(("Exceptional Earnings Growth", f"{earn_gr_yoy:.1f}%", "pos"))
+        elif earn_gr_yoy > 15:facts.append(("Strong Earnings Growth", f"{earn_gr_yoy:.1f}%", "pos"))
+        elif earn_gr_yoy > 0:facts.append(("Positive Earnings Growth", f"{earn_gr_yoy:.1f}%", "pos"))
+        else:                facts.append(("Declining Earnings", f"{earn_gr_yoy:.1f}%", "neg"))
+
+    if fcf_gr is not None:
+        if fcf_gr > 50:      facts.append(("Exceptional FCF Growth", f"{fcf_gr:.1f}%", "pos"))
+        elif fcf_gr > 15:    facts.append(("Strong FCF Growth", f"{fcf_gr:.1f}%", "pos"))
+        elif fcf_gr < 0:     facts.append(("Declining FCF", f"{fcf_gr:.1f}%", "neg"))
+
+    # ── Cash Flow ───────────────────────────────────────────────────
+    if fcf_mar is not None:
+        if fcf_mar > 15:     facts.append(("Exceptional Free Cash Flow", f"{fcf_mar:.1f}%", "pos"))
+        elif fcf_mar > 5:    facts.append(("Positive Free Cash Flow", f"{fcf_mar:.1f}%", "pos"))
+        elif fcf_mar < 0:    facts.append(("Negative Free Cash Flow", f"{fcf_mar:.1f}%", "neg"))
+
+    if fcf_yield is not None:
+        if fcf_yield > 6:    facts.append(("High FCF Yield", f"{fcf_yield:.1f}%", "pos"))
+        elif fcf_yield > 3:  facts.append(("Decent FCF Yield", f"{fcf_yield:.1f}%", "pos"))
+
+    # ── Debt & Solvency ─────────────────────────────────────────────
+    if de is not None:
+        if de < 0.1:         facts.append(("Negligible Debt", None, "pos"))
+        elif de < 0.5:       facts.append(("Low Level of Debt", f"{de:.2f}x D/E", "pos"))
+        elif de < 1.0:       facts.append(("Moderate Debt", f"{de:.2f}x D/E", "neu"))
+        elif de < 2.0:       facts.append(("Elevated Debt", f"{de:.2f}x D/E", "neg"))
+        else:                facts.append(("High Debt Load", f"{de:.2f}x D/E", "neg"))
+
+    if cur_ratio is not None:
+        if cur_ratio > 2:    facts.append(("Strong Short-Term Solvency", f"{cur_ratio:.2f}x", "pos"))
+        elif cur_ratio > 1:  facts.append(("Adequate Short-Term Solvency", f"{cur_ratio:.2f}x", "pos"))
+        else:                facts.append(("Weak Short-Term Solvency", f"{cur_ratio:.2f}x", "neg"))
+
+    # ── Valuation ───────────────────────────────────────────────────
+    if pe is not None:
+        if pe < 0:           facts.append(("Negative Earnings", None, "neg"))
+        elif pe < 15:        facts.append(("Attractively Valued", f"P/E {pe:.1f}", "pos"))
+        elif pe < 25:        facts.append(("Fairly Valued", f"P/E {pe:.1f}", "neu"))
+        elif pe < 35:        facts.append(("Elevated Valuation", f"P/E {pe:.1f}", "neu"))
+        else:                facts.append(("High Valuation", f"P/E {pe:.1f}", "neg"))
+
+    # ── Dividend ────────────────────────────────────────────────────
+    if div_yield is not None and div_yield > 0:
+        if div_yield > 0.04: facts.append(("High Dividend Yield", f"{div_yield*100:.1f}%", "pos"))
+        elif div_yield > 0.01:facts.append(("Dividend Paying", f"{div_yield*100:.1f}%", "pos"))
+    else:
+        facts.append(("No Dividend", None, "neu"))
+
+    # ── Volatility ──────────────────────────────────────────────────
+    if beta is not None:
+        if beta < 0.8:       facts.append(("Low Volatility", f"β {beta:.2f}", "pos"))
+        elif beta < 1.2:     facts.append(("Market-Like Volatility", f"β {beta:.2f}", "neu"))
+        else:                facts.append(("High Volatility", f"β {beta:.2f}", "neg"))
+
+    return facts
+
+
+def render_key_facts(name, facts):
+    sentiment_styles = {
+        "pos": ("background:#1a3a2a; border:1px solid #2d6a4f; color:#48bb78;", "✅"),
+        "neg": ("background:#3a1a1a; border:1px solid #6a2d2d; color:#fc8181;", "❌"),
+        "neu": ("background:#2a2d3a; border:1px solid #4a4d6a; color:#a0aec0;", "⚪"),
+    }
+    badges = ""
+    for label, value, sentiment in facts:
+        style, icon = sentiment_styles.get(sentiment, sentiment_styles["neu"])
+        val_html = f' <span style="font-weight:700;">{value}</span>' if value else ""
+        badges += f'''<span style="{style} display:inline-flex; align-items:center; gap:5px;
+            border-radius:6px; padding:5px 10px; margin:3px; font-size:12.5px; font-weight:500;">
+            {icon} {label}{val_html}</span>'''
+
+    return f'''
+    <div style="background:#1e2535; border:1px solid #2d3748; border-radius:10px; padding:16px 20px; margin-bottom:16px;">
+        <div style="color:#e2e8f0; font-size:17px; font-weight:800; margin-bottom:12px;">
+            📋 {name}'s Key Facts
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:2px;">
+            {badges}
+        </div>
+    </div>'''
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 📊 Fundamentals Viewer")
@@ -627,6 +790,12 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Highlights", "💰 Financials", "�
 # TAB 1 · Highlights
 # ═══════════════════════════════════════════════════════════════════
 with tab1:
+    # ── Key Facts ─────────────────────────────────────────────────────
+    kz_for_facts = compute_kennzahlen(data, hl, val, tech)
+    facts = compute_key_facts(hl, val, tech, kz_for_facts)
+    company_name = g.get("Name", "Company")
+    st.markdown(render_key_facts(company_name, facts), unsafe_allow_html=True)
+
     marktdaten = [
         ("Market Cap",       fmt_num(hl.get("MarketCapitalization"), prefix="$")),
         ("EV",               fmt_num(hl.get("EnterpriseValue"),       prefix="$")),
@@ -649,7 +818,7 @@ with tab1:
                 metric_card(label, value)
 
     st.markdown('<div class="section-header">Kennzahlen</div>', unsafe_allow_html=True)
-    kz = compute_kennzahlen(data, hl, val, tech)
+    kz = kz_for_facts
 
     VALUE_ROWS = [
         ("P/Earnings (Fwd)",  "fwd_pe"),
