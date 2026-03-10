@@ -302,12 +302,12 @@ if fetch_btn or "fundamentals_data" not in st.session_state:
             st.stop()
 
 data = st.session_state["fundamentals_data"]
-g    = data.get("General")    or {}
-hl   = data.get("Highlights") or {}
-val  = data.get("Valuation")  or {}
-tech = data.get("Technicals") or {}
-rat  = data.get("AnalystRatings") or {}
-earn = data.get("Earnings")   or {}
+g    = data.get("General")    if isinstance(data.get("General"), dict)    else {}
+hl   = data.get("Highlights") if isinstance(data.get("Highlights"), dict) else {}
+val  = data.get("Valuation")  if isinstance(data.get("Valuation"), dict)  else {}
+tech = data.get("Technicals") if isinstance(data.get("Technicals"), dict) else {}
+rat  = data.get("AnalystRatings") if isinstance(data.get("AnalystRatings"), dict) else {}
+earn = data.get("Earnings")   if isinstance(data.get("Earnings"), dict)   else {}
 
 # ── Header ────────────────────────────────────────────────────────────────────
 col_logo, col_info = st.columns([1, 5])
@@ -532,6 +532,8 @@ with tab3:
 
 # ── TAB 4: Valuation ─────────────────────────────────────────────────────────
 with tab4:
+    if not isinstance(val, dict):
+        val = {}
     st.markdown('<div class="section-header">Bewertungsmultiples</div>', unsafe_allow_html=True)
     vc = st.columns(3)
     val_metrics = [
