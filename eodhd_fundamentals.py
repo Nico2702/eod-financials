@@ -342,8 +342,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Highlights", "💰 Financials", "�
 # TAB 1 · Highlights
 # ═══════════════════════════════════════════════════════════════════
 with tab1:
-    st.markdown('<div class="section-header">Marktdaten & Kennzahlen</div>', unsafe_allow_html=True)
-    highlights = [
+    marktdaten = [
         ("Market Cap",       fmt_num(hl.get("MarketCapitalization"), prefix="$")),
         ("EV",               fmt_num(hl.get("EnterpriseValue"),       prefix="$")),
         ("52W High",         fmt_num(hl.get("52WeekHigh"),            prefix="$")),
@@ -353,16 +352,28 @@ with tab1:
         ("EPS",              fmt_num(hl.get("DilutedEpsTTM"),         prefix="$")),
         ("Dividend/Share",   fmt_num(hl.get("DividendShare"),         prefix="$")),
         ("Dividend Yield",   fmt_pct(hl.get("DividendYield"))),
+        ("Beta",             fmt_num(tech.get("Beta"),                decimals=2)),
+    ]
+    kennzahlen = [
         ("P/E Ratio",        fmt_num(hl.get("PERatio"),               decimals=1)),
         ("PEG Ratio",        fmt_num(hl.get("PEGRatio"),              decimals=2)),
-        ("Beta",             fmt_num(tech.get("Beta"),                decimals=2)),
         ("Profit Margin",    fmt_pct(hl.get("ProfitMargin"))),
         ("Operating Margin", fmt_pct(hl.get("OperatingMarginTTM"))),
         ("ROA",              fmt_pct(hl.get("ReturnOnAssetsTTM"))),
         ("ROE",              fmt_pct(hl.get("ReturnOnEquityTTM"))),
     ]
-    for row_start in range(0, len(highlights), 5):
-        row_items = highlights[row_start:row_start+5]
+
+    st.markdown('<div class="section-header">Marktdaten</div>', unsafe_allow_html=True)
+    for row_start in range(0, len(marktdaten), 5):
+        row_items = marktdaten[row_start:row_start+5]
+        row_cols = st.columns(5)
+        for i, (label, value) in enumerate(row_items):
+            with row_cols[i]:
+                metric_card(label, value)
+
+    st.markdown('<div class="section-header">Kennzahlen</div>', unsafe_allow_html=True)
+    for row_start in range(0, len(kennzahlen), 5):
+        row_items = kennzahlen[row_start:row_start+5]
         row_cols = st.columns(5)
         for i, (label, value) in enumerate(row_items):
             with row_cols[i]:
