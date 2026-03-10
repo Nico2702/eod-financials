@@ -47,6 +47,34 @@ st.markdown("""
         margin-right: 6px;
     }
     div[data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; }
+    .kz-table { width: 100%; border-collapse: collapse; }
+    .kz-header {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 10px 14px; border-bottom: 1px solid #2d3748; margin-bottom: 4px;
+    }
+    .kz-header-title { color: #e2e8f0; font-size: 15px; font-weight: 700; }
+    .kz-row {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 7px 14px; border-bottom: 1px solid #1e2535;
+    }
+    .kz-row:hover { background: #1e2535; }
+    .kz-label { color: #c4cdd8; font-size: 13px; }
+    .kz-value { color: #e2e8f0; font-size: 13px; font-weight: 600; margin-left: auto; margin-right: 10px; }
+    .grade {
+        display: inline-block; border-radius: 4px; padding: 1px 7px;
+        font-size: 11px; font-weight: 700; min-width: 28px; text-align: center;
+    }
+    .grade-ap  { background:#1a3a2a; color:#48bb78; }
+    .grade-a   { background:#1a3a2a; color:#68d391; }
+    .grade-am  { background:#1c3a1a; color:#9ae6b4; }
+    .grade-bp  { background:#2a3a1a; color:#b7eb8f; }
+    .grade-b   { background:#2a3520; color:#d3f261; }
+    .grade-bm  { background:#3a3010; color:#ffd666; }
+    .grade-cp  { background:#3a2810; color:#ffa940; }
+    .grade-c   { background:#3a2010; color:#ff7a45; }
+    .grade-cm  { background:#3a1a10; color:#ff4d4f; }
+    .grade-d   { background:#3a1010; color:#ff4d4f; }
+    .grade-na  { background:#2d3748; color:#8892a4; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,6 +115,230 @@ def metric_card(label, value, delta=None):
 def safe_dict(d, key):
     v = d.get(key)
     return v if isinstance(v, dict) else {}
+
+# ── Grading ───────────────────────────────────────────────────────────────────
+def get_grade(value, thresholds):
+    """
+    thresholds: list of (threshold, grade_key) sorted best→worst.
+    For 'higher is better' metrics pass ascending=True (default).
+    For 'lower is better' metrics (like P/E) pass ascending=False.
+    """
+    if value is None:
+        return "na", "N/A"
+    grades_map = {
+        "ap": ("grade-ap", "A+"), "a":  ("grade-a",  "A"),
+        "am": ("grade-am", "A-"), "bp": ("grade-bp", "B+"),
+        "b":  ("grade-b",  "B"),  "bm": ("grade-bm", "B-"),
+        "cp": ("grade-cp", "C+"), "c":  ("grade-c",  "C"),
+        "cm": ("grade-cm", "C-"), "d":  ("grade-d",  "D"),
+        "na": ("grade-na", "—"),
+    }
+    for threshold, gkey in thresholds:
+        if value >= threshold:
+            css, label = grades_map.get(gkey, grades_map["na"])
+            return css, label
+    css, label = grades_map.get(thresholds[-1][1], grades_map["na"])
+    return css, label
+
+def grade_badge(css_class, label):
+    return f'<span class="grade {css_class}">{label}</span>'
+
+def compute_kennzahlen(data, hl, val, tech):
+    """Compute all kennzahlen from available data. Returns dict of {key: (value, formatted, grade_css, grade_label)}"""
+    ttm_is  = calculate_ttm_history(data, "Income_Statement")
+    ttm_bs  = calculate_ttm_history(data, "Balance_Sheet")
+    ttm_cf  = calculate_ttm_history(data, "Cash_Flow")
+
+    def latest(df, col):
+        try:
+            v = df[col].dropna().iloc[0]
+            return float(v)
+        except:
+            return None
+
+    def fv(v): return float(v) if v not in (None, "", "NA") else None
+    def pct(v): return fv(v) * 100 if fv(v) is not None else None
+
+    # Raw values
+    mcap    = fv(hl.get("MarketCapitalization"))
+    ev      = fv(hl.get("EnterpriseValue"))
+    revenue = fv(hl.get("RevenueTTM"))
+    gp_ttm  = fv(hl.get("GrossProfitTTM"))
+    pe      = fv(hl.get("PERatio"))
+    fwd_pe  = fv(val.get("ForwardPE"))
+    ps      = fv(val.get("PriceSalesTTM"))
+    ev_rev  = fv(val.get("EnterpriseValueRevenue"))
+    ev_ebit = fv(val.get("EnterpriseValueEbitda"))  # proxy
+    roe     = pct(hl.get("ReturnOnEquityTTM"))
+    roa     = pct(hl.get("ReturnOnAssetsTTM"))
+    op_mar  = pct(hl.get("OperatingMarginTTM"))
+    net_mar = pct(hl.get("ProfitMargin"))
+
+    # From TTM history
+    ebitda   = latest(ttm_is, "ebitda")
+    ebit     = latest(ttm_is, "operatingIncome")
+    fcf      = latest(ttm_cf, "freeCashFlowCalc")
+    cfo      = latest(ttm_cf, "totalCashFromOperatingActivities")
+    rev_ttm  = latest(ttm_is, "totalRevenue") or revenue
+    gp       = latest(ttm_is, "grossProfit") or gp_ttm
+    ni       = latest(ttm_is, "netIncome")
+
+    # Balance sheet
+    assets   = latest(ttm_bs, "totalAssets")
+    equity   = latest(ttm_bs, "totalStockholderEquity")
+    lt_debt  = latest(ttm_bs, "longTermDebt")
+    st_debt  = latest(ttm_bs, "shortLongTermDebt")
+    cash     = latest(ttm_bs, "cash")
+    cur_ass  = latest(ttm_bs, "totalCurrentAssets")
+    cur_lia  = latest(ttm_bs, "totalCurrentLiabilities")
+    inv      = latest(ttm_bs, "inventory")
+    total_debt = (lt_debt or 0) + (st_debt or 0) if lt_debt or st_debt else None
+
+    # Computed ratios
+    p_fcf      = mcap / fcf         if mcap and fcf and fcf > 0       else None
+    ev_ebit_c  = ev   / ebit        if ev and ebit and ebit > 0       else None
+    earn_yield = (1/pe * 100)        if pe and pe > 0                  else None
+    fcf_yield  = (fcf / mcap * 100)  if fcf and mcap and mcap > 0     else None
+    gross_mar  = (gp  / rev_ttm * 100) if gp and rev_ttm              else None
+    ebit_mar   = (ebit / rev_ttm * 100) if ebit and rev_ttm           else None
+    ebitda_mar = (ebitda / rev_ttm * 100) if ebitda and rev_ttm       else None
+    fcf_mar    = (fcf / rev_ttm * 100) if fcf and rev_ttm             else None
+    roce       = (ebit / (assets - cur_lia) * 100) if ebit and assets and cur_lia else None
+    roic       = (ni / (equity + (total_debt or 0)) * 100) if ni and equity else None
+    de_ratio   = (total_debt / equity)  if total_debt and equity and equity > 0 else None
+    da_ratio   = (total_debt / assets)  if total_debt and assets and assets > 0 else None
+    ea_ratio   = (equity / assets)      if equity and assets and assets > 0     else None
+    fcf_debt   = (fcf / total_debt)     if fcf and total_debt and total_debt > 0 else None
+    cur_ratio  = (cur_ass / cur_lia)    if cur_ass and cur_lia and cur_lia > 0   else None
+    quick_r    = ((cur_ass - (inv or 0)) / cur_lia) if cur_ass and cur_lia and cur_lia > 0 else None
+    cash_r     = (cash / cur_lia)       if cash and cur_lia and cur_lia > 0      else None
+
+    # Growth (compare TTM[0] vs TTM[4] = approx YoY)
+    def yoy_growth(df, col):
+        try:
+            s = df[col].dropna()
+            if len(s) >= 5:
+                return (s.iloc[0] / s.iloc[4] - 1) * 100
+        except: pass
+        return None
+
+    rev_gr_yoy  = yoy_growth(ttm_is, "totalRevenue")
+    earn_gr_yoy = yoy_growth(ttm_is, "netIncome")
+    eps_gr_yoy  = yoy_growth(ttm_is, "netIncomeApplicableToCommonShares")
+    ebit_gr_yoy = yoy_growth(ttm_is, "operatingIncome")
+    ebitda_gr   = yoy_growth(ttm_is, "ebitda")
+    fcf_gr      = yoy_growth(ttm_cf, "freeCashFlowCalc")
+
+    # TTM growth (compare TTM[0] vs TTM[1])
+    def ttm_growth(df, col):
+        try:
+            s = df[col].dropna()
+            if len(s) >= 2:
+                return (s.iloc[0] / s.iloc[1] - 1) * 100
+        except: pass
+        return None
+
+    rev_gr_ttm  = ttm_growth(ttm_is, "totalRevenue")
+    earn_gr_ttm = ttm_growth(ttm_is, "netIncome")
+    eps_gr_ttm  = ttm_growth(ttm_is, "netIncomeApplicableToCommonShares")
+
+    def fmt_x(v, decimals=2):
+        if v is None: return "—"
+        return f"{v:.{decimals}f}x"
+    def fmt_p(v, decimals=2):
+        if v is None: return "—"
+        return f"{v:.{decimals}f}%"
+    def fmt_n(v, decimals=2):
+        if v is None: return "—"
+        return f"{v:.{decimals}f}"
+
+    # (value, display, grade_thresholds, higher_is_better)
+    results = {
+        # VALUE
+        "fwd_pe":    (fwd_pe,    fmt_n(fwd_pe,1),   [(0,"ap"),(15,"a"),(20,"am"),(25,"bp"),(30,"b"),(35,"bm"),(40,"cp"),(50,"c")], False),
+        "pe":        (pe,        fmt_n(pe,2),        [(0,"ap"),(15,"a"),(20,"am"),(25,"bp"),(30,"b"),(35,"bm"),(40,"cp"),(50,"c")], False),
+        "p_fcf":     (p_fcf,     fmt_n(p_fcf,2),     [(0,"ap"),(15,"a"),(20,"am"),(25,"bp"),(30,"b"),(40,"bm"),(50,"cp"),(60,"c")], False),
+        "ps":        (ps,        fmt_n(ps,2),        [(0,"ap"),(1,"a"),(2,"am"),(3,"bp"),(5,"b"),(7,"bm"),(10,"cp")],               False),
+        "ev_rev":    (ev_rev,    fmt_n(ev_rev,2),    [(0,"ap"),(1,"a"),(2,"am"),(3,"bp"),(5,"b"),(7,"bm"),(10,"cp")],               False),
+        "ev_ebit":   (ev_ebit_c, fmt_n(ev_ebit_c,2), [(0,"ap"),(8,"a"),(12,"am"),(16,"bp"),(20,"b"),(25,"bm"),(30,"cp")],          False),
+        "ev_ebitda": (ev_ebit,   fmt_n(ev_ebit,2),   [(0,"ap"),(8,"a"),(12,"am"),(16,"bp"),(20,"b"),(25,"bm"),(30,"cp")],          False),
+        "earn_yield":(earn_yield,fmt_p(earn_yield),  [(8,"ap"),(6,"a"),(4,"am"),(3,"bp"),(2,"b"),(1,"bm")],                         True),
+        "fcf_yield": (fcf_yield, fmt_p(fcf_yield),   [(8,"ap"),(6,"a"),(4,"am"),(3,"bp"),(2,"b"),(1,"bm")],                        True),
+        # PROFITABILITY
+        "roe":       (roe,       fmt_p(roe),         [(25,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")],           True),
+        "roce":      (roce,      fmt_p(roce),        [(25,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm")],                     True),
+        "roic":      (roic,      fmt_p(roic),        [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(5,"b"),(0,"bm")],                      True),
+        "gross_mar": (gross_mar, fmt_p(gross_mar),   [(70,"ap"),(50,"a"),(40,"am"),(30,"bp"),(20,"b"),(10,"bm"),(0,"cp")],          True),
+        "op_mar":    (op_mar,    fmt_p(op_mar),      [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")],           True),
+        "net_mar":   (net_mar,   fmt_p(net_mar),     [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(5,"b"),(0,"bm"),(-5,"cp")],            True),
+        "ebit_mar":  (ebit_mar,  fmt_p(ebit_mar),    [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm")],                     True),
+        "ebitda_mar":(ebitda_mar,fmt_p(ebitda_mar),  [(35,"ap"),(25,"a"),(20,"am"),(15,"bp"),(10,"b"),(5,"bm"),(0,"cp")],           True),
+        "fcf_mar":   (fcf_mar,   fmt_p(fcf_mar),     [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(5,"b"),(0,"bm"),(-5,"cp")],            True),
+        # GROWTH
+        "rev_gr_ttm": (rev_gr_ttm,  fmt_p(rev_gr_ttm),  [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")], True),
+        "rev_gr_yoy": (rev_gr_yoy,  fmt_p(rev_gr_yoy),  [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")], True),
+        "earn_gr_ttm":(earn_gr_ttm, fmt_p(earn_gr_ttm), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
+        "earn_gr_yoy":(earn_gr_yoy, fmt_p(earn_gr_yoy), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
+        "eps_gr_ttm": (eps_gr_ttm,  fmt_p(eps_gr_ttm),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
+        "eps_gr_yoy": (eps_gr_yoy,  fmt_p(eps_gr_yoy),  [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
+        "ebit_gr":    (ebit_gr_yoy, fmt_p(ebit_gr_yoy), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
+        "ebitda_gr":  (ebitda_gr,   fmt_p(ebitda_gr),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
+        "fcf_gr":     (fcf_gr,      fmt_p(fcf_gr),      [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],          True),
+        # HEALTH
+        "cash_r":    (cash_r,    fmt_n(cash_r),      [(1.5,"ap"),(1.0,"a"),(0.75,"am"),(0.5,"bp"),(0.25,"b"),(0,"bm")],        True),
+        "cur_ratio": (cur_ratio, fmt_n(cur_ratio),   [(3,"ap"),(2,"a"),(1.5,"am"),(1.2,"bp"),(1.0,"b"),(0.75,"bm"),(0,"cp")],  True),
+        "quick_r":   (quick_r,   fmt_n(quick_r),     [(2,"ap"),(1.5,"a"),(1.0,"am"),(0.75,"bp"),(0.5,"b"),(0.25,"bm"),(0,"cp")],True),
+        "ea_ratio":  (ea_ratio,  fmt_n(ea_ratio),    [(0.6,"ap"),(0.4,"a"),(0.3,"am"),(0.2,"bp"),(0.1,"b"),(0,"bm")],          True),
+        "de_ratio":  (de_ratio,  fmt_n(de_ratio),    [(0,"ap"),(0.3,"a"),(0.5,"am"),(0.8,"bp"),(1.0,"b"),(1.5,"bm"),(2,"cp")], False),
+        "da_ratio":  (da_ratio,  fmt_n(da_ratio),    [(0,"ap"),(0.2,"a"),(0.3,"am"),(0.4,"bp"),(0.5,"b"),(0.6,"bm"),(0.7,"cp")],False),
+        "fcf_debt":  (fcf_debt,  fmt_n(fcf_debt),    [(0.5,"ap"),(0.3,"a"),(0.2,"am"),(0.1,"bp"),(0.05,"b"),(0,"bm")],         True),
+    }
+    return results
+
+def render_kz_col(title, rows, results):
+    """Render a kennzahlen column as HTML table."""
+    # Compute overall grade for column header
+    grades_order = {"ap":10,"a":9,"am":8,"bp":7,"b":6,"bm":5,"cp":4,"c":3,"cm":2,"d":1,"na":0}
+    scores = []
+    for _, key in rows:
+        if key in results:
+            v, disp, thresh, higher = results[key]
+            if v is not None:
+                css, lbl = get_grade(v if higher else -v if v is not None else None,
+                                     [(t if higher else -t, g) for t,g in thresh] if not higher else thresh)
+                scores.append(grades_order.get(css.replace("grade-",""), 0))
+
+    avg = sum(scores)/len(scores) if scores else 0
+    overall_key = max(grades_order, key=lambda k: grades_order[k] if grades_order[k] <= avg else -1)
+    overall_labels = {"ap":"A+","a":"A","am":"A-","bp":"B+","b":"B","bm":"B-","cp":"C+","c":"C","cm":"C-","d":"D","na":"—"}
+    overall_css = f"grade-{overall_key}"
+    overall_lbl = overall_labels.get(overall_key, "—")
+
+    html = f'''
+    <div style="background:#1e2535; border:1px solid #2d3748; border-radius:10px; overflow:hidden; height:100%;">
+        <div class="kz-header">
+            <span class="kz-header-title">{title}</span>
+            {grade_badge(overall_css, overall_lbl)}
+        </div>'''
+    for label, key in rows:
+        if key in results:
+            v, disp, thresh, higher = results[key]
+            if v is not None:
+                if higher:
+                    css, lbl = get_grade(v, thresh)
+                else:
+                    rev_thresh = [(-t, g) for t, g in thresh]
+                    css, lbl = get_grade(-v, rev_thresh)
+            else:
+                css, lbl = "grade-na", "—"
+            html += f'''
+        <div class="kz-row">
+            <span class="kz-label">{label}</span>
+            <span class="kz-value">{disp}</span>
+            {grade_badge(css, lbl)}
+        </div>'''
+    html += "</div>"
+    return html
 
 # ── API ───────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -354,14 +606,6 @@ with tab1:
         ("Dividend Yield",   fmt_pct(hl.get("DividendYield"))),
         ("Beta",             fmt_num(tech.get("Beta"),                decimals=2)),
     ]
-    kennzahlen = [
-        ("P/E Ratio",        fmt_num(hl.get("PERatio"),               decimals=1)),
-        ("PEG Ratio",        fmt_num(hl.get("PEGRatio"),              decimals=2)),
-        ("Profit Margin",    fmt_pct(hl.get("ProfitMargin"))),
-        ("Operating Margin", fmt_pct(hl.get("OperatingMarginTTM"))),
-        ("ROA",              fmt_pct(hl.get("ReturnOnAssetsTTM"))),
-        ("ROE",              fmt_pct(hl.get("ReturnOnEquityTTM"))),
-    ]
 
     st.markdown('<div class="section-header">Marktdaten</div>', unsafe_allow_html=True)
     for row_start in range(0, len(marktdaten), 5):
@@ -372,12 +616,60 @@ with tab1:
                 metric_card(label, value)
 
     st.markdown('<div class="section-header">Kennzahlen</div>', unsafe_allow_html=True)
-    for row_start in range(0, len(kennzahlen), 5):
-        row_items = kennzahlen[row_start:row_start+5]
-        row_cols = st.columns(5)
-        for i, (label, value) in enumerate(row_items):
-            with row_cols[i]:
-                metric_card(label, value)
+    kz = compute_kennzahlen(data, hl, val, tech)
+
+    VALUE_ROWS = [
+        ("P/Earnings (Fwd)",  "fwd_pe"),
+        ("P/Earnings",        "pe"),
+        ("P/FCF",             "p_fcf"),
+        ("P/Sales",           "ps"),
+        ("EV/Revenue",        "ev_rev"),
+        ("EV/EBIT",           "ev_ebit"),
+        ("EV/EBITDA",         "ev_ebitda"),
+        ("Earnings Yield",    "earn_yield"),
+        ("FCF Yield",         "fcf_yield"),
+    ]
+    PROFIT_ROWS = [
+        ("Return on Equity",         "roe"),
+        ("Return on Cap. Empl.",     "roce"),
+        ("Return on Inv. Capital",   "roic"),
+        ("Gross Margin",             "gross_mar"),
+        ("Operating Margin",         "op_mar"),
+        ("Net Margin",               "net_mar"),
+        ("EBIT Margin",              "ebit_mar"),
+        ("EBITDA Margin",            "ebitda_mar"),
+        ("FCF Margin",               "fcf_mar"),
+    ]
+    GROWTH_ROWS = [
+        ("Revenue Growth TTM",   "rev_gr_ttm"),
+        ("Revenue Growth YoY",   "rev_gr_yoy"),
+        ("Earnings Growth TTM",  "earn_gr_ttm"),
+        ("Earnings Growth YoY",  "earn_gr_yoy"),
+        ("EPS Growth TTM",       "eps_gr_ttm"),
+        ("EPS Growth YoY",       "eps_gr_yoy"),
+        ("EBIT Growth",          "ebit_gr"),
+        ("EBITDA Growth",        "ebitda_gr"),
+        ("FCF Growth",           "fcf_gr"),
+    ]
+    HEALTH_ROWS = [
+        ("Cash Ratio",      "cash_r"),
+        ("Current Ratio",   "cur_ratio"),
+        ("Quick Ratio",     "quick_r"),
+        ("Equity/Assets",   "ea_ratio"),
+        ("Debt/Equity",     "de_ratio"),
+        ("Debt/Assets",     "da_ratio"),
+        ("FCF/Debt",        "fcf_debt"),
+    ]
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(render_kz_col("Value",       VALUE_ROWS,  kz), unsafe_allow_html=True)
+    with c2:
+        st.markdown(render_kz_col("Profitability", PROFIT_ROWS, kz), unsafe_allow_html=True)
+    with c3:
+        st.markdown(render_kz_col("Growth",      GROWTH_ROWS, kz), unsafe_allow_html=True)
+    with c4:
+        st.markdown(render_kz_col("Health",      HEALTH_ROWS, kz), unsafe_allow_html=True)
 
     if rat:
         st.markdown('<div class="section-header">Analyst Ratings</div>', unsafe_allow_html=True)
