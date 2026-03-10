@@ -503,38 +503,57 @@ def plot_financials(df: pd.DataFrame, cols: list, title: str):
     )
     return fig
 
-def add_growth_rows(raw_df: pd.DataFrame, formatted_df: pd.DataFrame) -> pd.DataFrame:
+def add_growth_rows(raw_df: pd.DataFrame, formatted_df: pd.DataFrame, period: str = "TTM") -> pd.DataFrame:
     """
-    Interleaves a growth row directly after each base row.
+    Interleaves two growth rows after each base row:
+    - QoQ: current vs col+1 (always available except last column)
+    - YoY: current vs col+4 for TTM/Quarterly, col+1 for Annual
+           Shows — only when not enough history (last 4 cols for QoQ, last col for Annual)
     """
     result = {}
-    for field in raw_df.index:
-        # Base row
-        result[field] = formatted_df.loc[field].tolist() if field in formatted_df.index else ["—"] * len(formatted_df.columns)
+    cols = list(raw_df.columns)
+    n = len(cols)
 
-        # Growth row
+    def calc_growth(curr, prev):
+        if curr is not None and prev is not None and prev != 0:
+            pct = (curr / prev - 1) * 100
+            return f"{'+'if pct>=0 else ''}{pct:.1f}%"
+        return "—"
+
+    for field in raw_df.index:
+        result[field] = formatted_df.loc[field].tolist() if field in formatted_df.index else ["—"] * n
+
         vals = []
-        for col in raw_df.columns:
+        for col in cols:
             try:
                 vals.append(float(raw_df.loc[field, col]))
             except:
                 vals.append(None)
 
-        growth = []
-        for i in range(len(vals)):
-            if i == len(vals) - 1:
-                growth.append("—")
-            else:
-                curr, prev = vals[i], vals[i + 1]
-                if curr is not None and prev is not None and prev != 0:
-                    pct = (curr / prev - 1) * 100
-                    growth.append(f"{'+'if pct>=0 else ''}{pct:.1f}%")
+        if period == "Annual":
+            # Annual: only YoY → col vs col+1 (= 1 year back), always available except last
+            yoy = []
+            for i in range(n):
+                yoy.append("—" if i == n-1 else calc_growth(vals[i], vals[i+1]))
+            result[f"↳ {field} YoY"] = yoy
+
+        else:
+            # TTM / Quarterly:
+            # QoQ → col vs col+1, always except last
+            # YoY → col vs col+4 if available, fallback to col+1 (— only at very last col)
+            qoq, yoy = [], []
+            for i in range(n):
+                qoq.append("—" if i >= n-1 else calc_growth(vals[i], vals[i+1]))
+                if i+4 < n:
+                    yoy.append(calc_growth(vals[i], vals[i+4]))   # same quarter last year
+                elif i+1 < n:
+                    yoy.append(calc_growth(vals[i], vals[i+1]))   # fallback: nearest available
                 else:
-                    growth.append("—")
+                    yoy.append("—")                                # very last col, nothing to compare
+            result[f"↳ {field} QoQ"] = qoq
+            result[f"↳ {field} YoY"] = yoy
 
-        result[f"↳ {field} Growth"] = growth
-
-    return pd.DataFrame(result, index=formatted_df.columns).T
+    return pd.DataFrame(result, index=cols).T
 
 def compute_key_facts(hl, val, tech, kz):
     """
@@ -973,7 +992,7 @@ with tab2:
                 raw_df = ttm_history.T.copy()
                 display_df = raw_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
                 if show_growth_ttm:
-                    display_df = add_growth_rows(raw_df, display_df)
+                    display_df = add_growth_rows(raw_df, display_df, period="TTM")
                 st.dataframe(display_df, use_container_width=True)
 
         else:
@@ -1005,7 +1024,7 @@ with tab2:
             raw_df = df_fin.T.copy()
             display_df = raw_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
             if show_growth:
-                display_df = add_growth_rows(raw_df, display_df)
+                display_df = add_growth_rows(raw_df, display_df, period=period_type)
             st.dataframe(display_df, use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════
