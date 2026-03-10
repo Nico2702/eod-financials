@@ -513,7 +513,13 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
             ttm_row["ebitdaMargin"]     = ebitda / rev if rev and ebitda else None
             ttm_row["roa"]              = ni / assets  if assets and ni  else None
             ttm_row["roe"]              = ni / equity  if equity and ni  else None
-            fcf = (cfo + capex) if (cfo is not None and capex is not None) else cfo
+            fcf = ttm_row.get("freeCashFlow")
+            if fcf is None:
+                # fallback: CFO - abs(CapEx), handles both sign conventions
+                if cfo is not None and capex is not None:
+                    fcf = cfo - abs(capex)
+                else:
+                    fcf = None
             ttm_row["freeCashFlowCalc"] = fcf
             ttm_row["fcfMargin"]        = fcf / rev    if rev and fcf    else None
             ttm_row["debtToEquity"]     = debt / equity if equity and debt else None
