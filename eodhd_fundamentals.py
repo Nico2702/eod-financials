@@ -98,8 +98,10 @@ def fetch_fundamentals(ticker: str, api_token: str) -> dict:
 
 # ── Financials Parser ─────────────────────────────────────────────────────────
 def parse_financials(data: dict, statement: str, period: str) -> pd.DataFrame:
+    # EODHD uses "yearly" for annual data, "quarterly" for quarterly
+    period_key = "yearly" if period == "Annual" else "quarterly"
     try:
-        raw = data["Financials"][statement][period]
+        raw = data["Financials"][statement][period_key]
         if not raw:
             return pd.DataFrame()
         rows = []
@@ -240,7 +242,7 @@ with st.sidebar:
         if st.button(ex, use_container_width=True):
             st.session_state["quick_ticker"] = ex
             fetch_btn = True
-    period_type = st.radio("Periode", ["annual", "quarterly"], horizontal=True)
+    period_type = st.radio("Periode", ["TTM", "Annual", "Quarterly"], horizontal=True)
     st.markdown("---")
     st.caption("Powered by EODHD API")
 
@@ -359,88 +361,110 @@ with tab1:
 with tab2:
     stmt_choice = st.selectbox("Statement", ["Income_Statement", "Balance_Sheet", "Cash_Flow"])
 
-    # ── TTM ──────────────────────────────────────────────────────────
-    ttm_series = calculate_ttm(data, stmt_choice)
+    TTM_FIELDS = {
+        "Income_Statement": [
+            ("Revenue TTM",          "totalRevenue",                      "$"),
+            ("Gross Profit TTM",     "grossProfit",                       "$"),
+            ("Operating Income TTM", "operatingIncome",                   "$"),
+            ("EBITDA TTM",           "ebitda",                            "$"),
+            ("Net Income TTM",       "netIncome",                         "$"),
+            ("Gross Margin TTM",     "grossMargin",                       "%"),
+            ("Operating Margin TTM", "operatingMargin",                   "%"),
+            ("Net Margin TTM",       "netMargin",                         "%"),
+            ("EBITDA Margin TTM",    "ebitdaMargin",                      "%"),
+        ],
+        "Cash_Flow": [
+            ("CFO TTM",              "totalCashFromOperatingActivities",  "$"),
+            ("CapEx TTM",            "capitalExpenditures",               "$"),
+            ("Free Cash Flow TTM",   "freeCashFlowCalc",                  "$"),
+            ("FCF Margin TTM",       "fcfMargin",                         "%"),
+        ],
+        "Balance_Sheet": [
+            ("Total Assets",         "totalAssets",                       "$"),
+            ("Total Equity",         "totalStockholderEquity",            "$"),
+            ("Long-term Debt",       "longTermDebt",                      "$"),
+            ("Cash",                 "cash",                              "$"),
+            ("ROA TTM",              "roa",                               "%"),
+            ("ROE TTM",              "roe",                               "%"),
+            ("Debt / Equity TTM",    "debtToEquity",                      "x"),
+        ],
+    }
 
-    if not ttm_series.empty:
-        q_used = int(ttm_series.get("_quarters_used", 0))
-        q_date = ttm_series.get("_latest_quarter", "—")
+    # ── TTM view ──────────────────────────────────────────────────────
+    if period_type == "TTM":
+        ttm_series = calculate_ttm(data, stmt_choice)
+        if not ttm_series.empty:
+            q_used = int(ttm_series.get("_quarters_used", 0))
+            q_date = ttm_series.get("_latest_quarter", "—")
+            st.markdown(
+                f'<div class="section-header">TTM — Trailing Twelve Months '
+                f'<span style="font-weight:400; color:#8892a4;">'
+                f'(basierend auf {q_used} Quartalen · letztes: {q_date})</span></div>',
+                unsafe_allow_html=True
+            )
+            fields_to_show = TTM_FIELDS.get(stmt_choice, [])
+            n_cols = min(len(fields_to_show), 5)
+            ttm_cols = st.columns(n_cols)
+            for i, (lbl, field, fmt) in enumerate(fields_to_show):
+                raw_val = ttm_series.get(field)
+                if fmt == "$":
+                    display = fmt_num(raw_val, prefix="$")
+                elif fmt == "%":
+                    display = fmt_pct(raw_val)
+                else:
+                    display = fmt_num(raw_val, suffix="x", decimals=2) if raw_val is not None else "—"
+                with ttm_cols[i % n_cols]:
+                    metric_card(lbl, display)
+            # ── TTM Rohdaten-Tabelle ──────────────────────────────────
+            st.markdown('<div class="section-header">Rohdaten (TTM)</div>', unsafe_allow_html=True)
+            # Filter out internal meta fields, build single-column DataFrame
+            ttm_raw = {
+                k: v for k, v in ttm_series.items()
+                if not str(k).startswith("_") and v is not None
+            }
+            df_ttm = pd.DataFrame.from_dict(ttm_raw, orient="index", columns=["TTM"])
+            df_ttm.index.name = "Field"
+            # Format values for display
+            def fmt_ttm_val(v):
+                try:
+                    n = float(v)
+                    # Detect if likely a ratio/margin (between -10 and 10)
+                    if -10 < n < 10 and n != 0:
+                        return f"{n*100:.2f}%" if abs(n) < 1 else f"{n:.2f}x"
+                    return fmt_num(n)
+                except:
+                    return str(v)
+            df_ttm["TTM"] = df_ttm["TTM"].apply(fmt_ttm_val)
+            st.dataframe(df_ttm, use_container_width=True)
+
+        else:
+            st.info("Keine Quartalsdaten für TTM-Berechnung verfügbar.")
+
+    # ── Annual / Quarterly view ───────────────────────────────────────
+    else:
+        df_fin = parse_financials(data, stmt_choice, period_type)
         st.markdown(
-            f'<div class="section-header">TTM — Trailing Twelve Months '
-            f'<span style="font-weight:400; color:#8892a4;">'
-            f'(basierend auf {q_used} Quartalen · letztes: {q_date})</span></div>',
+            f'<div class="section-header">Historical · {period_type}</div>',
             unsafe_allow_html=True
         )
-        TTM_FIELDS = {
-            "Income_Statement": [
-                ("Revenue TTM",          "totalRevenue",                      "$"),
-                ("Gross Profit TTM",     "grossProfit",                       "$"),
-                ("Operating Income TTM", "operatingIncome",                   "$"),
-                ("EBITDA TTM",           "ebitda",                            "$"),
-                ("Net Income TTM",       "netIncome",                         "$"),
-                ("Gross Margin TTM",     "grossMargin",                       "%"),
-                ("Operating Margin TTM", "operatingMargin",                   "%"),
-                ("Net Margin TTM",       "netMargin",                         "%"),
-                ("EBITDA Margin TTM",    "ebitdaMargin",                      "%"),
-            ],
-            "Cash_Flow": [
-                ("CFO TTM",              "totalCashFromOperatingActivities",  "$"),
-                ("CapEx TTM",            "capitalExpenditures",               "$"),
-                ("Free Cash Flow TTM",   "freeCashFlowCalc",                  "$"),
-                ("FCF Margin TTM",       "fcfMargin",                         "%"),
-            ],
-            "Balance_Sheet": [
-                ("Total Assets",         "totalAssets",                       "$"),
-                ("Total Equity",         "totalStockholderEquity",            "$"),
-                ("Long-term Debt",       "longTermDebt",                      "$"),
-                ("Cash",                 "cash",                              "$"),
-                ("ROA TTM",              "roa",                               "%"),
-                ("ROE TTM",              "roe",                               "%"),
-                ("Debt / Equity TTM",    "debtToEquity",                      "x"),
-            ],
-        }
-        fields_to_show = TTM_FIELDS.get(stmt_choice, [])
-        n_cols = min(len(fields_to_show), 5)
-        ttm_cols = st.columns(n_cols)
-        for i, (lbl, field, fmt) in enumerate(fields_to_show):
-            raw_val = ttm_series.get(field)
-            if fmt == "$":
-                display = fmt_num(raw_val, prefix="$")
-            elif fmt == "%":
-                display = fmt_pct(raw_val)
-            else:
-                display = fmt_num(raw_val, suffix="x", decimals=2) if raw_val is not None else "—"
-            with ttm_cols[i % n_cols]:
-                metric_card(lbl, display)
-        st.markdown("---")
-    else:
-        st.info("Keine Quartalsdaten für TTM-Berechnung verfügbar.")
-
-    # ── Historical ────────────────────────────────────────────────────
-    df_fin = parse_financials(data, stmt_choice, period_type)
-    st.markdown(
-        f'<div class="section-header">Historical · '
-        f'{"Annual" if period_type == "annual" else "Quarterly"}</div>',
-        unsafe_allow_html=True
-    )
-    if df_fin.empty:
-        st.info("Keine historischen Daten verfügbar.")
-    else:
-        chart_cols_map = {
-            "Income_Statement": ["totalRevenue", "grossProfit", "ebitda", "netIncome"],
-            "Balance_Sheet":    ["totalAssets", "totalLiab", "totalStockholderEquity", "cash"],
-            "Cash_Flow":        ["totalCashFromOperatingActivities", "capitalExpenditures", "freeCashFlow", "dividendsPaid"],
-        }
-        chart_cols = [c for c in chart_cols_map[stmt_choice] if c in df_fin.columns]
-        if chart_cols:
-            st.plotly_chart(
-                plot_financials(df_fin, chart_cols, stmt_choice.replace("_", " ")),
-                use_container_width=True
-            )
-        st.markdown('<div class="section-header">Rohdaten</div>', unsafe_allow_html=True)
-        display_df = df_fin.T.copy()
-        display_df = display_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
-        st.dataframe(display_df, use_container_width=True)
+        if df_fin.empty:
+            st.info("Keine Daten verfügbar.")
+        else:
+            chart_cols_map = {
+                "Income_Statement": ["totalRevenue", "grossProfit", "ebitda", "netIncome"],
+                "Balance_Sheet":    ["totalAssets", "totalLiab", "totalStockholderEquity", "cash"],
+                "Cash_Flow":        ["totalCashFromOperatingActivities", "capitalExpenditures", "freeCashFlow", "dividendsPaid"],
+            }
+            chart_cols = [c for c in chart_cols_map[stmt_choice] if c in df_fin.columns]
+            if chart_cols:
+                st.plotly_chart(
+                    plot_financials(df_fin, chart_cols, stmt_choice.replace("_", " ")),
+                    use_container_width=True
+                )
+            st.markdown('<div class="section-header">Rohdaten</div>', unsafe_allow_html=True)
+            display_df = df_fin.T.copy()
+            display_df = display_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
+            st.dataframe(display_df, use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════
 # TAB 3 · Earnings
