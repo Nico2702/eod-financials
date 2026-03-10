@@ -201,7 +201,7 @@ col_logo, col_info = st.columns([1, 5])
 with col_logo:
     logo = g.get("LogoURL", "")
     if logo:
-        st.image(logo, width=80)
+        st.markdown(f'<img src="{logo}" width="80" style="border-radius:8px;">', unsafe_allow_html=True)
 with col_info:
     st.markdown(f'<div class="company-name">{g.get("Name","—")}</div>', unsafe_allow_html=True)
     tags = "".join([
