@@ -491,9 +491,12 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     ps_fwd   = None  # EODHD doesn't provide forward P/S
     ps_cur   = fv(val.get("PriceSalesTTM"))
     ps_yr    = (mcap / rev_yr)    if mcap and rev_yr and rev_yr > 0 else None
-    _pb_self = (mcap / equity_q) if mcap and equity_q and equity_q > 0 else None
-    pb_cur   = fv(val.get("PriceBookMRQ")) or _pb_self
-    pb_yr    = (mcap / equity_yr) if mcap and equity_yr and equity_yr > 0 else None
+    _q_bs_pb  = data["Financials"]["Balance_Sheet"].get("quarterly", {})
+    _qbs_pb   = sorted(_q_bs_pb.keys(), reverse=True)
+    _equity_q_pb = fv(_q_bs_pb[_qbs_pb[0]].get("totalStockholderEquity")) if _qbs_pb else None
+    _pb_self  = (mcap / _equity_q_pb) if mcap and _equity_q_pb and _equity_q_pb > 0 else None
+    pb_cur    = fv(val.get("PriceBookMRQ")) or _pb_self
+    pb_yr     = (mcap / equity_yr) if mcap and equity_yr and equity_yr > 0 else None
 
     # P/FCF (Cur) — TTM FCF from latest 4 quarters
     q_cf_data = data["Financials"]["Cash_Flow"].get("quarterly", {})
