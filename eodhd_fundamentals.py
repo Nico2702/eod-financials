@@ -723,6 +723,506 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
 
 
+
+# ── Drill-Down Engine ─────────────────────────────────────────────────────────
+def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: dict) -> dict:
+    """
+    Returns { formula, components: [(name, value, note)], result, unit }
+    for any known metric label.
+    """
+    def fv(v):
+        try: return float(v) if v not in (None, "", "NA", "None") else None
+        except: return None
+    def pct(v): return f"{v*100:.2f} %" if v is not None else "—"
+    def num(v, d=2): return f"{v:.{d}f}" if v is not None else "—"
+    def bn(v): return f"{v/1e9:.3f} B" if v is not None else "—"
+    def safe(a, b): return a/b if a is not None and b and b != 0 else None
+
+    a_is = data["Financials"]["Income_Statement"].get("yearly", {})
+    a_cf = data["Financials"]["Cash_Flow"].get("yearly", {})
+    a_bs = data["Financials"]["Balance_Sheet"].get("yearly", {})
+    q_is = data["Financials"]["Income_Statement"].get("quarterly", {})
+    q_cf = data["Financials"]["Cash_Flow"].get("quarterly", {})
+    q_bs = data["Financials"]["Balance_Sheet"].get("quarterly", {})
+
+    years   = sorted(a_is.keys(), reverse=True)
+    years_bs= sorted(a_bs.keys(), reverse=True)
+    qis     = sorted(q_is.keys(), reverse=True)
+    qcf_s   = sorted(q_cf.keys(), reverse=True)
+    qbs_s   = sorted(q_bs.keys(), reverse=True)
+
+    def ttm(stmt, key):
+        qs = sorted(stmt.keys(), reverse=True)
+        vals = [fv(stmt[q].get(key)) for q in qs[:4]]
+        return sum(v for v in vals if v is not None) if sum(1 for v in vals if v is not None)==4 else None
+
+    def get_fcf_ttm():
+        qs = sorted(q_cf.keys(), reverse=True)
+        vals = []
+        for q in qs[:4]:
+            f = fv(q_cf[q].get("freeCashFlow"))
+            if f is None:
+                c  = fv(q_cf[q].get("totalCashFromOperatingActivities"))
+                cx = fv(q_cf[q].get("capitalExpenditures"))
+                f  = c - abs(cx) if c and cx else None
+            if f is not None: vals.append(f)
+        return sum(vals) if len(vals)==4 else None
+
+    def get_fcf_annual(y):
+        cf = a_cf.get(y, {})
+        f  = fv(cf.get("freeCashFlow"))
+        if f is None:
+            c  = fv(cf.get("totalCashFromOperatingActivities"))
+            cx = fv(cf.get("capitalExpenditures"))
+            f  = c - abs(cx) if c and cx else None
+        return f
+
+    mcap   = fv(hl.get("MarketCapitalization"))
+    shares = fv(hl.get("SharesOutstanding")) or fv(q_bs[qbs_s[0]].get("commonStockSharesOutstanding")) if qbs_s else None
+    price  = mcap / shares if mcap and shares else None
+    ev     = fv(val.get("EnterpriseValue"))
+    bsQ    = q_bs.get(qbs_s[0], {}) if qbs_s else {}
+    bsA    = a_bs.get(years_bs[0], {}) if years_bs else {}
+    isA    = a_is.get(years[0], {}) if years else {}
+    cfA    = a_cf.get(years[0], {}) if years else {}
+
+    # TTM values
+    rev_ttm    = ttm(q_is, "totalRevenue")
+    ni_ttm     = ttm(q_is, "netIncome")
+    ebit_ttm   = ttm(q_is, "ebit")
+    ebitda_ttm = ttm(q_is, "ebitda")
+    gp_ttm     = ttm(q_is, "grossProfit")
+    oi_ttm     = ttm(q_is, "operatingIncome")
+    fcf_ttm    = get_fcf_ttm()
+    cfo_ttm    = ttm(q_cf, "totalCashFromOperatingActivities")
+    int_ttm    = ttm(q_is, "interestExpense")
+
+    # Annual values
+    rev_a    = fv(isA.get("totalRevenue"))
+    ni_a     = fv(isA.get("netIncome"))
+    ebit_a   = fv(isA.get("ebit"))
+    ebitda_a = fv(isA.get("ebitda"))
+    gp_a     = fv(isA.get("grossProfit"))
+    oi_a     = fv(isA.get("operatingIncome"))
+    fcf_a    = get_fcf_annual(years[0]) if years else None
+    int_a    = fv(isA.get("interestExpense"))
+
+    # BS quarterly
+    cash_q   = fv(bsQ.get("cashAndEquivalents")) or fv(bsQ.get("cash"))
+    ltd_q    = fv(bsQ.get("longTermDebt")) or 0
+    std_q    = fv(bsQ.get("shortLongTermDebt")) or 0
+    debt_q   = ltd_q + std_q
+    eq_q     = fv(bsQ.get("totalStockholderEquity"))
+    ta_q     = fv(bsQ.get("totalAssets"))
+    ca_q     = fv(bsQ.get("totalCurrentAssets"))
+    cl_q     = fv(bsQ.get("totalCurrentLiabilities"))
+
+    # BS annual
+    cash_a   = fv(bsA.get("cashAndEquivalents")) or fv(bsA.get("cash"))
+    ltd_a    = fv(bsA.get("longTermDebt")) or 0
+    std_a    = fv(bsA.get("shortLongTermDebt")) or 0
+    debt_a   = ltd_a + std_a
+    eq_a     = fv(bsA.get("totalStockholderEquity"))
+    ta_a     = fv(bsA.get("totalAssets"))
+    ca_a     = fv(bsA.get("totalCurrentAssets"))
+    cl_a     = fv(bsA.get("totalCurrentLiabilities"))
+    eq_prev  = fv(a_bs.get(years_bs[1], {}).get("totalStockholderEquity")) if len(years_bs)>1 else None
+    ta_prev  = fv(a_bs.get(years_bs[1], {}).get("totalAssets")) if len(years_bs)>1 else None
+    eq_avg   = (eq_a + eq_prev)/2 if eq_a and eq_prev else eq_a
+    ta_avg   = (ta_a + ta_prev)/2 if ta_a and ta_prev else ta_a
+    tl_q     = fv(bsQ.get("totalLiab"))
+    tl_a     = fv(bsA.get("totalLiab"))
+
+    nd_q = debt_q - (cash_q or 0)
+    nd_a = debt_a - (cash_a or 0)
+    cap_emp_ttm = (ta_q - cl_q) if ta_q and cl_q else None
+    ic_ttm = (eq_q or 0) + debt_q
+    ic_a   = (eq_a or 0) + debt_a
+
+    UNKNOWN = {"formula": "—", "components": [], "result": "—", "unit": ""}
+
+    # ── lookup table ──────────────────────────────────────────────────
+    L = label  # shorthand
+
+    # ── VALUE ─────────────────────────────────────────────────────────
+    if "P/Earnings" in L or "P/E" in L:
+        pe = safe(mcap, ni_ttm) if "TTM" in L or "Cur" in L else safe(mcap, ni_a)
+        ni = ni_ttm if "TTM" in L or "Cur" in L else ni_a
+        return {"formula": "Market Cap ÷ Net Income", "unit": "x",
+                "components": [("Market Cap", bn(mcap)), ("Net Income", bn(ni))],
+                "result": num(pe)}
+
+    if "P/Sales" in L:
+        rev = rev_ttm if "TTM" in L or "Cur" in L else rev_a
+        ps  = safe(mcap, rev)
+        return {"formula": "Market Cap ÷ Revenue", "unit": "x",
+                "components": [("Market Cap", bn(mcap)), ("Revenue", bn(rev))],
+                "result": num(ps)}
+
+    if "P/Book" in L:
+        pb = safe(mcap, eq_q) if "Cur" in L or "Quarterly" in L else safe(mcap, eq_a)
+        eq = eq_q if "Cur" in L or "Quarterly" in L else eq_a
+        return {"formula": "Market Cap ÷ Stockholder Equity", "unit": "x",
+                "components": [("Market Cap", bn(mcap)), ("Stockholder Equity", bn(eq))],
+                "result": num(pb)}
+
+    if "P/FCF" in L:
+        fcf = fcf_ttm if "TTM" in L or "Cur" in L else fcf_a
+        pf  = safe(mcap, fcf)
+        return {"formula": "Market Cap ÷ Free Cash Flow", "unit": "x",
+                "components": [("Market Cap", bn(mcap)), ("FCF", bn(fcf)),
+                                ("FCF = CFO − CapEx" if fcf_a else "", "")],
+                "result": num(pf)}
+
+    if "EV/Revenue" in L:
+        rev = rev_ttm if "Cur" in L or "TTM" in L else rev_a
+        evr = safe(ev, rev)
+        return {"formula": "Enterprise Value ÷ Revenue", "unit": "x",
+                "components": [("Enterprise Value", bn(ev)), ("Revenue", bn(rev))],
+                "result": num(evr)}
+
+    if "EV/EBIT" in L and "EBITDA" not in L:
+        ebit = ebit_ttm if "Cur" in L or "TTM" in L else ebit_a
+        r    = safe(ev, ebit)
+        return {"formula": "Enterprise Value ÷ EBIT", "unit": "x",
+                "components": [("Enterprise Value", bn(ev)), ("EBIT (TTM)", bn(ebit))],
+                "result": num(r)}
+
+    if "EV/EBITDA" in L:
+        ebitda = ebitda_ttm if "Cur" in L or "TTM" in L else ebitda_a
+        r      = safe(ev, ebitda)
+        return {"formula": "Enterprise Value ÷ EBITDA", "unit": "x",
+                "components": [("Enterprise Value", bn(ev)), ("EBITDA", bn(ebitda))],
+                "result": num(r)}
+
+    if "Earnings Yield" in L:
+        ni = ni_ttm if "Cur" in L or "TTM" in L else ni_a
+        r  = safe(ni, mcap)
+        return {"formula": "Net Income ÷ Market Cap × 100", "unit": "%",
+                "components": [("Net Income", bn(ni)), ("Market Cap", bn(mcap))],
+                "result": pct(r)}
+
+    if "FCF Yield" in L:
+        fcf = fcf_ttm if "TTM" in L or "Cur" in L else fcf_a
+        r   = safe(fcf, mcap)
+        return {"formula": "Free Cash Flow ÷ Market Cap × 100", "unit": "%",
+                "components": [("FCF", bn(fcf)), ("Market Cap", bn(mcap))],
+                "result": pct(r)}
+
+    if "PEG" in L:
+        fwd_pe = safe(mcap, ni_a)
+        trends = data.get("Earnings",{}).get("Trend",{})
+        p1y = next((v for v in trends.values() if v.get("period")=="+1y"),{})
+        eg  = fv(p1y.get("earningsEstimateGrowth"))
+        peg = safe(fwd_pe, (eg*100) if eg else None)
+        return {"formula": "Forward P/E ÷ EPS Growth Rate (%)", "unit": "x",
+                "components": [("Forward P/E", num(fwd_pe)), ("EPS Growth (Fwd)", pct(eg))],
+                "result": num(peg)}
+
+    # ── PROFITABILITY ──────────────────────────────────────────────────
+    if "Return on Assets" in L:
+        ni   = ni_ttm if "TTM" in L else ni_a
+        ta   = ta_q   if "TTM" in L else ta_avg
+        lbl  = "Avg(Assets Y0, Y-1)" if "Year" in L else "Total Assets (latest Q)"
+        return {"formula": "Net Income ÷ Total Assets × 100", "unit": "%",
+                "components": [("Net Income", bn(ni)), (lbl, bn(ta))],
+                "result": pct(safe(ni, ta))}
+
+    if "Return on Equity" in L and "Cap" not in L and "Inv" not in L:
+        ni   = ni_ttm if "TTM" in L else ni_a
+        eq   = eq_q   if "TTM" in L else eq_avg
+        lbl  = "Avg(Equity Y0, Y-1)" if "Year" in L else "Equity (latest Q)"
+        return {"formula": "Net Income ÷ Stockholder Equity × 100", "unit": "%",
+                "components": [("Net Income", bn(ni)), (lbl, bn(eq))],
+                "result": pct(safe(ni, eq))}
+
+    if "Return on Cap. Empl" in L or "Return on Capital Empl" in L:
+        ebit = ebit_ttm if "TTM" in L else ebit_a
+        ce   = cap_emp_ttm if "TTM" in L else ((ta_a - cl_a) if ta_a and cl_a else None)
+        return {"formula": "EBIT ÷ Capital Employed × 100\n(Capital Employed = Total Assets − Current Liabilities)", "unit": "%",
+                "components": [("EBIT", bn(ebit)), ("Total Assets", bn(ta_q if "TTM" in L else ta_a)),
+                                ("Current Liabilities", bn(cl_q if "TTM" in L else cl_a)),
+                                ("Capital Employed", bn(ce))],
+                "result": pct(safe(ebit, ce))}
+
+    if "Return on Inv" in L or "ROIC" in L:
+        ni  = ni_ttm if "TTM" in L else ni_a
+        inv = ic_ttm if "TTM" in L else ic_a
+        return {"formula": "Net Income ÷ Invested Capital × 100\n(Invested Capital = Equity + Total Debt)", "unit": "%",
+                "components": [("Net Income", bn(ni)), ("Equity", bn(eq_q if "TTM" in L else eq_a)),
+                                ("Total Debt", bn(debt_q if "TTM" in L else debt_a)),
+                                ("Invested Capital", bn(inv))],
+                "result": pct(safe(ni, inv))}
+
+    if "Return on Capital" in L and "Empl" not in L:
+        ni  = ni_ttm if "TTM" in L else ni_a
+        inv = ic_ttm if "TTM" in L else ic_a
+        return {"formula": "Net Income ÷ (Equity + Debt) × 100", "unit": "%",
+                "components": [("Net Income", bn(ni)), ("Equity + Debt", bn(inv))],
+                "result": pct(safe(ni, inv))}
+
+    if "Gross Margin" in L:
+        gp  = gp_ttm if "TTM" in L else gp_a
+        rev = rev_ttm if "TTM" in L else rev_a
+        return {"formula": "Gross Profit ÷ Revenue × 100", "unit": "%",
+                "components": [("Gross Profit", bn(gp)), ("Revenue", bn(rev))],
+                "result": pct(safe(gp, rev))}
+
+    if "Operating Margin" in L:
+        oi  = oi_ttm if "TTM" in L else oi_a
+        rev = rev_ttm if "TTM" in L else rev_a
+        return {"formula": "Operating Income ÷ Revenue × 100", "unit": "%",
+                "components": [("Operating Income", bn(oi)), ("Revenue", bn(rev))],
+                "result": pct(safe(oi, rev))}
+
+    if "EBIT Margin" in L:
+        rev = rev_ttm if "TTM" in L else rev_a
+        return {"formula": "EBIT ÷ Revenue × 100", "unit": "%",
+                "components": [("EBIT", bn(ebit_ttm if "TTM" in L else ebit_a)), ("Revenue", bn(rev))],
+                "result": pct(safe(ebit_ttm if "TTM" in L else ebit_a, rev))}
+
+    if "EBITDA Margin" in L:
+        rev = rev_ttm if "TTM" in L else rev_a
+        return {"formula": "EBITDA ÷ Revenue × 100", "unit": "%",
+                "components": [("EBITDA", bn(ebitda_ttm if "TTM" in L else ebitda_a)), ("Revenue", bn(rev))],
+                "result": pct(safe(ebitda_ttm if "TTM" in L else ebitda_a, rev))}
+
+    if "Net Margin" in L:
+        ni  = ni_ttm if "TTM" in L else ni_a
+        rev = rev_ttm if "TTM" in L else rev_a
+        return {"formula": "Net Income ÷ Revenue × 100", "unit": "%",
+                "components": [("Net Income", bn(ni)), ("Revenue", bn(rev))],
+                "result": pct(safe(ni, rev))}
+
+    if "FCF Margin" in L:
+        fcf = fcf_ttm if "TTM" in L else fcf_a
+        rev = rev_ttm if "TTM" in L else rev_a
+        cfo_label = bn(cfo_ttm) if "TTM" in L else bn(fv(cfA.get("totalCashFromOperatingActivities")))
+        capex_label = bn(ttm(q_cf,"capitalExpenditures")) if "TTM" in L else bn(fv(cfA.get("capitalExpenditures")))
+        return {"formula": "Free Cash Flow ÷ Revenue × 100\n(FCF = CFO − |CapEx|)", "unit": "%",
+                "components": [("FCF", bn(fcf)), ("CFO", cfo_label),
+                                ("CapEx", capex_label), ("Revenue", bn(rev))],
+                "result": pct(safe(fcf, rev))}
+
+    if "Asset Turnover" in L:
+        rev = rev_ttm if "TTM" in L else rev_a
+        ta  = ta_q   if "TTM" in L else ta_avg
+        return {"formula": "Revenue ÷ Total Assets", "unit": "x",
+                "components": [("Revenue", bn(rev)), ("Total Assets", bn(ta))],
+                "result": num(safe(rev, ta))}
+
+    # ── GROWTH ────────────────────────────────────────────────────────
+    def growth_dd(field_label, q_stmt, a_stmt, key, q_cf_stmt=None, cf_key=None):
+        use_cf = q_cf_stmt is not None
+        stmt_q = q_cf_stmt if use_cf else q_stmt
+        stmt_a = a_cf if use_cf else a_stmt
+        if "TTM" in L:
+            qs = sorted(stmt_q.keys(), reverse=True)
+            def get_ttm(start):
+                vals = [fv(stmt_q[qs[i]].get(cf_key if use_cf else key)) for i in range(start, start+4)]
+                return sum(v for v in vals if v is not None) if sum(1 for v in vals if v is not None)==4 else None
+            t0 = get_ttm(0); t4 = get_ttm(4)
+            gr = safe(t0, t4) - 1 if t0 and t4 else None
+            return {"formula": f"(TTM[now] ÷ TTM[1Y ago] − 1) × 100", "unit": "%",
+                    "components": [(f"{field_label} TTM (now)", bn(t0)), (f"{field_label} TTM (1Y ago)", bn(t4))],
+                    "result": pct(gr)}
+        elif "YoY" in L:
+            qs = sorted(stmt_q.keys(), reverse=True)
+            v0 = fv(stmt_q[qs[0]].get(cf_key if use_cf else key)) if qs else None
+            v4 = fv(stmt_q[qs[4]].get(cf_key if use_cf else key)) if len(qs)>4 else None
+            gr = safe(v0, v4) - 1 if v0 and v4 else None
+            return {"formula": f"(Q[latest] ÷ Q[same quarter -1Y] − 1) × 100", "unit": "%",
+                    "components": [(f"{field_label} {qs[0][:7]}", bn(v0)), (f"{field_label} {qs[4][:7] if len(qs)>4 else '—'}", bn(v4))],
+                    "result": pct(gr)}
+        elif "Year" in L:
+            ys = sorted(stmt_a.keys(), reverse=True)
+            v0 = fv(stmt_a[ys[0]].get(cf_key if use_cf else key)) if ys else None
+            v1 = fv(stmt_a[ys[1]].get(cf_key if use_cf else key)) if len(ys)>1 else None
+            gr = safe(v0, v1) - 1 if v0 and v1 else None
+            return {"formula": f"(Year[0] ÷ Year[-1] − 1) × 100", "unit": "%",
+                    "components": [(f"{field_label} {ys[0][:4]}", bn(v0)), (f"{field_label} {ys[1][:4] if len(ys)>1 else '—'}", bn(v1))],
+                    "result": pct(gr)}
+        elif "Fwd" in L:
+            trends = data.get("Earnings",{}).get("Trend",{})
+            p1y = next((v for v in trends.values() if v.get("period")=="+1y"),{})
+            g = fv(p1y.get("revenueEstimateGrowth" if "Revenue" in L else "earningsEstimateGrowth"))
+            return {"formula": "Analyst consensus estimate (Earnings.Trend +1y)", "unit": "%",
+                    "components": [("Source", "EODHD Earnings Trend"), ("Period", "+1y"),
+                                   ("Estimate", pct(g))],
+                    "result": pct(g)}
+        return UNKNOWN
+
+    if "Revenue Growth" in L:
+        return growth_dd("Revenue", q_is, a_is, "totalRevenue")
+    if "Net Income Growth" in L:
+        return growth_dd("Net Income", q_is, a_is, "netIncome")
+    if "EPS Growth" in L and "Fwd" not in L:
+        return growth_dd("Net Inc (EPS proxy)", q_is, a_is, "netIncomeApplicableToCommonShares")
+    if "EPS Growth (Fwd)" in L:
+        return growth_dd("EPS", None, None, None)
+    if "EBIT Growth" in L:
+        return growth_dd("EBIT", q_is, a_is, "ebit")
+    if "EBITDA Growth" in L:
+        return growth_dd("EBITDA", q_is, a_is, "ebitda")
+    if "FCF Growth" in L:
+        return growth_dd("FCF", q_cf, a_cf, "freeCashFlow", q_cf, "freeCashFlow")
+
+    if "Rule of 40" in L:
+        rev_gr = safe(rev_ttm, rev_a) - 1 if rev_ttm and rev_a else None
+        fcfm   = safe(fcf_ttm, rev_ttm) if "TTM" in L else safe(fcf_a, rev_a)
+        r40    = ((rev_gr or 0)*100 + (fcfm or 0)*100) if rev_gr is not None and fcfm is not None else None
+        return {"formula": "Revenue Growth (%) + FCF Margin (%)", "unit": "%",
+                "components": [("Revenue Growth TTM", pct(rev_gr)),
+                                ("FCF Margin TTM", pct(fcfm)),
+                                ("= Rule of 40", f"{r40:.2f} %" if r40 else "—")],
+                "result": f"{r40:.2f} %" if r40 else "—"}
+
+    # ── HEALTH ─────────────────────────────────────────────────────────
+    def _debt(q=True): return debt_q if q else debt_a
+    def _cash(q=True): return cash_q if q else cash_a
+    def _eq(q=True):   return eq_q   if q else eq_a
+    def _ta(q=True):   return ta_q   if q else ta_a
+    def _cl(q=True):   return cl_q   if q else cl_a
+    def _nd(q=True):   return nd_q   if q else nd_a
+    is_q = "Quarterly" in L or "TTM" in L
+
+    if "Cash/Debt" in L:
+        c=_cash(is_q); d=_debt(is_q)
+        return {"formula": "Cash & Equivalents ÷ Total Debt", "unit": "x",
+                "components": [("Cash", bn(c)), ("Long-Term Debt", bn(ltd_q if is_q else ltd_a)),
+                                ("Short-Term Debt", bn(std_q if is_q else std_a)), ("Total Debt", bn(d))],
+                "result": num(safe(c,d))}
+
+    if "Debt/Capital" in L:
+        d=_debt(is_q); e=_eq(is_q)
+        return {"formula": "Total Debt ÷ (Total Debt + Equity)", "unit": "x",
+                "components": [("Total Debt", bn(d)), ("Equity", bn(e)), ("Capital", bn(d+(e or 0)))],
+                "result": num(safe(d, d+(e or 0)))}
+
+    if "FCF/Debt" in L:
+        d=_debt(is_q); f=fcf_ttm if is_q else fcf_a
+        return {"formula": "Free Cash Flow ÷ Total Debt", "unit": "x",
+                "components": [("FCF", bn(f)), ("Total Debt", bn(d))],
+                "result": num(safe(f,d))}
+
+    if "Interest Coverage" in L:
+        e=ebit_ttm if "TTM" in L else ebit_a; i=int_ttm if "TTM" in L else int_a
+        return {"formula": "EBIT ÷ Interest Expense", "unit": "x",
+                "components": [("EBIT", bn(e)), ("Interest Expense", bn(i))],
+                "result": num(safe(e, abs(i) if i else None))}
+
+    if "Cash Ratio" in L or "Cash/Ratio" in L:
+        c=_cash(is_q); cl=_cl(is_q)
+        return {"formula": "Cash & Equivalents ÷ Current Liabilities", "unit": "x",
+                "components": [("Cash", bn(c)), ("Current Liabilities", bn(cl))],
+                "result": num(safe(c,cl))}
+
+    if "Debt/Equity" in L and "Net" not in L:
+        d=_debt(is_q); e=_eq(is_q)
+        return {"formula": "Total Debt ÷ Stockholder Equity", "unit": "x",
+                "components": [("Total Debt", bn(d)), ("Equity", bn(e))],
+                "result": num(safe(d,e))}
+
+    if "NetDebt/Equity" in L:
+        nd=_nd(is_q); e=_eq(is_q)
+        c=_cash(is_q); d=_debt(is_q)
+        return {"formula": "Net Debt ÷ Equity\n(Net Debt = Total Debt − Cash)", "unit": "x",
+                "components": [("Total Debt", bn(d)), ("Cash", bn(c)), ("Net Debt", bn(nd)), ("Equity", bn(e))],
+                "result": num(safe(nd,e))}
+
+    if "Equity/Assets" in L:
+        e=_eq(is_q); ta=_ta(is_q)
+        return {"formula": "Stockholder Equity ÷ Total Assets", "unit": "x",
+                "components": [("Equity", bn(e)), ("Total Assets", bn(ta))],
+                "result": num(safe(e,ta))}
+
+    if "Debt/Asset" in L and "Net" not in L:
+        d=_debt(is_q); ta=_ta(is_q)
+        return {"formula": "Total Debt ÷ Total Assets", "unit": "x",
+                "components": [("Total Debt", bn(d)), ("Total Assets", bn(ta))],
+                "result": num(safe(d,ta))}
+
+    if "NetDebt/Asset" in L:
+        nd=_nd(is_q); ta=_ta(is_q)
+        c=_cash(is_q); d=_debt(is_q)
+        return {"formula": "Net Debt ÷ Total Assets\n(Net Debt = Total Debt − Cash)", "unit": "x",
+                "components": [("Total Debt", bn(d)), ("Cash", bn(c)), ("Net Debt", bn(nd)), ("Total Assets", bn(ta))],
+                "result": num(safe(nd,ta))}
+
+    if "Debt/EBIT" in L and "EBITDA" not in L and "Net" not in L:
+        d=_debt(is_q); e=ebit_ttm if "TTM" in L else ebit_a
+        return {"formula": "Total Debt ÷ EBIT", "unit": "x",
+                "components": [("Total Debt", bn(d)), ("EBIT", bn(e))],
+                "result": num(safe(d,e))}
+
+    if "NetDebt/EBIT" in L and "EBITDA" not in L:
+        nd=_nd(is_q); e=ebit_ttm if "TTM" in L else ebit_a
+        c=_cash(is_q); d=_debt(is_q)
+        return {"formula": "Net Debt ÷ EBIT\n(Net Debt = Total Debt − Cash)", "unit": "x",
+                "components": [("Total Debt", bn(d)), ("Cash", bn(c)), ("Net Debt", bn(nd)), ("EBIT", bn(e))],
+                "result": num(safe(nd,e))}
+
+    if "Debt/EBITDA" in L and "Net" not in L:
+        d=_debt(is_q); e=ebitda_ttm if "TTM" in L else ebitda_a
+        return {"formula": "Total Debt ÷ EBITDA", "unit": "x",
+                "components": [("Total Debt", bn(d)), ("EBITDA", bn(e))],
+                "result": num(safe(d,e))}
+
+    if "NetDebt/EBITDA" in L:
+        nd=_nd(is_q); e=ebitda_ttm if "TTM" in L else ebitda_a
+        c=_cash(is_q); d=_debt(is_q)
+        return {"formula": "Net Debt ÷ EBITDA\n(Net Debt = Total Debt − Cash)", "unit": "x",
+                "components": [("Total Debt", bn(d)), ("Cash", bn(c)), ("Net Debt", bn(nd)), ("EBITDA", bn(e))],
+                "result": num(safe(nd,e))}
+
+    if "Current Ratio" in L:
+        ca=ca_q if is_q else ca_a; cl=cl_q if is_q else cl_a
+        return {"formula": "Current Assets ÷ Current Liabilities", "unit": "x",
+                "components": [("Current Assets", bn(ca)), ("Current Liabilities", bn(cl))],
+                "result": num(safe(ca,cl))}
+
+    if "Quick Ratio" in L:
+        ca=ca_q if is_q else ca_a; cl=cl_q if is_q else cl_a
+        inv=fv(bsQ.get("inventory") if is_q else bsA.get("inventory")) or 0
+        return {"formula": "(Current Assets − Inventory) ÷ Current Liabilities", "unit": "x",
+                "components": [("Current Assets", bn(ca)), ("Inventory", bn(inv)),
+                                ("Current Liabilities", bn(cl))],
+                "result": num(safe((ca-inv) if ca else None, cl))}
+
+    if "Altman Z" in L:
+        wc=(ca_q-cl_q) if ca_q and cl_q else None
+        re=fv(bsQ.get("retainedEarnings"))
+        x1=safe(wc,ta_q); x2=safe(re,ta_q); x3=safe(ebit_ttm,ta_q)
+        x4=safe(mcap,tl_q); x5=safe(rev_ttm,ta_q)
+        z = 1.2*(x1 or 0)+1.4*(x2 or 0)+3.3*(x3 or 0)+0.6*(x4 or 0)+1.0*(x5 or 0) if all([x1,x2,x3,x4,x5]) else None
+        return {"formula": "1.2×(WC/TA) + 1.4×(RE/TA) + 3.3×(EBIT/TA) + 0.6×(MCap/TL) + 1.0×(Rev/TA)\n>2.99 = Safe | 1.81–2.99 = Grey | <1.81 = Distress",
+                "unit": "",
+                "components": [("Working Capital / Total Assets (X1)", f"{x1:.4f}" if x1 else "—"),
+                                ("Retained Earnings / Total Assets (X2)", f"{x2:.4f}" if x2 else "—"),
+                                ("EBIT / Total Assets (X3)", f"{x3:.4f}" if x3 else "—"),
+                                ("Market Cap / Total Liabilities (X4)", f"{x4:.4f}" if x4 else "—"),
+                                ("Revenue / Total Assets (X5)", f"{x5:.4f}" if x5 else "—")],
+                "result": num(z)}
+
+    if "Piotroski" in L:
+        return {"formula": "9-Point Score: Profitability (F1–F4) + Leverage (F5–F6) + Efficiency (F7–F9)\n8–9 Strong | 5–7 Neutral | 0–4 Weak",
+                "unit": "/9",
+                "components": [
+                    ("F1: ROA > 0", "✓/✗"),
+                    ("F2: CFO > 0", "✓/✗"),
+                    ("F3: ΔROA > 0", "✓/✗"),
+                    ("F4: CFO > Net Income (accrual)", "✓/✗"),
+                    ("F5: Δ Long-Term Debt ratio < 0", "✓/✗"),
+                    ("F6: Δ Current Ratio > 0", "✓/✗"),
+                    ("F7: No share dilution", "✓/✗"),
+                    ("F8: Δ Gross Margin > 0", "✓/✗"),
+                    ("F9: Δ Asset Turnover > 0", "✓/✗"),
+                ],
+                "result": "See Health tab for score"}
+
+    return UNKNOWN
+
+
 # ── Quality Score ─────────────────────────────────────────────────────────────
 def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     """
@@ -2827,7 +3327,7 @@ with tab2:
 # TAB 2b · Score
 # ═══════════════════════════════════════════════════════════════════
 with tab2b:
-    score_tabs = st.tabs(["💎 Value", "📈 Profitability", "🚀 Growth", "🏥 Health", "⭐ Quality"])
+    score_tabs = st.tabs(["💎 Value", "📈 Profitability", "🚀 Growth", "🏥 Health", "⭐ Quality", "🔍 All"])
 
     with score_tabs[0]:  # Value
         vs = compute_value_score(data, hl, val, price_data)
@@ -3237,8 +3737,203 @@ with tab2b:
                 )
                 st.plotly_chart(fig_q2, use_container_width=True)
 
-# ═══════════════════════════════════════════════════════════════════
-# TAB 3 · Earnings
+    with score_tabs[5]:  # All
+        # ── Collect all rows from all 4 sub-scores ────────────────────
+        vs = compute_value_score(data, hl, val, price_data)
+        ps = compute_profitability_score(data, hl, price_data)
+        gs = compute_growth_score(data, hl)
+        hs = compute_health_score(data, hl, price_data)
+
+        all_rows = []
+        for tag, rows in [("💎 Value", vs["rows"]), ("📈 Profit", ps["rows"]),
+                          ("🚀 Growth", gs["rows"]), ("🏥 Health", hs["rows"])]:
+            for r in rows:
+                all_rows.append({**r, "tab": tag})
+
+        # ── Header ────────────────────────────────────────────────────
+        scores_all = {
+            "💎 Value":   vs["overall_score"], "📈 Profit": ps["overall_score"],
+            "🚀 Growth":  gs["overall_score"], "🏥 Health": hs["overall_score"],
+        }
+        avg_all = sum(scores_all.values()) / len(scores_all)
+        overall_all_css, overall_all_lbl = get_grade(avg_all, [
+            (96,"ap"),(92,"a"),(84,"am"),(76,"bp"),(68,"b"),(60,"bm"),(52,"cp"),(44,"c"),(36,"cm"),(0,"d")
+        ])
+
+        hcol1, hcol2, hcol3, hcol4, hcol5 = st.columns([3, 1, 1, 1, 1])
+        with hcol1:
+            st.markdown(
+                f'<div style="font-size:20px;font-weight:700;color:#e2e8f0;">'
+                f'All Metrics &nbsp;{grade_badge(overall_all_css, overall_all_lbl)}'
+                f' <span style="font-size:14px;color:#64748b;font-weight:400;">'
+                f'Avg {avg_all:.1f}</span></div>',
+                unsafe_allow_html=True)
+        with hcol2:
+            st.markdown(f'<div style="font-size:12px;color:#64748b;">💎 Value</div>'
+                        f'<div style="font-size:16px;font-weight:600;color:#e2e8f0;">{vs["overall_score"]:.1f} '
+                        f'{grade_badge(vs["overall_css"], vs["overall_lbl"])}</div>',
+                        unsafe_allow_html=True)
+        with hcol3:
+            st.markdown(f'<div style="font-size:12px;color:#64748b;">📈 Profit</div>'
+                        f'<div style="font-size:16px;font-weight:600;color:#e2e8f0;">{ps["overall_score"]:.1f} '
+                        f'{grade_badge(ps["overall_css"], ps["overall_lbl"])}</div>',
+                        unsafe_allow_html=True)
+        with hcol4:
+            st.markdown(f'<div style="font-size:12px;color:#64748b;">🚀 Growth</div>'
+                        f'<div style="font-size:16px;font-weight:600;color:#e2e8f0;">{gs["overall_score"]:.1f} '
+                        f'{grade_badge(gs["overall_css"], gs["overall_lbl"])}</div>',
+                        unsafe_allow_html=True)
+        with hcol5:
+            st.markdown(f'<div style="font-size:12px;color:#64748b;">🏥 Health</div>'
+                        f'<div style="font-size:16px;font-weight:600;color:#e2e8f0;">{hs["overall_score"]:.1f} '
+                        f'{grade_badge(hs["overall_css"], hs["overall_lbl"])}</div>',
+                        unsafe_allow_html=True)
+
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+        # ── Filter row ────────────────────────────────────────────────
+        fcol1, fcol2, fcol3 = st.columns([2, 2, 2])
+        with fcol1:
+            tab_filter = st.selectbox("Category", ["All"] + ["💎 Value","📈 Profit","🚀 Growth","🏥 Health"],
+                                      key="all_tab_filter", label_visibility="collapsed")
+        with fcol2:
+            grade_filter = st.selectbox("Grade", ["All Grades","A+","A","A-","B+","B","B-","C+","C","C-","D"],
+                                        key="all_grade_filter", label_visibility="collapsed")
+        with fcol3:
+            search_filter = st.text_input("Search metric", placeholder="z.B. Margin, Debt, FCF …",
+                                          key="all_search_filter", label_visibility="collapsed")
+
+        rows_filtered = all_rows
+        if tab_filter != "All":
+            rows_filtered = [r for r in rows_filtered if r["tab"] == tab_filter]
+        if grade_filter != "All Grades":
+            css_map = {"A+":"grade-ap","A":"grade-a","A-":"grade-am","B+":"grade-bp",
+                       "B":"grade-b","B-":"grade-bm","C+":"grade-cp","C":"grade-c","C-":"grade-cm","D":"grade-d"}
+            rows_filtered = [r for r in rows_filtered if r["css"] == css_map.get(grade_filter,"")]
+        if search_filter:
+            rows_filtered = [r for r in rows_filtered if search_filter.lower() in r["label"].lower()]
+
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+
+        # ── Main layout: table left, drill-down right ─────────────────
+        col_tbl, col_drill = st.columns([3, 2])
+
+        with col_tbl:
+            # Build clickable table — each row is a button
+            label_list = [r["label"] for r in rows_filtered]
+
+            if "all_selected_metric" not in st.session_state:
+                st.session_state["all_selected_metric"] = label_list[0] if label_list else None
+
+            tbl_html = '''
+            <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+              <thead>
+                <tr style="color:#64748b;border-bottom:1px solid #2d3748;position:sticky;top:0;background:#0f1117;">
+                  <th style="text-align:left;padding:5px 4px;font-weight:500;width:38%;">Metric</th>
+                  <th style="text-align:center;padding:5px 4px;font-weight:500;width:10%;">Cat.</th>
+                  <th style="text-align:right;padding:5px 4px;font-weight:500;width:15%;">Value</th>
+                  <th style="text-align:center;padding:5px 4px;font-weight:500;width:10%;">Grade</th>
+                  <th style="text-align:right;padding:5px 4px;font-weight:500;width:13%;">3Y Avg</th>
+                  <th style="text-align:right;padding:5px 4px;font-weight:500;width:14%;">5Y Avg</th>
+                </tr>
+              </thead><tbody>'''
+            for r in rows_filtered:
+                selected = st.session_state.get("all_selected_metric") == r["label"]
+                bg = "background:#1e2d45;" if selected else ""
+                tbl_html += f'''
+                <tr style="border-bottom:1px solid #1a2032;cursor:pointer;{bg}">
+                  <td style="padding:5px 4px;color:#cbd5e1;">{r["label"]}</td>
+                  <td style="padding:5px 4px;text-align:center;color:#64748b;font-size:11px;">{r["tab"]}</td>
+                  <td style="padding:5px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
+                  <td style="padding:5px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
+                  <td style="padding:5px 4px;text-align:right;color:#94a3b8;">{r["avg3"]}</td>
+                  <td style="padding:5px 4px;text-align:right;color:#94a3b8;">{r["avg5"]}</td>
+                </tr>'''
+            tbl_html += "</tbody></table>"
+            st.markdown(tbl_html, unsafe_allow_html=True)
+
+            # Selectbox below table to pick the metric for drill-down
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            if label_list:
+                default_idx = label_list.index(st.session_state["all_selected_metric"]) \
+                    if st.session_state.get("all_selected_metric") in label_list else 0
+                selected_metric = st.selectbox(
+                    "🔍 Metric auswählen für Drill-Down:",
+                    label_list, index=default_idx,
+                    key="all_metric_selectbox"
+                )
+                st.session_state["all_selected_metric"] = selected_metric
+
+        with col_drill:
+            sel = st.session_state.get("all_selected_metric")
+            if sel:
+                # Find row data
+                row_data = next((r for r in all_rows if r["label"] == sel), None)
+                dd = compute_drilldown(sel, data, hl, val, price_data)
+
+                st.markdown(
+                    f'<div style="background:#131b2e;border:1px solid #1e3a5f;border-radius:10px;padding:20px;">'
+                    f'<div style="font-size:16px;font-weight:700;color:#e2e8f0;margin-bottom:4px;">{sel}</div>'
+                    f'<div style="font-size:12px;color:#64748b;margin-bottom:16px;">{row_data["tab"] if row_data else ""}</div>',
+                    unsafe_allow_html=True
+                )
+
+                # Result badge
+                if row_data:
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">'
+                        f'<span style="font-size:28px;font-weight:700;color:#60a5fa;">{row_data["fmt"]}</span>'
+                        f'<span style="margin-left:4px;">{grade_badge(row_data["css"], row_data["lbl"])}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+
+                # Formula box
+                formula_lines = dd["formula"].replace("\n", "<br>")
+                st.markdown(
+                    f'<div style="background:#0a1628;border-left:3px solid #3b82f6;'
+                    f'padding:10px 14px;border-radius:4px;margin-bottom:16px;">'
+                    f'<div style="font-size:11px;color:#64748b;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em;">Formel</div>'
+                    f'<div style="font-size:13px;color:#93c5fd;font-family:monospace;">{formula_lines}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+                # Components table
+                if dd["components"]:
+                    comp_html = '<div style="margin-bottom:16px;">'
+                    comp_html += '<div style="font-size:11px;color:#64748b;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">Rohdaten</div>'
+                    comp_html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+                    for name, value in dd["components"]:
+                        if not name: continue
+                        comp_html += (
+                            f'<tr style="border-bottom:1px solid #1e2535;">'
+                            f'<td style="padding:5px 0;color:#94a3b8;">{name}</td>'
+                            f'<td style="padding:5px 0;text-align:right;color:#e2e8f0;font-weight:600;">{value}</td>'
+                            f'</tr>'
+                        )
+                    comp_html += '</table></div>'
+                    st.markdown(comp_html, unsafe_allow_html=True)
+
+                # Averages
+                if row_data:
+                    st.markdown(
+                        f'<div style="background:#0f1a2e;border-radius:6px;padding:10px 14px;">'
+                        f'<div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Historische Durchschnitte</div>'
+                        f'<div style="display:flex;gap:24px;">'
+                        f'<div><div style="font-size:11px;color:#64748b;">3Y Avg</div>'
+                        f'<div style="font-size:15px;font-weight:600;color:#e2e8f0;">{row_data["avg3"]}</div></div>'
+                        f'<div><div style="font-size:11px;color:#64748b;">5Y Avg</div>'
+                        f'<div style="font-size:15px;font-weight:600;color:#e2e8f0;">{row_data["avg5"]}</div></div>'
+                        f'<div><div style="font-size:11px;color:#64748b;">10Y Avg</div>'
+                        f'<div style="font-size:15px;font-weight:600;color:#e2e8f0;">{row_data.get("avg10","—")}</div></div>'
+                        f'</div></div>',
+                        unsafe_allow_html=True
+                    )
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+
 # ═══════════════════════════════════════════════════════════════════
 with tab3:
     st.markdown('<div class="section-header">Earnings History</div>', unsafe_allow_html=True)
