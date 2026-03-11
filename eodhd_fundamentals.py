@@ -722,6 +722,152 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
 
 
+
+# ── Quality Score ─────────────────────────────────────────────────────────────
+def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict:
+    """
+    Quality = composite of Growth + Profitability + Health rows,
+    re-labelled to match the screenshot (no period suffix on some labels).
+    Two charts: ROIC | Gross Margin | FCF Margin  and  Debt/Equity & Cash Ratio.
+    """
+    # Re-use the three sub-score functions
+    gs = compute_growth_score(data, hl)
+    ps = compute_profitability_score(data, hl, price_data)
+    hs = compute_health_score(data, hl, price_data)
+
+    # ── Select & rename rows from each module ─────────────────────────
+    def pick(rows, *labels):
+        lmap = {r["label"]: r for r in rows}
+        result = []
+        for lbl in labels:
+            r = lmap.get(lbl)
+            if r:
+                result.append(r)
+        return result
+
+    # Growth rows (keep Fwd / TTM / YoY / Year for Rev, NI, FCF)
+    q_growth = pick(gs["rows"],
+        "Revenue Growth (Fwd)",  "Revenue Growth (TTM)",
+        "Revenue Growth (YoY)",  "Revenue Growth (Year)",
+        "Net Income Growth (Fwd)","Net Income Growth (TTM)",
+        "Net Income Growth (YoY)","Net Income Growth (Year)",
+        "FCF Growth (TTM)",       "FCF Growth (YoY)",
+        "FCF Growth (Year)",
+    )
+    # Rename: strip parentheses for cleaner look in Quality tab
+    def relabel(rows, strip_parens=False):
+        out = []
+        for r in rows:
+            nr = dict(r)
+            if strip_parens:
+                import re
+                nr["label"] = re.sub(r"\s*\(.*?\)", "", nr["label"]).strip()
+            out.append(nr)
+        return out
+
+    # Profitability rows selected for Quality
+    q_profit = pick(ps["rows"],
+        "Return on Equity (TTM)",          "Return on Equity (Year)",
+        "Return on Cap. Empl. (TTM)",      "Return on Cap. Empl. (Year)",
+        "Return on Inv. Capital (TTM)",    "Return on Inv. Capital (Year)",
+        "Gross Margin (TTM)",              "Gross Margin (Year)",
+        "Net Margin (TTM)",                "Net Margin (Year)",
+        "FCF Margin (TTM)",                "FCF Margin (Year)",
+    )
+
+    # Health rows selected for Quality (drop "(Quarterly)" label noise)
+    q_health = pick(hs["rows"],
+        "Cash/Debt (Quarterly)",   "Cash/Debt (Year)",
+        "Debt/Capital (Quarterly)","Debt/Capital (Year)",
+        "FCF/Debt (Quarterly)",    "FCF/Debt (Year)",
+        "Interest Coverage (TTM)", "Interest Coverage (Year)",
+        "Debt/Equity (Quarterly)", "Debt/Equity (Year)",
+        "NetDebt/Equity (Quarterly)","NetDebt/Equity (Year)",
+        "Cash Ratio (Quarterly)",  "Cash Ratio (Year)",
+        "Debt/Asset (Quarterly)",  "Debt/Asset (Year)",
+        "NetDebt/Asset (Quarterly)","NetDebt/Asset (Year)",
+        "Debt/EBIT (TTM)",         "Debt/EBIT (Year)",
+        "NetDebt/EBIT (TTM)",      "NetDebt/EBIT (Year)",
+    )
+    # Simplify health labels: "(Quarterly)" → "" , keep "(Year)" and "(TTM)"
+    for r in q_health:
+        r["label"] = r["label"].replace(" (Quarterly)", "")
+
+    rows = q_growth + q_profit + q_health
+
+    # ── Overall Score (avg of all grade scores) ───────────────────────
+    grade_score = {"ap":100,"a":92,"am":84,"bp":76,"b":68,"bm":60,"cp":52,"c":44,"cm":36,"d":28,"na":0}
+    scores = [grade_score.get(r["css"].replace("grade-",""), 0) for r in rows if r["css"] != "grade-na"]
+    overall_score = sum(scores) / len(scores) if scores else 0
+    overall_css, overall_lbl = get_grade(overall_score, [
+        (96,"ap"),(92,"a"),(84,"am"),(76,"bp"),(68,"b"),(60,"bm"),(52,"cp"),(44,"c"),(36,"cm"),(0,"d")
+    ])
+
+    # ── Chart 1: ROIC | Gross Margin | FCF Margin (annual) ───────────
+    def fv(v):
+        try: return float(v) if v not in (None,"","NA","None") else None
+        except: return None
+
+    a_is = data["Financials"]["Income_Statement"].get("yearly", {})
+    a_cf = data["Financials"]["Cash_Flow"].get("yearly", {})
+    a_bs = data["Financials"]["Balance_Sheet"].get("yearly", {})
+
+    chart1 = []
+    for y in sorted(a_is.keys()):
+        is_d = a_is[y]; cf_d = a_cf.get(y, {}); bs_d = a_bs.get(y, {})
+        rev  = fv(is_d.get("totalRevenue"))
+        gp   = fv(is_d.get("grossProfit"))
+        ni   = fv(is_d.get("netIncome"))
+        fcf  = fv(cf_d.get("freeCashFlow"))
+        if not fcf:
+            cfo  = fv(cf_d.get("totalCashFromOperatingActivities"))
+            capex= fv(cf_d.get("capitalExpenditures"))
+            fcf  = cfo - abs(capex) if cfo and capex else None
+        eq   = fv(bs_d.get("totalStockholderEquity"))
+        ltd  = fv(bs_d.get("longTermDebt")) or 0
+        std  = fv(bs_d.get("shortLongTermDebt")) or 0
+        ic   = (eq or 0) + ltd + std
+        roic = ni/ic if ni and ic and ic != 0 else None
+        gm   = gp/rev if gp and rev and rev != 0 else None
+        fcfm = fcf/rev if fcf is not None and rev and rev != 0 else None
+        if rev:
+            chart1.append({
+                "Year":        y[:4],
+                "ROIC":        round(roic*100, 2) if roic is not None else None,
+                "Gross Margin":round(gm*100,   2) if gm   is not None else None,
+                "FCF Margin":  round(fcfm*100, 2) if fcfm is not None else None,
+            })
+
+    # ── Chart 2: Debt/Equity & Cash Ratio (annual) ───────────────────
+    chart2 = []
+    for y in sorted(a_bs.keys()):
+        bs_d = a_bs[y]; cf_d = a_cf.get(y, {}); is_d = a_is.get(y, {})
+        eq   = fv(bs_d.get("totalStockholderEquity"))
+        ltd  = fv(bs_d.get("longTermDebt")) or 0
+        std  = fv(bs_d.get("shortLongTermDebt")) or 0
+        debt = ltd + std
+        ca   = fv(bs_d.get("totalCurrentAssets"))
+        cl   = fv(bs_d.get("totalCurrentLiabilities"))
+        cash = fv(bs_d.get("cashAndEquivalents")) or fv(bs_d.get("cash"))
+        de   = debt/eq   if eq   and eq   != 0 else None
+        cr   = cash/cl   if cl   and cl   != 0 and cash is not None else None
+        if de is not None or cr is not None:
+            chart2.append({
+                "Year":         y[:4],
+                "Debt Equity":  round(de, 3) if de is not None else None,
+                "Cash Ratio":   round(cr, 3) if cr is not None else None,
+            })
+
+    return {
+        "rows":          rows,
+        "overall_score": overall_score,
+        "overall_css":   overall_css,
+        "overall_lbl":   overall_lbl,
+        "chart1":        chart1,
+        "chart2":        chart2,
+    }
+
+
 # ── Health Score ──────────────────────────────────────────────────────────────
 def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     price_data = price_data or {}
@@ -2991,8 +3137,105 @@ with tab2b:
                 st.plotly_chart(fig_h, use_container_width=True)
 
     with score_tabs[4]:  # Quality
-        st.markdown('<div class="section-header">Quality Score</div>', unsafe_allow_html=True)
-        st.info("Coming soon — Quality scoring model")
+        qs = compute_quality_score(data, hl, price_data)
+        rows_all = qs["rows"]
+
+        col_hdr, col_filter = st.columns([3, 1])
+        with col_hdr:
+            st.markdown(
+                f'<div style="font-size:22px;font-weight:700;color:#e2e8f0;margin-bottom:8px;">'
+                f'Quality <span style="color:#94a3b8;">{qs["overall_score"]:.2f}</span>'
+                f' &nbsp;{grade_badge(qs["overall_css"], qs["overall_lbl"])}</div>',
+                unsafe_allow_html=True
+            )
+        with col_filter:
+            groups = ["All Values"] + sorted(set(r["label"].split(" ")[0] for r in rows_all))
+            filter_sel = st.selectbox("", groups, key="quality_score_filter", label_visibility="collapsed")
+
+        rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].startswith(filter_sel)]
+
+        col_table, col_charts = st.columns([1, 1])
+
+        with col_table:
+            tbl = '''
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead>
+                <tr style="color:#64748b;border-bottom:1px solid #2d3748;">
+                  <th style="text-align:left;padding:6px 4px;font-weight:500;">Ratio</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">Value</th>
+                  <th style="text-align:center;padding:6px 4px;font-weight:500;">Grade</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">3Y Avg.</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">5Y Avg.</th>
+                </tr>
+              </thead><tbody>'''
+            for r in rows_show:
+                tbl += f'''
+                <tr style="border-bottom:1px solid #1e2535;">
+                  <td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
+                  <td style="padding:6px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg3"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg5"]}</td>
+                </tr>'''
+            tbl += "</tbody></table>"
+            st.markdown(tbl, unsafe_allow_html=True)
+
+        with col_charts:
+            # Chart 1: ROIC | Gross Margin | FCF Margin
+            df1 = pd.DataFrame(qs["chart1"])
+            if not df1.empty:
+                fig_q1 = go.Figure()
+                q1_colors = {
+                    "ROIC":         ("#3b82f6", "rgba(59,130,246,0.25)"),
+                    "Gross Margin": ("#22c55e", "rgba(34,197,94,0.25)"),
+                    "FCF Margin":   ("#ec4899", "rgba(236,72,153,0.25)"),
+                }
+                for col_name, (lc, fc) in q1_colors.items():
+                    if col_name in df1.columns:
+                        fig_q1.add_trace(go.Scatter(
+                            x=df1["Year"], y=df1[col_name],
+                            name=col_name, mode="lines",
+                            line=dict(color=lc, width=2),
+                            fill="tozeroy", fillcolor=fc,
+                        ))
+                fig_q1.update_layout(
+                    title=dict(text="ROIC | Gross Margin | FCF Margin", font=dict(color="#e2e8f0", size=13)),
+                    paper_bgcolor="#0f1117", plot_bgcolor="#0f1117",
+                    font=dict(color="#94a3b8", size=11),
+                    legend=dict(orientation="h", y=-0.18, bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=0, r=0, t=40, b=40),
+                    xaxis=dict(gridcolor="#1e2535", showgrid=False),
+                    yaxis=dict(gridcolor="#1e2535", ticksuffix="%"),
+                    height=320,
+                )
+                st.plotly_chart(fig_q1, use_container_width=True)
+
+            # Chart 2: Debt/Equity & Cash Ratio
+            df2 = pd.DataFrame(qs["chart2"])
+            if not df2.empty:
+                fig_q2 = go.Figure()
+                q2_colors = {
+                    "Debt Equity": ("#3b82f6", "rgba(59,130,246,0.15)"),
+                    "Cash Ratio":  ("#22c55e", "rgba(34,197,94,0.15)"),
+                }
+                for col_name, (lc, fc) in q2_colors.items():
+                    if col_name in df2.columns:
+                        fig_q2.add_trace(go.Scatter(
+                            x=df2["Year"], y=df2[col_name],
+                            name=col_name, mode="lines",
+                            line=dict(color=lc, width=2),
+                        ))
+                fig_q2.update_layout(
+                    title=dict(text="Debt/Equity & Cash Ratio", font=dict(color="#e2e8f0", size=13)),
+                    paper_bgcolor="#0f1117", plot_bgcolor="#0f1117",
+                    font=dict(color="#94a3b8", size=11),
+                    legend=dict(orientation="h", y=-0.18, bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=0, r=0, t=40, b=40),
+                    xaxis=dict(gridcolor="#1e2535", showgrid=False),
+                    yaxis=dict(gridcolor="#1e2535"),
+                    height=320,
+                )
+                st.plotly_chart(fig_q2, use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════
 # TAB 3 · Earnings
