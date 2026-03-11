@@ -500,6 +500,9 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
         if not quarterly or len(quarterly) < 4:
             return pd.DataFrame()
 
+        # Load shares from Balance Sheet for epsCalc (only needed for Income Statement TTM)
+        bs_quarterly = data["Financials"]["Balance_Sheet"].get("quarterly", {}) if statement == "Income_Statement" else {}
+
         # Sort all quarters descending
         sorted_q = sorted(quarterly.keys(), reverse=True)
 
@@ -567,10 +570,17 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
             ttm_row["fcfMargin"]        = fcf / rev    if rev and fcf    else None
             ttm_row["debtToEquity"]     = debt / equity if equity and debt else None
 
-            # EPS calc: netIncomeApplicableToCommonShares / avg shares
+            # EPS calc: netIncomeApplicableToCommonShares / avg shares from BS
             ni_common = (ttm_row.get("netIncomeApplicableToCommonShares")
                          or ttm_row.get("netIncome"))
-            shares    = ttm_row.get("commonStockSharesOutstanding")
+            # Average shares over the 4-quarter window from Balance Sheet
+            share_vals = []
+            for q in window:
+                try:
+                    s = bs_quarterly.get(q, {}).get("commonStockSharesOutstanding")
+                    if s: share_vals.append(float(s))
+                except: pass
+            shares = sum(share_vals) / len(share_vals) if share_vals else None
             ttm_row["epsCalc"] = ni_common / shares if (ni_common and shares and shares != 0) else None
 
             rows.append(ttm_row)
