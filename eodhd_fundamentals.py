@@ -1705,7 +1705,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                     (f"{stmt_lbl}.{api_key}  [{y0}]  (V recent)" + (f"  source: {s0}" if is_fcf else ""), raw(v0)),
                     (f"{stmt_lbl}.{api_key}  [{yn}]  (V base, {n}Y ago)" + (f"  source: {sn}" if is_fcf else ""), raw(vn)),
                     ("── Calculation ──",                                            ""),
-                    (f"({raw(v0)} ÷ {raw(vn)})^(1/{n}) − 1",                      ""),
+                    (f"({raw(v0)} ÷ {raw(vn)})^(1/{n}) − 1",  f"{(gr / 100):.6f}" if gr is not None else (gr_note or "—")),
                     ("× 100",                                                        ""),
                     ("── Result ──",                                                 ""),
                     (f"{field_label} Growth ({n}Y CAGR)",  pct(gr) if gr is not None else (gr_note or "—")),
