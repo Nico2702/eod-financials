@@ -260,18 +260,22 @@ def compute_kennzahlen(data, hl, val, tech):
     # QoQ growth — from raw quarterly data
     rev_gr_qoq    = qoq_growth(q_is, "totalRevenue")
     earn_gr_qoq   = qoq_growth(q_is, "netIncome")
-    eps_gr_qoq    = qoq_growth(q_is, "dilutedEps")
+    eps_gr_qoq    = (qoq_growth(q_is, "netIncomeApplicableToCommonShares")
+                     or qoq_growth(q_is, "netIncome"))
     ebit_gr_qoq   = qoq_growth(q_is, "operatingIncome")
     ebitda_gr_qoq = qoq_growth(q_is, "ebitda")
-    fcf_gr_qoq    = qoq_growth(q_cf, "freeCashFlow")
+    fcf_gr_qoq    = (qoq_growth(q_cf, "freeCashFlow")
+                     or qoq_growth(q_cf, "freeCashFlowCalc"))
 
     # YoY growth — from raw quarterly data (Q[0] vs Q[4])
     rev_gr_yoy    = yoy_growth(q_is, "totalRevenue")
     earn_gr_yoy   = yoy_growth(q_is, "netIncome")
-    eps_gr_yoy    = yoy_growth(q_is, "dilutedEps")
+    eps_gr_yoy    = (yoy_growth(q_is, "netIncomeApplicableToCommonShares")
+                     or yoy_growth(q_is, "netIncome"))
     ebit_gr_yoy   = yoy_growth(q_is, "operatingIncome")
     ebitda_gr_yoy = yoy_growth(q_is, "ebitda")
-    fcf_gr_yoy    = yoy_growth(q_cf, "freeCashFlow")
+    fcf_gr_yoy    = (yoy_growth(q_cf, "freeCashFlow")
+                     or yoy_growth(q_cf, "freeCashFlowCalc"))
 
     # aliases for Key Facts
     ebit_gr    = ebit_gr_yoy
@@ -430,10 +434,15 @@ def parse_financials(data: dict, statement: str, period: str) -> pd.DataFrame:
             if oi     is not None: df["operatingMargin"] = oi     / rev
             if ni     is not None: df["netMargin"]       = ni     / rev
             if ebitda is not None: df["ebitdaMargin"]    = ebitda / rev
-            if fcf_raw is not None:
-                df["fcfMargin"] = fcf_raw / rev
-            elif cfo is not None and capex is not None:
-                df["fcfMargin"] = (cfo - capex.abs()) / rev
+            # FCF: use direct field, fallback to CFO - abs(CapEx), fallback to CFO
+            fcf_calc = fcf_raw
+            if fcf_calc is None and cfo is not None and capex is not None:
+                fcf_calc = cfo - capex.abs()
+            elif fcf_calc is None and cfo is not None:
+                fcf_calc = cfo
+            if fcf_calc is not None:
+                df["freeCashFlowCalc"] = fcf_calc
+                df["fcfMargin"] = fcf_calc / rev
 
         return df
     except Exception:
@@ -459,28 +468,32 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
     """
     SUM_FIELDS = {
         "totalRevenue", "costOfRevenue", "grossProfit",
-        "researchDevelopment", "sellingGeneralAdministrative",
-        "totalOperatingExpenses", "operatingIncome", "ebitda",
-        "interestExpense", "totalOtherIncomeExpensenet",
+        "researchDevelopment", "sellingGeneralAdministrative", "sellingAndMarketingExpenses",
+        "totalOperatingExpenses", "operatingIncome", "ebit", "ebitda",
+        "interestExpense", "interestIncome", "totalOtherIncomeExpenseNet",
         "incomeBeforeTax", "incomeTaxExpense", "netIncome",
-        "netIncomeApplicableToCommonShares",
+        "netIncomeApplicableToCommonShares", "netIncomeFromContinuingOps",
         "depreciation", "depreciationAndAmortization",
         "totalCashFromOperatingActivities", "capitalExpenditures",
         "freeCashFlow", "dividendsPaid",
-        "totalCashflowsFromInvestingActivities",
-        "totalCashFromFinancingActivities",
+        "totalCashflowsFromInvestingActivities", "totalCashFromFinancingActivities",
+        "stockBasedCompensation", "changeInWorkingCapital",
     }
     AVG_FIELDS = {
-        # Point-in-time fields that should be averaged over the 4-quarter window
-        "dilutedAverageShares", "commonStockSharesOutstanding",
+        # Shares — average over the 4-quarter window
+        "commonStockSharesOutstanding",
     }
     LATEST_FIELDS = {
-        "totalAssets", "totalCurrentAssets", "cash", "shortTermInvestments",
+        "totalAssets", "totalCurrentAssets", "cash", "cashAndEquivalents",
+        "cashAndShortTermInvestments", "shortTermInvestments",
         "netReceivables", "inventory", "otherCurrentAssets",
-        "totalCurrentLiabilities", "shortLongTermDebt", "longTermDebt",
+        "totalCurrentLiabilities", "shortLongTermDebt", "shortLongTermDebtTotal",
+        "shortTermDebt", "longTermDebt", "longTermDebtTotal",
         "totalLiab", "totalStockholderEquity", "retainedEarnings",
         "commonStock", "goodWill", "intangibleAssets",
-        "propertyPlantEquipment", "otherAssets",
+        "propertyPlantEquipment", "propertyPlantAndEquipmentNet",
+        "otherAssets", "netDebt", "netWorkingCapital",
+        "capitalLeaseObligations", "longTermInvestments",
     }
     try:
         quarterly = data["Financials"][statement].get("quarterly", {})
@@ -545,20 +558,20 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
             ttm_row["roa"]              = ni / assets  if assets and ni  else None
             ttm_row["roe"]              = ni / equity  if equity and ni  else None
             fcf = ttm_row.get("freeCashFlow")
-            if fcf is None:
-                # fallback: CFO - abs(CapEx), handles both sign conventions
+            if not fcf:
                 if cfo is not None and capex is not None:
                     fcf = cfo - abs(capex)
-                else:
-                    fcf = None
+                elif cfo is not None:
+                    fcf = cfo
             ttm_row["freeCashFlowCalc"] = fcf
             ttm_row["fcfMargin"]        = fcf / rev    if rev and fcf    else None
             ttm_row["debtToEquity"]     = debt / equity if equity and debt else None
 
-            # EPS calc: ni_common / avg_shares, fallback to netIncome
-            ni_common = ttm_row.get("netIncomeApplicableToCommonShares") or ttm_row.get("netIncome")
-            shares    = ttm_row.get("dilutedAverageShares") or ttm_row.get("commonStockSharesOutstanding")
-            ttm_row["epsCalc"] = ni_common / shares if ni_common and shares else None
+            # EPS calc: netIncomeApplicableToCommonShares / avg shares
+            ni_common = (ttm_row.get("netIncomeApplicableToCommonShares")
+                         or ttm_row.get("netIncome"))
+            shares    = ttm_row.get("commonStockSharesOutstanding")
+            ttm_row["epsCalc"] = ni_common / shares if (ni_common and shares and shares != 0) else None
 
             rows.append(ttm_row)
 
