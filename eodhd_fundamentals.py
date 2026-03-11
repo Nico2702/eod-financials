@@ -414,7 +414,7 @@ def parse_financials(data: dict, statement: str, period: str) -> pd.DataFrame:
         drop_cols = [c for c in df.columns if c in ("date", "filing_date", "currency_symbol", "type", "period")]
         df = df.drop(columns=drop_cols, errors="ignore")
         df = df.apply(pd.to_numeric, errors="coerce")
-        return df.head(8)
+        return df
     except Exception:
         return pd.DataFrame()
 
@@ -968,21 +968,13 @@ with tab1:
     N = 20  # number of data points to show
 
     if chart_period == "TTM":
-        df_is_chart = calculate_ttm_history(data, "Income_Statement")
-        df_cf_chart = calculate_ttm_history(data, "Cash_Flow")
-        df_bs_chart = calculate_ttm_history(data, "Balance_Sheet")
-        # TTM history is already indexed by date, newest first
-        df_is_chart = df_is_chart.iloc[:N]
-        df_cf_chart = df_cf_chart.iloc[:N]
-        df_bs_chart = df_bs_chart.iloc[:N]
-        # Transpose so index=date, columns=fields (same shape as parse_financials)
-        df_is_chart = df_is_chart.T if not df_is_chart.empty else df_is_chart
-        df_cf_chart = df_cf_chart.T if not df_cf_chart.empty else df_cf_chart
-        df_bs_chart = df_bs_chart.T if not df_bs_chart.empty else df_bs_chart
+        df_is_chart = calculate_ttm_history(data, "Income_Statement").iloc[:N]
+        df_cf_chart = calculate_ttm_history(data, "Cash_Flow").iloc[:N]
+        df_bs_chart = calculate_ttm_history(data, "Balance_Sheet").iloc[:N]
     else:
-        df_is_chart = parse_financials(data, "Income_Statement", chart_period).iloc[:, :N]
-        df_cf_chart = parse_financials(data, "Cash_Flow",        chart_period).iloc[:, :N]
-        df_bs_chart = parse_financials(data, "Balance_Sheet",    chart_period).iloc[:, :N]
+        df_is_chart = parse_financials(data, "Income_Statement", chart_period).iloc[:N]
+        df_cf_chart = parse_financials(data, "Cash_Flow",        chart_period).iloc[:N]
+        df_bs_chart = parse_financials(data, "Balance_Sheet",    chart_period).iloc[:N]
 
     CHART_BG   = "#1e2535"
     CHART_GRID = "#2d3748"
@@ -1071,9 +1063,10 @@ with tab1:
             total_debt = ltd_s.add(std_s, fill_value=0)
 
             fig = go.Figure()
-            idx = total_cash.dropna().index[::-1][:N]
-            fig.add_trace(go.Bar(x=idx, y=(total_cash.reindex(idx[::-1]).iloc[:N] / 1e6)[::-1], name="Total Cash", marker_color=COLORS[1], marker_line_width=0))
-            fig.add_trace(go.Bar(x=idx, y=(total_debt.reindex(idx[::-1]).iloc[:N] / 1e6)[::-1], name="Total Debt", marker_color="#fc8181", marker_line_width=0))
+            tc = total_cash.dropna().iloc[:N]
+            td = total_debt.reindex(tc.index)
+            fig.add_trace(go.Bar(x=tc.index[::-1], y=(tc / 1e6)[::-1], name="Total Cash", marker_color=COLORS[1], marker_line_width=0))
+            fig.add_trace(go.Bar(x=td.index[::-1], y=(td / 1e6)[::-1], name="Total Debt", marker_color="#fc8181", marker_line_width=0))
             fig.update_layout(**base_layout(f"Cash & Debt ({currency} mln)"))
             fig.update_layout(barmode="group")
         else:
