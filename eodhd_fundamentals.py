@@ -1755,7 +1755,19 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     if "Revenue Growth" in L:    return growth_dd("Revenue",  q_is, a_is, "totalRevenue")
     if "Net Income Growth" in L: return growth_dd("Net Income", q_is, a_is, "netIncome")
     if "EPS Growth" in L and "Fwd" not in L:
-        return growth_dd("EPS", q_is, a_is, "netIncomeApplicableToCommonShares")
+        # Match score logic: use netIncomeApplicableToCommonShares, fallback to netIncome
+        qs_test  = sorted(q_is.keys(), reverse=True)
+        eps_q    = "netIncomeApplicableToCommonShares"
+        eps_a    = "netIncomeApplicableToCommonShares"
+        q_vals   = [fv(q_is[q].get(eps_q)) for q in qs_test[:8]]
+        if sum(1 for v in q_vals if v is not None) < 4:
+            eps_q = "netIncome"
+        a_vals   = [fv(a_is.get(y, {}).get(eps_a)) for y in sorted(a_is.keys(), reverse=True)[:3]]
+        if sum(1 for v in a_vals if v is not None) == 0:
+            eps_a = "netIncome"
+        # For TTM use quarterly key; for CAGR use annual key
+        key = eps_q if "CAGR" not in L else eps_a
+        return growth_dd("EPS", q_is, a_is, key)
     if "EPS Growth (Fwd)" in L:  return growth_dd("EPS", None, None, None)
     if "EBIT Growth" in L:       return growth_dd("EBIT", q_is, a_is, "ebit")
     if "EBITDA Growth" in L:     return growth_dd("EBITDA", q_is, a_is, "ebitda")
