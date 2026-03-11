@@ -491,7 +491,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     ps_fwd   = None  # EODHD doesn't provide forward P/S
     ps_cur   = fv(val.get("PriceSalesTTM"))
     ps_yr    = (mcap / rev_yr)    if mcap and rev_yr and rev_yr > 0 else None
-    pb_cur   = fv(val.get("PriceBookMRQ"))
+    _pb_self = (mcap / equity_q) if mcap and equity_q and equity_q > 0 else None
+    pb_cur   = fv(val.get("PriceBookMRQ")) or _pb_self
     pb_yr    = (mcap / equity_yr) if mcap and equity_yr and equity_yr > 0 else None
 
     # P/FCF (Cur) — TTM FCF from latest 4 quarters
@@ -1058,18 +1059,48 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         is_q = "Cur" in L or "Quarterly" in L
         eq   = eq_q if is_q else eq_a
         dt   = bsQ_dt if is_q else bsA_dt
-        pb   = safe(mcap, eq)
+        pb_self = safe(mcap, eq)
+
+        if "Cur" in L:
+            price_book_mrq = fv(val.get("PriceBookMRQ"))
+            pb_used = price_book_mrq or pb_self
+            if price_book_mrq:
+                src_lbl = "Valuation.PriceBookMRQ  (primary)"
+                src_val = price_book_mrq
+            else:
+                src_lbl = "self-calculated: MarketCap / Equity_Q  (fallback - PriceBookMRQ missing)"
+                src_val = pb_self
+            return {
+                "formula": "Primary: Valuation.PriceBookMRQ\nFallback: MarketCap / totalStockholderEquity (latest quarter)",
+                "fields":  ["Valuation.PriceBookMRQ",
+                            "Highlights.MarketCapitalization",
+                            "Balance_Sheet.totalStockholderEquity"],
+                "unit": "x",
+                "components": [
+                    ("Valuation.PriceBookMRQ",                         num(price_book_mrq, 4) if price_book_mrq else "- (not available)"),
+                    ("-- Source used --",                               ""),
+                    (src_lbl,                                           num(src_val, 4) + " x"),
+                    ("-- Self-calc cross-check --",                     ""),
+                    ("Market Cap  [Highlights.MarketCapitalization]",   raw(mcap)),
+                    (f"Equity  [Balance_Sheet {bsQ_dt}]",              raw(eq_q)),
+                    ("MarketCap / Equity_Q",                            num(pb_self, 4) + " x"),
+                    ("-- Result --",                                    ""),
+                    ("P/B (Cur)",                                       num(pb_used, 4) + " x"),
+                ],
+                "result": num(pb_used, 2)}
+
+        pb = pb_self
         return {
-            "formula": "Market Cap ÷ Stockholder Equity",
+            "formula": "Market Cap / Stockholder Equity  (annual)",
             "fields":  ["Highlights.MarketCapitalization",
                         "Balance_Sheet.totalStockholderEquity"],
             "unit": "x",
             "components": [
                 ("Market Cap  [Highlights.MarketCapitalization]",      bn(mcap)),
                 (f"Stockholder Equity  [Balance_Sheet {dt}]",          bn(eq)),
-                ("── Calculation ──",                                   ""),
-                ("Market Cap ÷ Equity",                                 f"{bn(mcap)} ÷ {bn(eq)}"),
-                ("── Result ──",                                        ""),
+                ("-- Calculation --",                                   ""),
+                ("Market Cap / Equity",                                 f"{bn(mcap)} / {bn(eq)}"),
+                ("-- Result --",                                        ""),
                 ("P/B",                                                 num(pb, 4) + " x"),
             ],
             "result": num(pb, 2)}
