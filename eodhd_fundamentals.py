@@ -572,22 +572,55 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
     pe_3y   = hist_multiple(a_is, "netIncome",             3)
     pe_5y   = hist_multiple(a_is, "netIncome",             5)
+    pe_10y  = hist_multiple(a_is, "netIncome",            10)
     ps_3y   = hist_multiple(a_is, "totalRevenue",          3)
     ps_5y   = hist_multiple(a_is, "totalRevenue",          5)
+    ps_10y  = hist_multiple(a_is, "totalRevenue",         10)
     pb_3y   = hist_multiple(a_bs, "totalStockholderEquity",3)
     pb_5y   = hist_multiple(a_bs, "totalStockholderEquity",5)
+    pb_10y  = hist_multiple(a_bs, "totalStockholderEquity",10)
     pfcf_3y = fcf_hist_real(3)
     pfcf_5y = fcf_hist_real(5)
-    ev_rev_3y   = hist_multiple(a_is, "totalRevenue",          3, use_ev=True)
-    ev_rev_5y   = hist_multiple(a_is, "totalRevenue",          5, use_ev=True)
-    ev_ebit_3y  = hist_multiple(a_is, "ebit",                  3, use_ev=True)
-    ev_ebit_5y  = hist_multiple(a_is, "ebit",                  5, use_ev=True)
-    ev_ebitda_3y= hist_multiple(a_is, "ebitda",                3, use_ev=True)
-    ev_ebitda_5y= hist_multiple(a_is, "ebitda",                5, use_ev=True)
+    pfcf_10y= fcf_hist_real(10)
+    ev_rev_3y   = hist_multiple(a_is, "totalRevenue", 3,  use_ev=True)
+    ev_rev_5y   = hist_multiple(a_is, "totalRevenue", 5,  use_ev=True)
+    ev_rev_10y  = hist_multiple(a_is, "totalRevenue", 10, use_ev=True)
+    ev_ebit_3y  = hist_multiple(a_is, "ebit",         3,  use_ev=True)
+    ev_ebit_5y  = hist_multiple(a_is, "ebit",         5,  use_ev=True)
+    ev_ebit_10y = hist_multiple(a_is, "ebit",         10, use_ev=True)
+    ev_ebitda_3y = hist_multiple(a_is, "ebitda",      3,  use_ev=True)
+    ev_ebitda_5y = hist_multiple(a_is, "ebitda",      5,  use_ev=True)
+    ev_ebitda_10y= hist_multiple(a_is, "ebitda",      10, use_ev=True)
     earn_yield_3y = yield_hist_real(a_is, "netIncome",    3)
     earn_yield_5y = yield_hist_real(a_is, "netIncome",    5)
+    earn_yield_10y= yield_hist_real(a_is, "netIncome",   10)
     fcf_yield_3y  = yield_hist_real(a_cf, "freeCashFlow", 3)
     fcf_yield_5y  = yield_hist_real(a_cf, "freeCashFlow", 5)
+    fcf_yield_10y = yield_hist_real(a_cf, "freeCashFlow",10)
+
+    # PEG historical averages: avg(P/E_year / EPS_growth_year) per rolling window
+    def peg_hist_avg(n):
+        years = sorted(a_is.keys(), reverse=True)
+        vals = []
+        for i in range(min(n, len(years) - 1)):
+            y_cur  = years[i]
+            y_prev = years[i + 1]
+            ni_c = fv(a_is[y_cur].get("netIncome"))
+            ni_p = fv(a_is[y_prev].get("netIncome"))
+            if not ni_c or not ni_p or ni_p <= 0: continue
+            gr = (ni_c / ni_p - 1) * 100
+            if gr <= 0: continue
+            yr_str = y_cur[:4]
+            price  = price_data.get(yr_str)
+            shs    = fv(a_bs.get(y_cur, {}).get("commonStockSharesOutstanding"))
+            if not price or not shs: continue
+            pe_y = price * shs / ni_c if ni_c > 0 else None
+            if pe_y: vals.append(pe_y / gr)
+        return sum(vals) / len(vals) if vals else None
+
+    peg_3y  = peg_hist_avg(3)
+    peg_5y  = peg_hist_avg(5)
+    peg_10y = peg_hist_avg(10)
 
     # ── Grade thresholds ─────────────────────────────────────────────
     PE_T    = [(0,"ap"),(10,"a"),(15,"am"),(20,"bp"),(25,"b"),(30,"bm"),(40,"cp"),(50,"c")]
@@ -606,46 +639,47 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         return f"{v:.{decimals}f}"
 
     # ── Build rows ───────────────────────────────────────────────────
-    # Each row: (label, cur_val, cur_fmt, grade_css, grade_lbl, avg3y, avg5y, thresholds, higher)
-    def row(label, cur, avg3, avg5, T, higher=False, pct=False):
+    # Each row: (label, cur_val, cur_fmt, grade_css, grade_lbl, avg3y, avg5y, avg10y, thresholds, higher)
+    def row(label, cur, avg3, avg5, avg10, T, higher=False, pct=False):
         css, lbl = ratio_grade(cur, T, higher_is_better=higher)
         return {
-            "label": label,
-            "cur":   cur,
-            "fmt":   fmt(cur, pct),
-            "css":   css,
-            "lbl":   lbl,
-            "avg3":  fmt(avg3, pct),
-            "avg5":  fmt(avg5, pct),
-            "group": label.split(" ")[0],
+            "label":  label,
+            "cur":    cur,
+            "fmt":    fmt(cur, pct),
+            "css":    css,
+            "lbl":    lbl,
+            "avg3":   fmt(avg3,  pct),
+            "avg5":   fmt(avg5,  pct),
+            "avg10":  fmt(avg10, pct),
+            "group":  label.split(" ")[0],
             "higher": higher,
         }
 
     PEG_T   = [(0,"ap"),(0.5,"a"),(1,"am"),(1.5,"bp"),(2,"b"),(3,"bm"),(4,"cp"),(5,"c")]
 
     rows = [
-        row("P/Earnings (Fwd)",      pe_fwd,         None,         None,         PE_T),
-        row("P/Earnings (Cur)",      pe_cur,         pe_3y,        pe_5y,        PE_T),
-        row("P/Earnings (Year)",     pe_yr,          pe_3y,        pe_5y,        PE_T),
-        row("P/Sales (Cur)",         ps_cur,         ps_3y,        ps_5y,        PS_T),
-        row("P/Sales (Year)",        ps_yr,          ps_3y,        ps_5y,        PS_T),
-        row("P/Book (Cur)",          pb_cur,         pb_3y,        pb_5y,        PB_T),
-        row("P/Book (Year)",         pb_yr,          pb_3y,        pb_5y,        PB_T),
-        row("P/FCF (Cur)",           pfcf_cur,       pfcf_3y,      pfcf_5y,      PFCF_T),
-        row("P/FCF (Year)",          pfcf_yr,        pfcf_3y,      pfcf_5y,      PFCF_T),
-        row("PEG Ratio (Fwd)",       peg_fwd,        None,         None,         PEG_T),
-        row("PEG Ratio (Cur)",       peg_cur,        None,         None,         PEG_T),
-        row("PEG Ratio (Year)",      peg_yr,         None,         None,         PEG_T),
-        row("EV/Revenue (Cur)",      ev_rev_cur,     ev_rev_3y,    ev_rev_5y,    EVR_T),
-        row("EV/Revenue (Year)",     ev_rev_yr,      ev_rev_3y,    ev_rev_5y,    EVR_T),
-        row("EV/EBIT (Cur)",         ev_ebit_cur,    ev_ebit_3y,   ev_ebit_5y,   EVEBIT_T),
-        row("EV/EBIT (Year)",        ev_ebit_yr,     ev_ebit_3y,   ev_ebit_5y,   EVEBIT_T),
-        row("EV/EBITDA (Cur)",       ev_ebitda_cur,  ev_ebitda_3y, ev_ebitda_5y, EVEBDA_T),
-        row("EV/EBITDA (Year)",      ev_ebitda_yr,   ev_ebitda_3y, ev_ebitda_5y, EVEBDA_T),
-        row("Earnings Yield (Cur)",  earn_yield_cur, earn_yield_3y,earn_yield_5y, EY_T, higher=True, pct=True),
-        row("Earnings Yield (Year)", earn_yield_yr,  earn_yield_3y,earn_yield_5y, EY_T, higher=True, pct=True),
-        row("FCF Yield (TTM)",       fcf_yield_ttm,  fcf_yield_3y, fcf_yield_5y,  FCFY_T, higher=True, pct=True),
-        row("FCF Yield (Year)",      fcf_yield_yr,   fcf_yield_3y, fcf_yield_5y,  FCFY_T, higher=True, pct=True),
+        row("P/Earnings (Fwd)",      pe_fwd,         None,         None,         None,          PE_T),
+        row("P/Earnings (Cur)",      pe_cur,         pe_3y,        pe_5y,        pe_10y,        PE_T),
+        row("P/Earnings (Year)",     pe_yr,          pe_3y,        pe_5y,        pe_10y,        PE_T),
+        row("P/Sales (Cur)",         ps_cur,         ps_3y,        ps_5y,        ps_10y,        PS_T),
+        row("P/Sales (Year)",        ps_yr,          ps_3y,        ps_5y,        ps_10y,        PS_T),
+        row("P/Book (Cur)",          pb_cur,         pb_3y,        pb_5y,        pb_10y,        PB_T),
+        row("P/Book (Year)",         pb_yr,          pb_3y,        pb_5y,        pb_10y,        PB_T),
+        row("P/FCF (Cur)",           pfcf_cur,       pfcf_3y,      pfcf_5y,      pfcf_10y,      PFCF_T),
+        row("P/FCF (Year)",          pfcf_yr,        pfcf_3y,      pfcf_5y,      pfcf_10y,      PFCF_T),
+        row("PEG Ratio (Fwd)",       peg_fwd,        peg_3y,       peg_5y,       peg_10y,       PEG_T),
+        row("PEG Ratio (Cur)",       peg_cur,        peg_3y,       peg_5y,       peg_10y,       PEG_T),
+        row("PEG Ratio (Year)",      peg_yr,         peg_3y,       peg_5y,       peg_10y,       PEG_T),
+        row("EV/Revenue (Cur)",      ev_rev_cur,     ev_rev_3y,    ev_rev_5y,    ev_rev_10y,    EVR_T),
+        row("EV/Revenue (Year)",     ev_rev_yr,      ev_rev_3y,    ev_rev_5y,    ev_rev_10y,    EVR_T),
+        row("EV/EBIT (Cur)",         ev_ebit_cur,    ev_ebit_3y,   ev_ebit_5y,   ev_ebit_10y,   EVEBIT_T),
+        row("EV/EBIT (Year)",        ev_ebit_yr,     ev_ebit_3y,   ev_ebit_5y,   ev_ebit_10y,   EVEBIT_T),
+        row("EV/EBITDA (Cur)",       ev_ebitda_cur,  ev_ebitda_3y, ev_ebitda_5y, ev_ebitda_10y, EVEBDA_T),
+        row("EV/EBITDA (Year)",      ev_ebitda_yr,   ev_ebitda_3y, ev_ebitda_5y, ev_ebitda_10y, EVEBDA_T),
+        row("Earnings Yield (Cur)",  earn_yield_cur, earn_yield_3y,earn_yield_5y,earn_yield_10y, EY_T,   higher=True, pct=True),
+        row("Earnings Yield (Year)", earn_yield_yr,  earn_yield_3y,earn_yield_5y,earn_yield_10y, EY_T,   higher=True, pct=True),
+        row("FCF Yield (TTM)",       fcf_yield_ttm,  fcf_yield_3y, fcf_yield_5y, fcf_yield_10y,  FCFY_T, higher=True, pct=True),
+        row("FCF Yield (Year)",      fcf_yield_yr,   fcf_yield_3y, fcf_yield_5y, fcf_yield_10y,  FCFY_T, higher=True, pct=True),
     ]
 
     # ── Overall Score ────────────────────────────────────────────────
@@ -1628,6 +1662,7 @@ with tab2b:
                   <th style="text-align:center;padding:6px 4px;font-weight:500;">Grade</th>
                   <th style="text-align:right;padding:6px 4px;font-weight:500;">3Y Avg.</th>
                   <th style="text-align:right;padding:6px 4px;font-weight:500;">5Y Avg.</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">10Y Avg.</th>
                 </tr>
               </thead><tbody>'''
 
@@ -1639,6 +1674,7 @@ with tab2b:
                   <td style="padding:6px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
                   <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg3"]}</td>
                   <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg5"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg10"]}</td>
                 </tr>'''
 
             hdr_html += "</tbody></table>"
