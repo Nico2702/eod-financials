@@ -414,6 +414,27 @@ def parse_financials(data: dict, statement: str, period: str) -> pd.DataFrame:
         drop_cols = [c for c in df.columns if c in ("date", "filing_date", "currency_symbol", "type", "period")]
         df = df.drop(columns=drop_cols, errors="ignore")
         df = df.apply(pd.to_numeric, errors="coerce")
+
+        # Derived margins — same logic as TTM
+        rev    = df.get("totalRevenue")
+        gp     = df.get("grossProfit")
+        oi     = df.get("operatingIncome")
+        ni     = df.get("netIncome")
+        ebitda = df.get("ebitda")
+        cfo    = df.get("totalCashFromOperatingActivities")
+        capex  = df.get("capitalExpenditures")
+        fcf_raw = df.get("freeCashFlow")
+
+        if rev is not None:
+            if gp     is not None: df["grossMargin"]     = gp     / rev
+            if oi     is not None: df["operatingMargin"] = oi     / rev
+            if ni     is not None: df["netMargin"]       = ni     / rev
+            if ebitda is not None: df["ebitdaMargin"]    = ebitda / rev
+            if fcf_raw is not None:
+                df["fcfMargin"] = fcf_raw / rev
+            elif cfo is not None and capex is not None:
+                df["fcfMargin"] = (cfo - capex.abs()) / rev
+
         return df
     except Exception:
         return pd.DataFrame()
