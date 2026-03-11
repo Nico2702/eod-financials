@@ -496,9 +496,19 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     ev_ebitda_cur = fv(val.get("EnterpriseValueEbitda"))
     ev_ebitda_yr  = (ev / ebitda_yr) if ev and ebitda_yr and ebitda_yr > 0 else None
 
-    earn_yield_cur = (1 / pe_cur * 100)     if pe_cur and pe_cur > 0 else None
-    earn_yield_yr  = (ni_yr / mcap * 100)   if ni_yr and mcap and mcap > 0 else None
-    fcf_yield_yr   = (fcf_yr / mcap * 100)  if fcf_yr and mcap and mcap > 0 else None
+    earn_yield_cur = (1 / pe_cur * 100)      if pe_cur and pe_cur > 0 else None
+    earn_yield_yr  = (ni_yr / mcap * 100)    if ni_yr and mcap and mcap > 0 else None
+    fcf_yield_ttm  = (fcf_ttm / mcap * 100)  if fcf_ttm and mcap and mcap > 0 else None
+    fcf_yield_yr   = (fcf_yr  / mcap * 100)  if fcf_yr  and mcap and mcap > 0 else None
+
+    # PEG Ratio = P/E / EPS Growth Rate (%)
+    # Growth rate: YoY EPS growth from annual NI
+    ni_cur  = yr(a_is, "netIncome", 0)
+    ni_prev = yr(a_is, "netIncome", 1)
+    eps_gr_yr = ((ni_cur / ni_prev - 1) * 100) if ni_cur and ni_prev and ni_prev > 0 else None
+    peg_fwd  = (pe_fwd / eps_gr_yr)  if pe_fwd  and eps_gr_yr and eps_gr_yr > 0 else None
+    peg_cur  = (pe_cur / eps_gr_yr)  if pe_cur  and eps_gr_yr and eps_gr_yr > 0 else None
+    peg_yr   = (pe_yr  / eps_gr_yr)  if pe_yr   and eps_gr_yr and eps_gr_yr > 0 else None
 
     # ── Historical averages using real year-end prices ────────────────
     # price_data: {YYYY: adjusted_close} — last trading day of each year
@@ -611,25 +621,31 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             "higher": higher,
         }
 
+    PEG_T   = [(0,"ap"),(0.5,"a"),(1,"am"),(1.5,"bp"),(2,"b"),(3,"bm"),(4,"cp"),(5,"c")]
+
     rows = [
-        row("P/Earnings (Fwd)",     pe_fwd,         None,        None,        PE_T),
-        row("P/Earnings (Cur)",     pe_cur,         pe_3y,       pe_5y,       PE_T),
-        row("P/Earnings (Year)",    pe_yr,          pe_3y,       pe_5y,       PE_T),
-        row("P/Sales (Cur)",        ps_cur,         ps_3y,       ps_5y,       PS_T),
-        row("P/Sales (Year)",       ps_yr,          ps_3y,       ps_5y,       PS_T),
-        row("P/Book (Cur)",         pb_cur,         pb_3y,       pb_5y,       PB_T),
-        row("P/Book (Year)",        pb_yr,          pb_3y,       pb_5y,       PB_T),
-        row("P/FCF (Cur)",          pfcf_cur,       pfcf_3y,     pfcf_5y,     PFCF_T),
-        row("P/FCF (Year)",         pfcf_yr,        pfcf_3y,     pfcf_5y,     PFCF_T),
-        row("EV/Revenue (Cur)",     ev_rev_cur,     ev_rev_3y,   ev_rev_5y,   EVR_T),
-        row("EV/Revenue (Year)",    ev_rev_yr,      ev_rev_3y,   ev_rev_5y,   EVR_T),
-        row("EV/EBIT (Cur)",        ev_ebit_cur,    ev_ebit_3y,  ev_ebit_5y,  EVEBIT_T),
-        row("EV/EBIT (Year)",       ev_ebit_yr,     ev_ebit_3y,  ev_ebit_5y,  EVEBIT_T),
-        row("EV/EBITDA (Cur)",      ev_ebitda_cur,  ev_ebitda_3y,ev_ebitda_5y,EVEBDA_T),
-        row("EV/EBITDA (Year)",     ev_ebitda_yr,   ev_ebitda_3y,ev_ebitda_5y,EVEBDA_T),
-        row("Earnings Yield (Cur)", earn_yield_cur, earn_yield_3y,earn_yield_5y, EY_T,  higher=True, pct=True),
-        row("Earnings Yield (Year)",earn_yield_yr,  earn_yield_3y,earn_yield_5y, EY_T,  higher=True, pct=True),
-        row("FCF Yield (Year)",     fcf_yield_yr,   fcf_yield_3y, fcf_yield_5y, FCFY_T, higher=True, pct=True),
+        row("P/Earnings (Fwd)",      pe_fwd,         None,         None,         PE_T),
+        row("P/Earnings (Cur)",      pe_cur,         pe_3y,        pe_5y,        PE_T),
+        row("P/Earnings (Year)",     pe_yr,          pe_3y,        pe_5y,        PE_T),
+        row("P/Sales (Cur)",         ps_cur,         ps_3y,        ps_5y,        PS_T),
+        row("P/Sales (Year)",        ps_yr,          ps_3y,        ps_5y,        PS_T),
+        row("P/Book (Cur)",          pb_cur,         pb_3y,        pb_5y,        PB_T),
+        row("P/Book (Year)",         pb_yr,          pb_3y,        pb_5y,        PB_T),
+        row("P/FCF (Cur)",           pfcf_cur,       pfcf_3y,      pfcf_5y,      PFCF_T),
+        row("P/FCF (Year)",          pfcf_yr,        pfcf_3y,      pfcf_5y,      PFCF_T),
+        row("PEG Ratio (Fwd)",       peg_fwd,        None,         None,         PEG_T),
+        row("PEG Ratio (Cur)",       peg_cur,        None,         None,         PEG_T),
+        row("PEG Ratio (Year)",      peg_yr,         None,         None,         PEG_T),
+        row("EV/Revenue (Cur)",      ev_rev_cur,     ev_rev_3y,    ev_rev_5y,    EVR_T),
+        row("EV/Revenue (Year)",     ev_rev_yr,      ev_rev_3y,    ev_rev_5y,    EVR_T),
+        row("EV/EBIT (Cur)",         ev_ebit_cur,    ev_ebit_3y,   ev_ebit_5y,   EVEBIT_T),
+        row("EV/EBIT (Year)",        ev_ebit_yr,     ev_ebit_3y,   ev_ebit_5y,   EVEBIT_T),
+        row("EV/EBITDA (Cur)",       ev_ebitda_cur,  ev_ebitda_3y, ev_ebitda_5y, EVEBDA_T),
+        row("EV/EBITDA (Year)",      ev_ebitda_yr,   ev_ebitda_3y, ev_ebitda_5y, EVEBDA_T),
+        row("Earnings Yield (Cur)",  earn_yield_cur, earn_yield_3y,earn_yield_5y, EY_T, higher=True, pct=True),
+        row("Earnings Yield (Year)", earn_yield_yr,  earn_yield_3y,earn_yield_5y, EY_T, higher=True, pct=True),
+        row("FCF Yield (TTM)",       fcf_yield_ttm,  fcf_yield_3y, fcf_yield_5y,  FCFY_T, higher=True, pct=True),
+        row("FCF Yield (Year)",      fcf_yield_yr,   fcf_yield_3y, fcf_yield_5y,  FCFY_T, higher=True, pct=True),
     ]
 
     # ── Overall Score ────────────────────────────────────────────────
