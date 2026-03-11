@@ -477,7 +477,16 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
     # ── Current Ratios ───────────────────────────────────────────────
     pe_fwd   = fv(val.get("ForwardPE"))
-    pe_cur   = fv(val.get("TrailingPE")) or fv(hl.get("PERatio"))
+    # P/E (Cur): TrailingPE → PERatio → self-calculated mcap/NI_TTM
+    _q_is_pe  = data["Financials"]["Income_Statement"].get("quarterly", {})
+    _qs_pe    = sorted(_q_is_pe.keys(), reverse=True)
+    _ni_ttm_pe_vals = [
+        fv(_q_is_pe[q].get("netIncomeApplicableToCommonShares")) or fv(_q_is_pe[q].get("netIncome"))
+        for q in _qs_pe[:4]
+    ]
+    _ni_ttm_pe = sum(_ni_ttm_pe_vals) if len(_ni_ttm_pe_vals) == 4 and all(v is not None for v in _ni_ttm_pe_vals) else None
+    _pe_self   = (mcap / _ni_ttm_pe) if mcap and _ni_ttm_pe and _ni_ttm_pe > 0 else None
+    pe_cur   = fv(val.get("TrailingPE")) or fv(hl.get("PERatio")) or _pe_self
     pe_yr    = (mcap / ni_yr)     if mcap and ni_yr  and ni_yr  > 0 else None
     ps_fwd   = None  # EODHD doesn't provide forward P/S
     ps_cur   = fv(val.get("PriceSalesTTM"))
@@ -967,8 +976,44 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
 
         is_ttm = "TTM" in L or "Cur" in L
         ni  = ni_ttm if is_ttm else ni_a
-        dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        dt  = f"TTM ({qis_s[0][:7]}\u2026{qis_s[3][:7]})" if is_ttm else isA_dt
         pe  = safe(mcap, ni)
+
+        if "Cur" in L:
+            # P/E (Cur): prefer Valuation.TrailingPE -> Highlights.PERatio -> self-calc mcap/NI_TTM
+            trailing = fv(val.get("TrailingPE"))
+            pe_ratio = fv(hl.get("PERatio"))
+            pe_cur_used = trailing or pe_ratio or pe
+            if trailing:
+                source_label = "Valuation.TrailingPE  (primary)"
+                source_val   = trailing
+            elif pe_ratio:
+                source_label = "Highlights.PERatio  (fallback - TrailingPE missing)"
+                source_val   = pe_ratio
+            else:
+                source_label = "self-calculated: MarketCap / NI_TTM  (fallback - no API P/E)"
+                source_val   = pe
+            ni_comps_cur = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome")
+            return {
+                "formula": "Primary: Valuation.TrailingPE\nFallback 1: Highlights.PERatio\nFallback 2: MarketCap / NI_TTM (self-calculated)",
+                "fields":  ["Valuation.TrailingPE", "Highlights.PERatio",
+                            "Highlights.MarketCapitalization",
+                            "Income_Statement.netIncome (quarterly TTM - fallback only)"],
+                "unit": "x",
+                "components": [
+                    ("Valuation.TrailingPE",          num(trailing, 4) if trailing else "- (not available)"),
+                    ("Highlights.PERatio",             num(pe_ratio, 4) if pe_ratio else "- (not available)"),
+                    ("-- Source used --",              ""),
+                    (source_label,                     num(source_val, 4) + " x"),
+                    ("-- Self-calc cross-check --",    ""),
+                    ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
+                    *ni_comps_cur,
+                    (f"MarketCap / NI_TTM  =  {raw(mcap)} / {raw(ni)}",  num(pe, 4) + " x"),
+                    ("-- Result --",                   ""),
+                    ("P/E (Cur)",                      num(pe_cur_used, 4) + " x"),
+                ],
+                "result": num(pe_cur_used, 2)}
+
         ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         return {
