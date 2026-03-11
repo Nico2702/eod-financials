@@ -406,6 +406,248 @@ def render_kz_col(title, rows, results):
     html += "</div>"
     return html
 
+
+# ── Value Score ───────────────────────────────────────────────────────────────
+def compute_value_score(data: dict, hl: dict, val: dict) -> dict:
+    """Compute all Value tab ratios, grades, historical averages and chart data."""
+
+    def fv(v):
+        try: return float(v) if v not in (None, "", "NA", "None") else None
+        except: return None
+
+    def ratio_grade(v, thresholds, higher_is_better=False):
+        """Returns (css_class, label)"""
+        if v is None: return "grade-na", "—"
+        if higher_is_better:
+            return get_grade(v, thresholds)
+        # lower is better: negate thresholds
+        neg = [(-t, g) for t, g in thresholds]
+        return get_grade(-v, neg)
+
+    # ── Market data ──────────────────────────────────────────────────
+    mcap   = fv(hl.get("MarketCapitalization"))
+    ev_raw = fv(val.get("EnterpriseValue"))
+
+    # Annual data
+    a_is = data["Financials"]["Income_Statement"].get("yearly", {})
+    a_cf = data["Financials"]["Cash_Flow"].get("yearly", {})
+    a_bs = data["Financials"]["Balance_Sheet"].get("yearly", {})
+    years_is = sorted(a_is.keys(), reverse=True)
+    years_cf = sorted(a_cf.keys(), reverse=True)
+    years_bs = sorted(a_bs.keys(), reverse=True)
+
+    def yr(statement, key, idx=0):
+        years = sorted(statement.keys(), reverse=True)
+        if idx >= len(years): return None
+        return fv(statement[years[idx]].get(key))
+
+    # Annual latest fundamentals
+    ni_yr    = yr(a_is, "netIncome")
+    rev_yr   = yr(a_is, "totalRevenue")
+    ebit_yr  = yr(a_is, "ebit")
+    ebitda_yr= yr(a_is, "ebitda")
+    fcf_yr   = yr(a_cf, "freeCashFlow") or (
+        (yr(a_cf, "totalCashFromOperatingActivities") or 0) - abs(yr(a_cf, "capitalExpenditures") or 0)
+    )
+    equity_yr= yr(a_bs, "totalStockholderEquity")
+    lt_debt  = yr(a_bs, "longTermDebt")
+    st_debt  = yr(a_bs, "shortLongTermDebt")
+    cash_yr  = yr(a_bs, "cash") or yr(a_bs, "cashAndEquivalents")
+    total_debt = (lt_debt or 0) + (st_debt or 0)
+
+    # EV: from Valuation, fallback calculated
+    ev = ev_raw or (mcap + total_debt - (cash_yr or 0) if mcap else None)
+
+    # TTM from Highlights
+    rev_ttm = fv(hl.get("RevenueTTM"))
+    eps_ttm = fv(hl.get("EarningsShare"))
+
+    # ── Current Ratios ───────────────────────────────────────────────
+    pe_fwd   = fv(val.get("ForwardPE"))
+    pe_cur   = fv(val.get("TrailingPE")) or fv(hl.get("PERatio"))
+    pe_yr    = (mcap / ni_yr)     if mcap and ni_yr  and ni_yr  > 0 else None
+    ps_fwd   = None  # EODHD doesn't provide forward P/S
+    ps_cur   = fv(val.get("PriceSalesTTM"))
+    ps_yr    = (mcap / rev_yr)    if mcap and rev_yr and rev_yr > 0 else None
+    pb_cur   = fv(val.get("PriceBookMRQ"))
+    pb_yr    = (mcap / equity_yr) if mcap and equity_yr and equity_yr > 0 else None
+    pfcf_cur = (mcap / fv(hl.get("RevenueTTM")) * fv(val.get("PriceSalesTTM"))) if False else None
+    # P/FCF from Highlights FCF
+    pfcf_cur = None
+    pfcf_yr  = (mcap / fcf_yr)    if mcap and fcf_yr and fcf_yr > 0 else None
+
+    ev_rev_cur = fv(val.get("EnterpriseValueRevenue"))
+    ev_rev_yr  = (ev / rev_yr)    if ev and rev_yr   and rev_yr  > 0 else None
+    ev_ebit_cur= (ev / ebit_yr)   if ev and ebit_yr  and ebit_yr > 0 else None
+    ev_ebit_yr = ev_ebit_cur  # same annual basis
+    ev_ebitda_cur = fv(val.get("EnterpriseValueEbitda"))
+    ev_ebitda_yr  = (ev / ebitda_yr) if ev and ebitda_yr and ebitda_yr > 0 else None
+
+    earn_yield_cur = (1 / pe_cur * 100)     if pe_cur and pe_cur > 0 else None
+    earn_yield_yr  = (ni_yr / mcap * 100)   if ni_yr and mcap and mcap > 0 else None
+    fcf_yield_yr   = (fcf_yr / mcap * 100)  if fcf_yr and mcap and mcap > 0 else None
+
+    # ── Historical averages (current mcap / historical fundamentals) ──
+    # Note: approximation — accurate only if mcap hasn't changed significantly
+    def hist_avg(statement, key, n, divisor=mcap, invert=True):
+        years = sorted(statement.keys(), reverse=True)
+        vals = []
+        for y in years[:n]:
+            v = fv(statement[y].get(key))
+            if v and v > 0 and divisor:
+                vals.append(divisor / v if invert else v / divisor)
+        return sum(vals) / len(vals) if vals else None
+
+    pe_3y   = hist_avg(a_is, "netIncome", 3)
+    pe_5y   = hist_avg(a_is, "netIncome", 5)
+    ps_3y   = hist_avg(a_is, "totalRevenue", 3)
+    ps_5y   = hist_avg(a_is, "totalRevenue", 5)
+    pb_3y   = hist_avg(a_bs, "totalStockholderEquity", 3)
+    pb_5y   = hist_avg(a_bs, "totalStockholderEquity", 5)
+
+    def fcf_hist(statement_cf, n):
+        years = sorted(statement_cf.keys(), reverse=True)
+        vals = []
+        for y in years[:n]:
+            f = fv(statement_cf[y].get("freeCashFlow"))
+            if not f:
+                cfo  = fv(statement_cf[y].get("totalCashFromOperatingActivities"))
+                capex= fv(statement_cf[y].get("capitalExpenditures"))
+                f = cfo - abs(capex) if cfo and capex else None
+            if f and f > 0 and mcap: vals.append(mcap / f)
+        return sum(vals) / len(vals) if vals else None
+
+    pfcf_3y = fcf_hist(a_cf, 3)
+    pfcf_5y = fcf_hist(a_cf, 5)
+
+    ev_rev_3y = hist_avg(a_is, "totalRevenue", 3, divisor=ev, invert=True) if ev else None
+    ev_rev_5y = hist_avg(a_is, "totalRevenue", 5, divisor=ev, invert=True) if ev else None
+
+    def ebit_hist_avg(n):
+        years = sorted(a_is.keys(), reverse=True)
+        vals = []
+        for y in years[:n]:
+            e = fv(a_is[y].get("ebit"))
+            if e and e > 0 and ev: vals.append(ev / e)
+        return sum(vals) / len(vals) if vals else None
+
+    ev_ebit_3y  = ebit_hist_avg(3)
+    ev_ebit_5y  = ebit_hist_avg(5)
+
+    def ebitda_hist_avg(n):
+        years = sorted(a_is.keys(), reverse=True)
+        vals = []
+        for y in years[:n]:
+            e = fv(a_is[y].get("ebitda"))
+            if e and e > 0 and ev: vals.append(ev / e)
+        return sum(vals) / len(vals) if vals else None
+
+    ev_ebitda_3y = ebitda_hist_avg(3)
+    ev_ebitda_5y = ebitda_hist_avg(5)
+
+    def yield_hist_avg(statement, key, n):
+        years = sorted(statement.keys(), reverse=True)
+        vals = []
+        for y in years[:n]:
+            v = fv(statement[y].get(key))
+            if v and mcap: vals.append(v / mcap * 100)
+        return sum(vals) / len(vals) if vals else None
+
+    earn_yield_3y = yield_hist_avg(a_is, "netIncome", 3)
+    earn_yield_5y = yield_hist_avg(a_is, "netIncome", 5)
+    fcf_yield_3y  = yield_hist_avg(a_cf, "freeCashFlow", 3)
+    fcf_yield_5y  = yield_hist_avg(a_cf, "freeCashFlow", 5)
+
+    # ── Grade thresholds ─────────────────────────────────────────────
+    PE_T    = [(0,"ap"),(10,"a"),(15,"am"),(20,"bp"),(25,"b"),(30,"bm"),(40,"cp"),(50,"c")]
+    PS_T    = [(0,"ap"),(1,"a"),(2,"am"),(3,"bp"),(5,"b"),(7,"bm"),(10,"cp")]
+    PB_T    = [(0,"ap"),(1,"a"),(2,"am"),(3,"bp"),(5,"b"),(7,"bm"),(10,"cp")]
+    PFCF_T  = [(0,"ap"),(10,"a"),(15,"am"),(20,"bp"),(25,"b"),(35,"bm"),(50,"cp"),(60,"c")]
+    EVR_T   = [(0,"ap"),(1,"a"),(2,"am"),(3,"bp"),(5,"b"),(7,"bm"),(10,"cp")]
+    EVEBIT_T= [(0,"ap"),(8,"a"),(12,"am"),(16,"bp"),(20,"b"),(25,"bm"),(30,"cp")]
+    EVEBDA_T= [(0,"ap"),(8,"a"),(12,"am"),(16,"bp"),(20,"b"),(25,"bm"),(30,"cp")]
+    EY_T    = [(12,"ap"),(10,"a"),(8,"am"),(6,"bp"),(4,"b"),(3,"bm"),(2,"cp"),(0,"c")]
+    FCFY_T  = [(12,"ap"),(10,"a"),(8,"am"),(6,"bp"),(4,"b"),(3,"bm"),(2,"cp"),(0,"c")]
+
+    def fmt(v, pct=False, decimals=2):
+        if v is None: return "—"
+        if pct: return f"{v:.{decimals}f} %"
+        return f"{v:.{decimals}f}"
+
+    # ── Build rows ───────────────────────────────────────────────────
+    # Each row: (label, cur_val, cur_fmt, grade_css, grade_lbl, avg3y, avg5y, thresholds, higher)
+    def row(label, cur, avg3, avg5, T, higher=False, pct=False):
+        css, lbl = ratio_grade(cur, T, higher_is_better=higher)
+        return {
+            "label": label,
+            "cur":   cur,
+            "fmt":   fmt(cur, pct),
+            "css":   css,
+            "lbl":   lbl,
+            "avg3":  fmt(avg3, pct),
+            "avg5":  fmt(avg5, pct),
+            "group": label.split(" ")[0],
+            "higher": higher,
+        }
+
+    rows = [
+        row("P/Earnings (Fwd)",     pe_fwd,         None,        None,        PE_T),
+        row("P/Earnings (Cur)",     pe_cur,         pe_3y,       pe_5y,       PE_T),
+        row("P/Earnings (Year)",    pe_yr,          pe_3y,       pe_5y,       PE_T),
+        row("P/Sales (Cur)",        ps_cur,         ps_3y,       ps_5y,       PS_T),
+        row("P/Sales (Year)",       ps_yr,          ps_3y,       ps_5y,       PS_T),
+        row("P/Book (Cur)",         pb_cur,         pb_3y,       pb_5y,       PB_T),
+        row("P/Book (Year)",        pb_yr,          pb_3y,       pb_5y,       PB_T),
+        row("P/FCF (Cur)",          pfcf_cur,       pfcf_3y,     pfcf_5y,     PFCF_T),
+        row("P/FCF (Year)",         pfcf_yr,        pfcf_3y,     pfcf_5y,     PFCF_T),
+        row("EV/Revenue (Cur)",     ev_rev_cur,     ev_rev_3y,   ev_rev_5y,   EVR_T),
+        row("EV/Revenue (Year)",    ev_rev_yr,      ev_rev_3y,   ev_rev_5y,   EVR_T),
+        row("EV/EBIT (Cur)",        ev_ebit_cur,    ev_ebit_3y,  ev_ebit_5y,  EVEBIT_T),
+        row("EV/EBIT (Year)",       ev_ebit_yr,     ev_ebit_3y,  ev_ebit_5y,  EVEBIT_T),
+        row("EV/EBITDA (Cur)",      ev_ebitda_cur,  ev_ebitda_3y,ev_ebitda_5y,EVEBDA_T),
+        row("EV/EBITDA (Year)",     ev_ebitda_yr,   ev_ebitda_3y,ev_ebitda_5y,EVEBDA_T),
+        row("Earnings Yield (Cur)", earn_yield_cur, earn_yield_3y,earn_yield_5y, EY_T,  higher=True, pct=True),
+        row("Earnings Yield (Year)",earn_yield_yr,  earn_yield_3y,earn_yield_5y, EY_T,  higher=True, pct=True),
+        row("FCF Yield (Year)",     fcf_yield_yr,   fcf_yield_3y, fcf_yield_5y, FCFY_T, higher=True, pct=True),
+    ]
+
+    # ── Overall Score ────────────────────────────────────────────────
+    grade_score = {"ap":100,"a":92,"am":84,"bp":76,"b":68,"bm":60,"cp":52,"c":44,"cm":36,"d":28,"na":0}
+    scores = [grade_score.get(r["css"].replace("grade-",""), 0) for r in rows if r["css"] != "grade-na"]
+    overall_score = sum(scores) / len(scores) if scores else 0
+    # For overall score: higher is better → pass as ascending thresholds
+    overall_css, overall_lbl = get_grade(overall_score, [
+        (96,"ap"),(92,"a"),(84,"am"),(76,"bp"),(68,"b"),(60,"bm"),(52,"cp"),(44,"c"),(36,"cm"),(0,"d")
+    ])
+
+    # ── Chart data ───────────────────────────────────────────────────
+    chart_rows = []
+    for y in sorted(years_is, reverse=False):
+        rev  = fv(a_is[y].get("totalRevenue"))
+        ni   = fv(a_is[y].get("netIncome"))
+        cf_d = a_cf.get(y, {})
+        fcf  = fv(cf_d.get("freeCashFlow"))
+        if not fcf:
+            cfo   = fv(cf_d.get("totalCashFromOperatingActivities"))
+            capex = fv(cf_d.get("capitalExpenditures"))
+            fcf   = cfo - abs(capex) if cfo and capex else None
+        if rev:
+            chart_rows.append({
+                "Year":      y[:4],
+                "Revenue":   round(rev / 1e6) if rev else None,
+                "Net Income":round(ni  / 1e6) if ni  else None,
+                "FCF":       round(fcf / 1e6) if fcf else None,
+            })
+
+    return {
+        "rows":          rows,
+        "overall_score": overall_score,
+        "overall_css":   overall_css,
+        "overall_lbl":   overall_lbl,
+        "chart_data":    chart_rows,
+    }
+
+
 # ── API ───────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_fundamentals(ticker: str, api_token: str) -> dict:
@@ -1286,8 +1528,82 @@ with tab2b:
     score_tabs = st.tabs(["💎 Value", "📈 Profitability", "🚀 Growth", "🏥 Health", "⭐ Quality"])
 
     with score_tabs[0]:  # Value
-        st.markdown('<div class="section-header">Value Score</div>', unsafe_allow_html=True)
-        st.info("Coming soon — Value scoring model")
+        vs = compute_value_score(data, hl, val)
+        rows_all = vs["rows"]
+
+        # ── Header ────────────────────────────────────────────────────
+        col_hdr, col_filter = st.columns([3, 1])
+        with col_hdr:
+            st.markdown(
+                f'<div style="font-size:22px;font-weight:700;color:#e2e8f0;margin-bottom:8px;">'
+                f'Value <span style="color:#94a3b8;">{vs["overall_score"]:.1f}</span>'
+                f' &nbsp;{grade_badge(vs["overall_css"], vs["overall_lbl"])}</div>',
+                unsafe_allow_html=True
+            )
+        with col_filter:
+            groups = ["All Values"] + sorted(set(r["label"].split(" ")[0] for r in rows_all))
+            filter_sel = st.selectbox("", groups, key="value_score_filter", label_visibility="collapsed")
+
+        rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].startswith(filter_sel)]
+
+        # ── Table + Chart ─────────────────────────────────────────────
+        col_table, col_chart = st.columns([1, 1])
+
+        with col_table:
+            # Table header
+            hdr_html = '''
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead>
+                <tr style="color:#64748b;border-bottom:1px solid #2d3748;">
+                  <th style="text-align:left;padding:6px 4px;font-weight:500;">Ratio</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">Value</th>
+                  <th style="text-align:center;padding:6px 4px;font-weight:500;">Grade</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">3Y Avg.</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">5Y Avg.</th>
+                </tr>
+              </thead><tbody>'''
+
+            for r in rows_show:
+                hdr_html += f'''
+                <tr style="border-bottom:1px solid #1e2535;">
+                  <td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
+                  <td style="padding:6px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg3"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg5"]}</td>
+                </tr>'''
+
+            hdr_html += "</tbody></table>"
+            st.markdown(hdr_html, unsafe_allow_html=True)
+
+        with col_chart:
+            chart_df = pd.DataFrame(vs["chart_data"])
+            if not chart_df.empty:
+                fig_vs = go.Figure()
+                colors_fill = {
+                    "Revenue":    ("#3b82f6", "rgba(59,130,246,0.12)"),
+                    "Net Income": ("#22c55e", "rgba(34,197,94,0.12)"),
+                    "FCF":        ("#ec4899", "rgba(236,72,153,0.12)"),
+                }
+                for col_name, (line_col, fill_col) in colors_fill.items():
+                    if col_name in chart_df.columns:
+                        fig_vs.add_trace(go.Scatter(
+                            x=chart_df["Year"], y=chart_df[col_name],
+                            name=col_name, mode="lines",
+                            line=dict(color=line_col, width=2),
+                            fill="tozeroy", fillcolor=fill_col,
+                        ))
+                fig_vs.update_layout(
+                    title=dict(text="Revenue | Net Income | Free Cash Flow", font=dict(color="#e2e8f0", size=13)),
+                    paper_bgcolor="#0f1117", plot_bgcolor="#0f1117",
+                    font=dict(color="#94a3b8", size=11),
+                    legend=dict(orientation="h", y=-0.15, bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=0, r=0, t=40, b=30),
+                    xaxis=dict(gridcolor="#1e2535", showgrid=False),
+                    yaxis=dict(gridcolor="#1e2535", tickformat=","),
+                    height=420,
+                )
+                st.plotly_chart(fig_vs, use_container_width=True)
 
     with score_tabs[1]:  # Profitability
         st.markdown('<div class="section-header">Profitability Score</div>', unsafe_allow_html=True)
