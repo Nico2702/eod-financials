@@ -721,6 +721,437 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
 
 
+
+# ── Health Score ──────────────────────────────────────────────────────────────
+def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
+    price_data = price_data or {}
+
+    def fv(v):
+        try: return float(v) if v not in (None, "", "NA", "None") else None
+        except: return None
+
+    a_is = data["Financials"]["Income_Statement"].get("yearly", {})
+    a_cf = data["Financials"]["Cash_Flow"].get("yearly", {})
+    a_bs = data["Financials"]["Balance_Sheet"].get("yearly", {})
+    q_is = data["Financials"]["Income_Statement"].get("quarterly", {})
+    q_cf = data["Financials"]["Cash_Flow"].get("quarterly", {})
+    q_bs = data["Financials"]["Balance_Sheet"].get("quarterly", {})
+
+    years   = sorted(a_is.keys(), reverse=True)
+    years_bs= sorted(a_bs.keys(), reverse=True)
+    qis     = sorted(q_is.keys(), reverse=True)
+    qcf     = sorted(q_cf.keys(), reverse=True)
+    qbs     = sorted(q_bs.keys(), reverse=True)
+
+    def ttm_sum(stmt, key):
+        qs = sorted(stmt.keys(), reverse=True)
+        vals = [fv(stmt[q].get(key)) for q in qs[:4]]
+        return sum(v for v in vals if v is not None) if sum(1 for v in vals if v is not None) == 4 else None
+
+    def safe(a, b): return a / b if a is not None and b and b != 0 else None
+
+    # ── Latest quarterly snapshot ─────────────────────────────────────
+    bsQ  = q_bs.get(qbs[0], {}) if qbs else {}
+    cash_q  = fv(bsQ.get("cashAndEquivalents")) or fv(bsQ.get("cash"))
+    ltd_q   = fv(bsQ.get("longTermDebt"))  or 0
+    std_q   = fv(bsQ.get("shortLongTermDebt")) or 0
+    debt_q  = ltd_q + std_q
+    eq_q    = fv(bsQ.get("totalStockholderEquity"))
+    ta_q    = fv(bsQ.get("totalAssets"))
+    ca_q    = fv(bsQ.get("totalCurrentAssets"))
+    cl_q    = fv(bsQ.get("totalCurrentLiabilities"))
+    inv_q   = fv(bsQ.get("inventory")) or 0
+    tl_q    = fv(bsQ.get("totalLiab"))
+    re_q    = fv(bsQ.get("retainedEarnings"))
+    nd_q    = debt_q - (cash_q or 0)
+    ncl_q   = fv(bsQ.get("nonCurrentLiabilitiesTotal")) or (tl_q - cl_q if tl_q and cl_q else None)
+
+    # ── Latest annual snapshot ────────────────────────────────────────
+    bsA  = a_bs.get(years_bs[0], {}) if years_bs else {}
+    isA  = a_is.get(years[0], {}) if years else {}
+    cfA  = a_cf.get(years[0], {}) if years else {}
+    cash_a  = fv(bsA.get("cashAndEquivalents")) or fv(bsA.get("cash"))
+    ltd_a   = fv(bsA.get("longTermDebt"))  or 0
+    std_a   = fv(bsA.get("shortLongTermDebt")) or 0
+    debt_a  = ltd_a + std_a
+    eq_a    = fv(bsA.get("totalStockholderEquity"))
+    ta_a    = fv(bsA.get("totalAssets"))
+    ca_a    = fv(bsA.get("totalCurrentAssets"))
+    cl_a    = fv(bsA.get("totalCurrentLiabilities"))
+    inv_a   = fv(bsA.get("inventory")) or 0
+    tl_a    = fv(bsA.get("totalLiab"))
+    re_a    = fv(bsA.get("retainedEarnings"))
+    nd_a    = debt_a - (cash_a or 0)
+    ncl_a   = fv(bsA.get("nonCurrentLiabilitiesTotal")) or (tl_a - cl_a if tl_a and cl_a else None)
+
+    # FCF helpers
+    def get_fcf_annual(y):
+        cf = a_cf.get(y, {})
+        f  = fv(cf.get("freeCashFlow"))
+        if f is None:
+            c  = fv(cf.get("totalCashFromOperatingActivities"))
+            cx = fv(cf.get("capitalExpenditures"))
+            f  = c - abs(cx) if c and cx else None
+        return f
+
+    def get_fcf_ttm():
+        qs = sorted(q_cf.keys(), reverse=True)
+        vals = []
+        for q in qs[:4]:
+            f = fv(q_cf[q].get("freeCashFlow"))
+            if f is None:
+                c  = fv(q_cf[q].get("totalCashFromOperatingActivities"))
+                cx = fv(q_cf[q].get("capitalExpenditures"))
+                f  = c - abs(cx) if c and cx else None
+            if f is not None: vals.append(f)
+        return sum(vals) if len(vals) == 4 else None
+
+    fcf_ttm = get_fcf_ttm()
+    fcf_a   = get_fcf_annual(years[0]) if years else None
+
+    # Annual income
+    ebit_a   = fv(isA.get("ebit"))
+    ebitda_a = fv(isA.get("ebitda"))
+    int_a    = fv(isA.get("interestExpense"))
+    ni_a     = fv(isA.get("netIncome"))
+    rev_a    = fv(isA.get("totalRevenue"))
+    cfo_a    = fv(cfA.get("totalCashFromOperatingActivities"))
+
+    # TTM income
+    ebit_ttm   = ttm_sum(q_is, "ebit")
+    ebitda_ttm = ttm_sum(q_is, "ebitda")
+    int_ttm    = ttm_sum(q_is, "interestExpense")
+    ni_ttm     = ttm_sum(q_is, "netIncome")
+    rev_ttm    = ttm_sum(q_is, "totalRevenue")
+
+    # ── Current ratios ────────────────────────────────────────────────
+    # Cash/Debt
+    cd_q  = safe(cash_q, debt_q)
+    cd_a  = safe(cash_a, debt_a)
+    # Debt/Capital
+    dc_q  = safe(debt_q, (debt_q + (eq_q or 0))) if eq_q else None
+    dc_a  = safe(debt_a, (debt_a + (eq_a or 0))) if eq_a else None
+    # FCF/Debt
+    fd_q  = safe(fcf_ttm, debt_q)
+    fd_a  = safe(fcf_a,   debt_a)
+    # Interest Coverage
+    ic_ttm = safe(ebit_ttm, abs(int_ttm) if int_ttm else None)
+    ic_a   = safe(ebit_a,   abs(int_a)   if int_a   else None)
+    # Cash Ratio
+    cr_q  = safe(cash_q, cl_q)
+    cr_a  = safe(cash_a, cl_a)
+    # Debt/Equity
+    de_q  = safe(debt_q, eq_q)
+    de_a  = safe(debt_a, eq_a)
+    # NetDebt/Equity
+    nde_q = safe(nd_q, eq_q)
+    nde_a = safe(nd_a, eq_a)
+    # Equity/Assets
+    ea_q  = safe(eq_q, ta_q)
+    ea_a  = safe(eq_a, ta_a)
+    # Debt/Assets
+    da_q  = safe(debt_q, ta_q)
+    da_a  = safe(debt_a, ta_a)
+    # NetDebt/Assets
+    nda_q = safe(nd_q, ta_q)
+    nda_a = safe(nd_a, ta_a)
+    # Debt/EBIT
+    debit_ttm = safe(debt_q, ebit_ttm)
+    debit_a   = safe(debt_a, ebit_a)
+    ndebit_ttm= safe(nd_q,   ebit_ttm)
+    ndebit_a  = safe(nd_a,   ebit_a)
+    # Debt/EBITDA
+    debitda_ttm = safe(debt_q,  ebitda_ttm)
+    debitda_a   = safe(debt_a,  ebitda_a)
+    ndebitda_ttm= safe(nd_q,    ebitda_ttm)
+    ndebitda_a  = safe(nd_a,    ebitda_a)
+    # Current Ratio
+    cur_q = safe(ca_q, cl_q)
+    cur_a = safe(ca_a, cl_a)
+    # Quick Ratio
+    qr_q  = safe((ca_q - inv_q) if ca_q is not None else None, cl_q)
+    qr_a  = safe((ca_a - inv_a) if ca_a is not None else None, cl_a)
+
+    # ── Altman Z-Score ────────────────────────────────────────────────
+    mcap = fv(hl.get("MarketCapitalization"))
+    def altman_z(ta, ca, cl, re, ebit_v, rev, tl, mcap_v):
+        if not all([ta, ca, cl is not None, ebit_v, rev, tl, mcap_v]): return None
+        wc = (ca or 0) - (cl or 0)
+        x1 = wc  / ta
+        x2 = (re or 0) / ta
+        x3 = ebit_v / ta
+        x4 = mcap_v / tl if tl and tl != 0 else None
+        x5 = rev / ta
+        if x4 is None: return None
+        return 1.2*x1 + 1.4*x2 + 3.3*x3 + 0.6*x4 + 1.0*x5
+
+    az_cur = altman_z(ta_q, ca_q, cl_q, re_q, ebit_ttm, rev_ttm, tl_q, mcap)
+    az_q   = altman_z(ta_q, ca_q, cl_q, re_q, ebit_ttm, rev_ttm, tl_q, mcap)
+    az_a   = altman_z(ta_a, ca_a, cl_a, re_a, ebit_a,   rev_a,   tl_a, mcap)
+
+    # ── Piotroski F-Score ─────────────────────────────────────────────
+    def piotroski(is_d, cf_d, bs_d, bs_prev):
+        score = 0
+        ni  = fv(is_d.get("netIncome"))
+        cfo = fv(cf_d.get("totalCashFromOperatingActivities"))
+        ta  = fv(bs_d.get("totalAssets"))
+        ta_p= fv(bs_prev.get("totalAssets")) if bs_prev else None
+        ta_avg = (ta + ta_p)/2 if ta and ta_p else ta
+        re  = fv(bs_d.get("retainedEarnings"))
+        ltd = (fv(bs_d.get("longTermDebt")) or 0)
+        ltd_p=(fv(bs_prev.get("longTermDebt")) or 0) if bs_prev else ltd
+        ca  = fv(bs_d.get("totalCurrentAssets"))
+        cl  = fv(bs_d.get("totalCurrentLiabilities"))
+        ca_p= fv(bs_prev.get("totalCurrentAssets")) if bs_prev else None
+        cl_p= fv(bs_prev.get("totalCurrentLiabilities")) if bs_prev else None
+        eq  = fv(bs_d.get("totalStockholderEquity"))
+        eq_p= fv(bs_prev.get("totalStockholderEquity")) if bs_prev else None
+        rev = fv(is_d.get("totalRevenue"))
+        gp  = fv(is_d.get("grossProfit"))
+        rev_p= fv(a_is.get(years[1], {}).get("totalRevenue")) if len(years)>1 else None
+        gp_p = fv(a_is.get(years[1], {}).get("grossProfit")) if len(years)>1 else None
+        shares = fv(bs_d.get("commonStockSharesOutstanding"))
+        shares_p = fv(bs_prev.get("commonStockSharesOutstanding")) if bs_prev else None
+        # F1: ROA > 0
+        if ni and ta_avg and ta_avg != 0 and ni/ta_avg > 0: score += 1
+        # F2: CFO > 0
+        if cfo and cfo > 0: score += 1
+        # F3: ΔROA > 0
+        if ni and ta_avg and ta_avg != 0:
+            roa_c = ni/ta_avg
+            ni_p = fv(a_is.get(years[1], {}).get("netIncome")) if len(years)>1 else None
+            ta_pp = fv(a_bs.get(years[2], {}).get("totalAssets")) if len(years_bs)>2 else None
+            ta_avg_p = (ta_p+ta_pp)/2 if ta_p and ta_pp else ta_p
+            if ni_p and ta_avg_p and ta_avg_p != 0 and roa_c > ni_p/ta_avg_p: score += 1
+        # F4: CFO > NI (accrual)
+        if cfo and ni and cfo > ni: score += 1
+        # F5: Δleverage < 0 (lower debt ratio)
+        if ta and ta_p:
+            lev_c = ltd/ta; lev_p = ltd_p/ta_p
+            if lev_c < lev_p: score += 1
+        # F6: Δliquidity > 0 (current ratio improved)
+        if ca and cl and ca_p and cl_p:
+            if (ca/cl) > (ca_p/cl_p): score += 1
+        # F7: No new shares issued
+        if shares and shares_p and shares <= shares_p: score += 1
+        # F8: Δgross margin > 0
+        if rev and gp and rev_p and gp_p:
+            if (gp/rev) > (gp_p/rev_p): score += 1
+        # F9: Δasset turnover > 0
+        if rev and ta_avg and ta_avg!=0 and rev_p and ta_p and ta_p!=0:
+            if (rev/ta_avg) > (rev_p/ta_p): score += 1
+        return score
+
+    bs_prev_a = a_bs.get(years_bs[1], {}) if len(years_bs) > 1 else None
+    pf_a = piotroski(isA, cfA, bsA, bs_prev_a) if years else None
+    # Current (uses latest quarterly data with annual income/cf)
+    pf_cur = pf_a  # best proxy without full quarterly prior year
+
+    # ── Historical averages (annual) ──────────────────────────────────
+    def hist_avg(fn, n):
+        vals = [fn(i) for i in range(min(n, len(years_bs)))]
+        valid = [v for v in vals if v is not None]
+        return sum(valid)/len(valid) if valid else None
+
+    def yr_cd(i):
+        bs = a_bs.get(years_bs[i], {}); cf = a_cf.get(years_bs[i], {})
+        c = fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash"))
+        d = (fv(bs.get("longTermDebt")) or 0) + (fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(c, d)
+    def yr_dc(i):
+        bs = a_bs.get(years_bs[i], {})
+        d = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        e = fv(bs.get("totalStockholderEquity"))
+        return safe(d, d+(e or 0)) if e else None
+    def yr_fd(i):
+        bs = a_bs.get(years_bs[i], {})
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        fc = get_fcf_annual(years_bs[i])
+        return safe(fc, d)
+    def yr_ic(i):
+        is_d= a_is.get(years_bs[i], {}); bs= a_bs.get(years_bs[i], {})
+        e   = fv(is_d.get("ebit")); ie = fv(is_d.get("interestExpense"))
+        return safe(e, abs(ie)) if ie else None
+    def yr_cr(i):
+        bs  = a_bs.get(years_bs[i], {})
+        c   = fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash"))
+        cl  = fv(bs.get("totalCurrentLiabilities"))
+        return safe(c, cl)
+    def yr_de(i):
+        bs  = a_bs.get(years_bs[i], {})
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        e   = fv(bs.get("totalStockholderEquity"))
+        return safe(d, e)
+    def yr_nde(i):
+        bs  = a_bs.get(years_bs[i], {})
+        c   = fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash"))
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        e   = fv(bs.get("totalStockholderEquity"))
+        return safe(d-(c or 0), e)
+    def yr_ea(i):
+        bs  = a_bs.get(years_bs[i], {})
+        return safe(fv(bs.get("totalStockholderEquity")), fv(bs.get("totalAssets")))
+    def yr_da(i):
+        bs  = a_bs.get(years_bs[i], {})
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d, fv(bs.get("totalAssets")))
+    def yr_nda(i):
+        bs  = a_bs.get(years_bs[i], {})
+        c   = fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash"))
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d-(c or 0), fv(bs.get("totalAssets")))
+    def yr_debit(i):
+        bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d, fv(is_d.get("ebit")))
+    def yr_ndebit(i):
+        bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
+        c  = fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash"))
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d-(c or 0), fv(is_d.get("ebit")))
+    def yr_debitda(i):
+        bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d, fv(is_d.get("ebitda")))
+    def yr_ndebitda(i):
+        bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
+        c  = fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash"))
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d-(c or 0), fv(is_d.get("ebitda")))
+    def yr_cur(i):
+        bs = a_bs.get(years_bs[i], {})
+        return safe(fv(bs.get("totalCurrentAssets")), fv(bs.get("totalCurrentLiabilities")))
+    def yr_qr(i):
+        bs  = a_bs.get(years_bs[i], {})
+        ca  = fv(bs.get("totalCurrentAssets")); cl = fv(bs.get("totalCurrentLiabilities"))
+        inv = fv(bs.get("inventory")) or 0
+        return safe((ca-inv) if ca else None, cl)
+    def yr_az(i):
+        bs  = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {}); cf_d= a_cf.get(years_bs[i], {})
+        return altman_z(
+            fv(bs.get("totalAssets")), fv(bs.get("totalCurrentAssets")),
+            fv(bs.get("totalCurrentLiabilities")), fv(bs.get("retainedEarnings")),
+            fv(is_d.get("ebit")), fv(is_d.get("totalRevenue")),
+            fv(bs.get("totalLiab")), mcap)
+
+    def h(fn, n): return hist_avg(fn, n)
+
+    # ── Grade thresholds ─────────────────────────────────────────────
+    # Higher = better
+    CD_T    = [(3,"ap"),(2,"a"),(1.5,"am"),(1,"bp"),(0.5,"b"),(0.2,"bm"),(0,"cp")]
+    # Debt/Capital: Lower = better → invert
+    DC_T    = [(0,"ap"),(0.1,"a"),(0.15,"am"),(0.25,"bp"),(0.35,"b"),(0.5,"bm"),(0.7,"cp")]
+    DCi_T   = [(0.7,"cp"),(0.5,"bm"),(0.35,"b"),(0.25,"bp"),(0.15,"am"),(0.1,"a"),(0,"ap")]
+    FD_T    = [(2,"ap"),(1,"a"),(0.5,"am"),(0.3,"bp"),(0.1,"b"),(0,"bm")]
+    IC_T    = [(20,"ap"),(10,"a"),(5,"am"),(3,"bp"),(1.5,"b"),(1,"bm"),(0,"cp")]
+    CR_T    = [(1,"ap"),(0.7,"a"),(0.5,"am"),(0.3,"bp"),(0.2,"b"),(0,"bm")]
+    # DE: lower = better
+    DE_T    = [(0,"ap"),(0.3,"a"),(0.5,"am"),(1,"bp"),(1.5,"b"),(2,"bm"),(3,"cp")]
+    DEi_T   = [(3,"cp"),(2,"bm"),(1.5,"b"),(1,"bp"),(0.5,"am"),(0.3,"a"),(0,"ap")]
+    # NDE can be negative (good)
+    NDE_T   = [(-1,"ap"),(-0.3,"a"),(0,"am"),(0.5,"bp"),(1,"b"),(2,"bm"),(3,"cp")]
+    NDEi_T  = [(3,"cp"),(2,"bm"),(1,"b"),(0.5,"bp"),(0,"am"),(-0.3,"a"),(-1,"ap")]
+    # EA: higher = better
+    EA_T    = [(0.7,"ap"),(0.6,"a"),(0.5,"am"),(0.4,"bp"),(0.3,"b"),(0.2,"bm"),(0,"cp")]
+    # DA: lower = better
+    DA_T    = [(0,"ap"),(0.1,"a"),(0.2,"am"),(0.3,"bp"),(0.4,"b"),(0.5,"bm"),(0.7,"cp")]
+    DAi_T   = [(0.7,"cp"),(0.5,"bm"),(0.4,"b"),(0.3,"bp"),(0.2,"am"),(0.1,"a"),(0,"ap")]
+    # DEBIT, DEBITDA: lower = better
+    DEBIT_T = [(0,"ap"),(0.5,"a"),(1,"am"),(2,"bp"),(3,"b"),(5,"bm"),(7,"cp")]
+    DEBITi_T= [(7,"cp"),(5,"bm"),(3,"b"),(2,"bp"),(1,"am"),(0.5,"a"),(0,"ap")]
+    # CurR, QR: higher = better, but too high can mean inefficiency
+    CURR_T  = [(2.5,"ap"),(2,"a"),(1.5,"am"),(1.2,"bp"),(1,"b"),(0.5,"bm"),(0,"cp")]
+    # Altman Z: higher = better (>2.99 safe, 1.81-2.99 grey, <1.81 distress)
+    AZ_T    = [(5,"ap"),(3,"a"),(2.5,"am"),(2,"bp"),(1.8,"b"),(1,"bm"),(0,"cp")]
+    # Piotroski: 8-9=strong, 5-7=avg, 0-4=weak
+    PF_T    = [(8,"ap"),(7,"a"),(6,"am"),(5,"bp"),(4,"b"),(2,"bm"),(0,"cp")]
+
+    def fmt_r(v, decimals=2):
+        return f"{v:.{decimals}f}" if v is not None else "—"
+
+    def row(label, cur, avg3, avg5, avg10, T, invert=False, decimals=2):
+        css, lbl = get_grade(cur, T) if cur is not None else ("grade-na", "—")
+        f = lambda v: fmt_r(v, decimals) if v is not None else "—"
+        return {
+            "label": label, "fmt": f(cur),
+            "css": css, "lbl": lbl,
+            "avg3": f(avg3), "avg5": f(avg5), "avg10": f(avg10),
+            "group": label.split("/")[0].split(" ")[0],
+        }
+
+    rows = [
+        row("Cash/Debt (Quarterly)",      cd_q,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T),
+        row("Cash/Debt (Year)",           cd_a,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T),
+        row("Debt/Capital (Quarterly)",   dc_q,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T),
+        row("Debt/Capital (Year)",        dc_a,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T),
+        row("FCF/Debt (Quarterly)",       fd_q,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T),
+        row("FCF/Debt (Year)",            fd_a,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T),
+        row("Interest Coverage (TTM)",    ic_ttm,      h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T),
+        row("Interest Coverage (Year)",   ic_a,        h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T),
+        row("Cash Ratio (Quarterly)",     cr_q,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T),
+        row("Cash Ratio (Year)",          cr_a,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T),
+        row("Debt/Equity (Quarterly)",    de_q,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T),
+        row("Debt/Equity (Year)",         de_a,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T),
+        row("NetDebt/Equity (Quarterly)", nde_q,       h(yr_nde,3),   h(yr_nde,5),   h(yr_nde,10),   NDEi_T),
+        row("NetDebt/Equity (Year)",      nde_a,       h(yr_nde,3),   h(yr_nde,5),   h(yr_nde,10),   NDEi_T),
+        row("Equity/Assets (Quarterly)",  ea_q,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T),
+        row("Equity/Assets (Year)",       ea_a,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T),
+        row("Debt/Asset (Quarterly)",     da_q,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T),
+        row("Debt/Asset (Year)",          da_a,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T),
+        row("NetDebt/Asset (Quarterly)",  nda_q,       h(yr_nda,3),   h(yr_nda,5),   h(yr_nda,10),   NDEi_T),
+        row("NetDebt/Asset (Year)",       nda_a,       h(yr_nda,3),   h(yr_nda,5),   h(yr_nda,10),   NDEi_T),
+        row("Debt/EBIT (TTM)",            debit_ttm,   h(yr_debit,3), h(yr_debit,5), h(yr_debit,10), DEBITi_T),
+        row("Debt/EBIT (Year)",           debit_a,     h(yr_debit,3), h(yr_debit,5), h(yr_debit,10), DEBITi_T),
+        row("NetDebt/EBIT (TTM)",         ndebit_ttm,  h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T),
+        row("NetDebt/EBIT (Year)",        ndebit_a,    h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T),
+        row("Debt/EBITDA (TTM)",          debitda_ttm, h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T),
+        row("Debt/EBITDA (Year)",         debitda_a,   h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T),
+        row("NetDebt/EBITDA (TTM)",       ndebitda_ttm,h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T),
+        row("NetDebt/EBITDA (Year)",      ndebitda_a,  h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T),
+        row("Current Ratio (Quarterly)",  cur_q,       h(yr_cur,3),   h(yr_cur,5),   h(yr_cur,10),   CURR_T),
+        row("Current Ratio (Year)",       cur_a,       h(yr_cur,3),   h(yr_cur,5),   h(yr_cur,10),   CURR_T),
+        row("Quick Ratio (Quarterly)",    qr_q,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T),
+        row("Quick Ratio (Year)",         qr_a,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T),
+        row("Altman Z-Score (Cur)",       az_cur,      h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
+        row("Altman Z-Score (Quarterly)", az_q,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
+        row("Altman Z-Score (Year)",      az_a,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
+        row("Piotroski F-Score (Cur)",    pf_cur,      None,          None,          None,           PF_T, decimals=0),
+        row("Piotroski F-Score (Year)",   pf_a,        None,          None,          None,           PF_T, decimals=0),
+    ]
+
+    # ── Overall Score ─────────────────────────────────────────────────
+    grade_score = {"ap":100,"a":92,"am":84,"bp":76,"b":68,"bm":60,"cp":52,"c":44,"cm":36,"d":28,"na":0}
+    scores = [grade_score.get(r["css"].replace("grade-",""), 0) for r in rows if r["css"] != "grade-na"]
+    overall_score = sum(scores) / len(scores) if scores else 0
+    overall_css, overall_lbl = get_grade(overall_score, [
+        (96,"ap"),(92,"a"),(84,"am"),(76,"bp"),(68,"b"),(60,"bm"),(52,"cp"),(44,"c"),(36,"cm"),(0,"d")
+    ])
+
+    # ── Chart data: annual balance sheet breakdown ────────────────────
+    chart_rows = []
+    for y in sorted(a_bs.keys()):
+        bs  = a_bs[y]
+        eq  = fv(bs.get("totalStockholderEquity"))
+        cl  = fv(bs.get("totalCurrentLiabilities"))
+        ncl = fv(bs.get("nonCurrentLiabilitiesTotal")) or \
+              ((fv(bs.get("totalLiab")) or 0) - (cl or 0)) or None
+        if eq is not None:
+            chart_rows.append({
+                "Year": y[:4],
+                "Total Stockholder Equity":  round(eq  / 1e6, 1) if eq  else None,
+                "Total Current Liabilities": round(cl  / 1e6, 1) if cl  else None,
+                "Non-current Liabilities":   round(ncl / 1e6, 1) if ncl else None,
+            })
+
+    return {
+        "rows":          rows,
+        "overall_score": overall_score,
+        "overall_css":   overall_css,
+        "overall_lbl":   overall_lbl,
+        "chart_data":    chart_rows,
+    }
+
+
 # ── Growth Score ──────────────────────────────────────────────────────────────
 def compute_growth_score(data: dict, hl: dict) -> dict:
 
@@ -2474,8 +2905,80 @@ with tab2b:
                 st.plotly_chart(fig_g, use_container_width=True)
 
     with score_tabs[3]:  # Health
-        st.markdown('<div class="section-header">Health Score</div>', unsafe_allow_html=True)
-        st.info("Coming soon — Health scoring model")
+        hs = compute_health_score(data, hl, price_data)
+        rows_all = hs["rows"]
+
+        col_hdr, col_filter = st.columns([3, 1])
+        with col_hdr:
+            st.markdown(
+                f'<div style="font-size:22px;font-weight:700;color:#e2e8f0;margin-bottom:8px;">'
+                f'Health <span style="color:#94a3b8;">{hs["overall_score"]:.2f}</span>'
+                f' &nbsp;{grade_badge(hs["overall_css"], hs["overall_lbl"])}</div>',
+                unsafe_allow_html=True
+            )
+        with col_filter:
+            groups = ["All Values"] + sorted(set(r["label"].split(" ")[0].split("/")[0] for r in rows_all))
+            filter_sel = st.selectbox("", groups, key="health_score_filter", label_visibility="collapsed")
+
+        rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].split(" ")[0].split("/")[0] == filter_sel]
+
+        col_table, col_chart = st.columns([1, 1])
+
+        with col_table:
+            tbl = '''
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead>
+                <tr style="color:#64748b;border-bottom:1px solid #2d3748;">
+                  <th style="text-align:left;padding:6px 4px;font-weight:500;">Ratio</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">Value</th>
+                  <th style="text-align:center;padding:6px 4px;font-weight:500;">Grade</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">3Y Avg.</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">5Y Avg.</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">10Y Avg.</th>
+                </tr>
+              </thead><tbody>'''
+            for r in rows_show:
+                tbl += f'''
+                <tr style="border-bottom:1px solid #1e2535;">
+                  <td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
+                  <td style="padding:6px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg3"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg5"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg10"]}</td>
+                </tr>'''
+            tbl += "</tbody></table>"
+            st.markdown(tbl, unsafe_allow_html=True)
+
+        with col_chart:
+            chart_df = pd.DataFrame(hs["chart_data"])
+            if not chart_df.empty:
+                fig_h = go.Figure()
+                bs_colors = {
+                    "Total Stockholder Equity":  ("#3b82f6", "rgba(59,130,246,0.35)"),
+                    "Total Current Liabilities": ("#22c55e", "rgba(34,197,94,0.35)"),
+                    "Non-current Liabilities":   ("#ec4899", "rgba(236,72,153,0.35)"),
+                }
+                for col_name, (line_col, fill_col) in bs_colors.items():
+                    if col_name in chart_df.columns:
+                        fig_h.add_trace(go.Scatter(
+                            x=chart_df["Year"], y=chart_df[col_name],
+                            name=col_name, mode="lines",
+                            line=dict(color=line_col, width=2),
+                            fill="tozeroy", fillcolor=fill_col,
+                            stackgroup="one",
+                        ))
+                fig_h.update_layout(
+                    title=dict(text="Financial Breakdown", font=dict(color="#e2e8f0", size=13)),
+                    paper_bgcolor="#0f1117", plot_bgcolor="#0f1117",
+                    font=dict(color="#94a3b8", size=11),
+                    legend=dict(orientation="h", y=-0.18, bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=0, r=0, t=40, b=40),
+                    xaxis=dict(gridcolor="#1e2535", showgrid=False),
+                    yaxis=dict(gridcolor="#1e2535", ticksuffix="M"),
+                    height=420,
+                )
+                st.plotly_chart(fig_h, use_container_width=True)
 
     with score_tabs[4]:  # Quality
         st.markdown('<div class="section-header">Quality Score</div>', unsafe_allow_html=True)
