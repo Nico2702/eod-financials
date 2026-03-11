@@ -1670,59 +1670,45 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                     "fields": [f"{stmt_lbl}.{api_key} — quarterly, windows [Q0:Q3] and [Q4:Q7]"],
                     "unit": "%", "components": comps, "result": pct(gr) if gr is not None else (gr_note or "—")}
 
-        elif "YoY" in L:
-            qs = sorted(stmt_q.keys(), reverse=True)
-            if is_fcf:
-                v0, s0 = get_fcf_q(qs[0]) if qs else (None, "—")
-                v4, s4 = get_fcf_q(qs[4]) if len(qs)>4 else (None, "—")
-            else:
-                v0 = fv(stmt_q[qs[0]].get(api_key)) if qs else None
-                v4 = fv(stmt_q[qs[4]].get(api_key)) if len(qs)>4 else None
-                s0 = s4 = api_key
-            gr = (v0 / v4 - 1) * 100 if v0 is not None and v4 and v4 > 0 else None
-            gr_note = "N/A — base period negative" if (v4 is not None and v4 <= 0) else None
-            q0 = qs[0] if qs else "—"; q4 = qs[4] if len(qs)>4 else "—"
-            return {
-                "formula": "(Q[latest] ÷ Q[same quarter -1Y] − 1) × 100\n⚠ N/A when base ≤ 0" if is_fcf else
-                           "(Q[latest] ÷ Q[same quarter -1Y] − 1) × 100",
-                "fields":  [f"{stmt_lbl}.{api_key} — quarterly"],
-                "unit": "%",
-                "components": [
-                    (f"{stmt_lbl}.{api_key}  [{q0}]  (source: {s0})" if is_fcf else f"{stmt_lbl}.{api_key}  [{q0}]", raw(v0)),
-                    (f"{stmt_lbl}.{api_key}  [{q4}]  (source: {s4})" if is_fcf else f"{stmt_lbl}.{api_key}  [{q4}]", raw(v4)),
-                    ("── Calculation ──",               ""),
-                    (f"({raw(v0)} ÷ {raw(v4)}) − 1",  ""),
-                    ("× 100",                           ""),
-                    ("── Result ──",                    ""),
-                    (f"{field_label} Growth (YoY)",    pct(gr) if gr is not None else (gr_note or "—")),
-                ],
-                "result": pct(gr) if gr is not None else (gr_note or "—")}
-
-        elif "Year" in L:
+        elif "CAGR" in L:
+            # Extract n from label: "3Y CAGR" → 3, "5Y CAGR" → 5, "10Y CAGR" → 10
+            import re as _re
+            m = _re.search(r"(\d+)Y CAGR", L)
+            n = int(m.group(1)) if m else None
+            if n is None: return UNKNOWN
             ys = sorted(stmt_a.keys(), reverse=True)
+            if len(ys) < n + 1:
+                return {"formula": f"(V[year 0] ÷ V[year -{n}])^(1/{n}) − 1",
+                        "fields": [f"{stmt_lbl}.{api_key} — annual"],
+                        "unit": "%", "components": [("N/A", f"Requires {n+1} years of data — only {len(ys)} available")],
+                        "result": "—"}
             if is_fcf:
-                v0, s0 = get_fcf_a(ys[0]) if ys else (None, "—")
-                v1, s1 = get_fcf_a(ys[1]) if len(ys)>1 else (None, "—")
+                v0, s0 = get_fcf_a(ys[0])
+                vn, sn = get_fcf_a(ys[n])
             else:
-                v0 = fv(stmt_a[ys[0]].get(api_key)) if ys else None
-                v1 = fv(stmt_a[ys[1]].get(api_key)) if len(ys)>1 else None
-                s0 = s1 = api_key
-            y0 = ys[0] if ys else "—"; y1 = ys[1] if len(ys)>1 else "—"
-            gr = (v0 / v1 - 1) * 100 if v0 is not None and v1 and v1 > 0 else None
-            gr_note = "N/A — base period negative" if (v1 is not None and v1 <= 0) else None
+                v0 = fv(stmt_a[ys[0]].get(api_key)); s0 = api_key
+                vn = fv(stmt_a[ys[n]].get(api_key)); sn = api_key
+            y0 = ys[0]; yn = ys[n]
+            gr_note = None
+            if v0 is None or vn is None:
+                gr = None; gr_note = "N/A — data missing"
+            elif vn <= 0:
+                gr = None; gr_note = "N/A — base year value ≤ 0"
+            else:
+                gr = ((v0 / vn) ** (1 / n) - 1) * 100
+            fcf_note = "\n⚠ FCF = freeCashFlow; fallback CFO−|CapEx| if null" if is_fcf else ""
             return {
-                "formula": "(Year[0] ÷ Year[-1] − 1) × 100\n⚠ N/A when base ≤ 0" if is_fcf else
-                           "(Year[0] ÷ Year[-1] − 1) × 100",
+                "formula": f"(V[{y0}] ÷ V[{yn}])^(1/{n}) − 1  × 100\n= Compound Annual Growth Rate over {n} years{fcf_note}\n⚠ N/A when base year ≤ 0",
                 "fields":  [f"{stmt_lbl}.{api_key} — annual"],
                 "unit": "%",
                 "components": [
-                    (f"{stmt_lbl}.{api_key}  [{y0}]  (source: {s0})" if is_fcf else f"{stmt_lbl}.{api_key}  [{y0}]", raw(v0)),
-                    (f"{stmt_lbl}.{api_key}  [{y1}]  (source: {s1})" if is_fcf else f"{stmt_lbl}.{api_key}  [{y1}]", raw(v1)),
-                    ("── Calculation ──",                              ""),
-                    (f"({raw(v0)} ÷ {raw(v1)}) − 1",                 ""),
-                    ("× 100",                                          ""),
-                    ("── Result ──",                                   ""),
-                    (f"{field_label} Growth (Year)",                  pct(gr) if gr is not None else (gr_note or "—")),
+                    (f"{stmt_lbl}.{api_key}  [{y0}]  (V recent)" + (f"  source: {s0}" if is_fcf else ""), raw(v0)),
+                    (f"{stmt_lbl}.{api_key}  [{yn}]  (V base, {n}Y ago)" + (f"  source: {sn}" if is_fcf else ""), raw(vn)),
+                    ("── Calculation ──",                                            ""),
+                    (f"({raw(v0)} ÷ {raw(vn)})^(1/{n}) − 1",                      ""),
+                    ("× 100",                                                        ""),
+                    ("── Result ──",                                                 ""),
+                    (f"{field_label} Growth ({n}Y CAGR)",  pct(gr) if gr is not None else (gr_note or "—")),
                 ],
                 "result": pct(gr) if gr is not None else (gr_note or "—")}
 
@@ -2334,14 +2320,14 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
                 result.append(r)
         return result
 
-    # Growth rows (keep Fwd / TTM / YoY / Year for Rev, NI, FCF)
+    # Growth rows (keep Fwd / TTM / CAGR for Rev, NI, FCF)
     q_growth = pick(gs["rows"],
-        "Revenue Growth (Fwd)",  "Revenue Growth (TTM)",
-        "Revenue Growth (YoY)",  "Revenue Growth (Year)",
-        "Net Income Growth (Fwd)","Net Income Growth (TTM)",
-        "Net Income Growth (YoY)","Net Income Growth (Year)",
-        "FCF Growth (TTM)",       "FCF Growth (YoY)",
-        "FCF Growth (Year)",
+        "Revenue Growth (Fwd)",      "Revenue Growth (TTM)",
+        "Revenue Growth (3Y CAGR)",  "Revenue Growth (5Y CAGR)",  "Revenue Growth (10Y CAGR)",
+        "Net Income Growth (Fwd)",   "Net Income Growth (TTM)",
+        "Net Income Growth (3Y CAGR)","Net Income Growth (5Y CAGR)","Net Income Growth (10Y CAGR)",
+        "FCF Growth (TTM)",
+        "FCF Growth (3Y CAGR)",      "FCF Growth (5Y CAGR)",      "FCF Growth (10Y CAGR)",
     )
     # Rename: strip parentheses for cleaner look in Quality tab
     def relabel(rows, strip_parens=False):
@@ -2911,7 +2897,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     years_is = sorted(a_is.keys(), reverse=True)
     years_cf = sorted(a_cf.keys(), reverse=True)
 
-    # ── TTM growth: TTM[0] vs TTM[4] ─────────────────────────────────
+    # ── TTM growth: rolling 4-quarter sum now vs 1Y ago ──────────────
     def ttm_gr(stmt, key):
         qs = sorted(stmt.keys(), reverse=True)
         rows = []
@@ -2924,16 +2910,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             return (rows[0] / rows[4] - 1) * 100
         return None
 
-    # ── YoY: Q[0] vs Q[4] ────────────────────────────────────────────
-    def yoy_gr(stmt, key):
-        qs = sorted(stmt.keys(), reverse=True)
-        if len(qs) < 5: return None
-        v0 = fv(stmt[qs[0]].get(key))
-        v4 = fv(stmt[qs[4]].get(key))
-        if v0 is None or not v4 or v4 <= 0: return None
-        return (v0 / v4 - 1) * 100
-
-    # ── Annual YoY: year[0] vs year[1] ───────────────────────────────
+    # ── Annual YoY: year[0] vs year[1] (kept for Rule of 40 only) ────
     def yr_gr(stmt, key):
         ys = sorted(stmt.keys(), reverse=True)
         if len(ys) < 2: return None
@@ -2942,16 +2919,24 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         if v0 is None or not v1 or v1 <= 0: return None
         return (v0 / v1 - 1) * 100
 
-    # ── Historical rolling YoY avg ────────────────────────────────────
-    def hist_yoy_avg(stmt, key, n):
+    # ── CAGR: (V0 / Vn)^(1/n) − 1 ───────────────────────────────────
+    def cagr(stmt, key, n):
         ys = sorted(stmt.keys(), reverse=True)
-        vals = []
-        for i in range(min(n, len(ys) - 1)):
-            v0 = fv(stmt[ys[i]].get(key))
-            v1 = fv(stmt[ys[i+1]].get(key))
-            if v0 is not None and v1 and v1 > 0:
-                vals.append((v0 / v1 - 1) * 100)
-        return sum(vals) / len(vals) if vals else None
+        if len(ys) < n + 1: return None
+        v0 = fv(stmt[ys[0]].get(key))
+        vn = fv(stmt[ys[n]].get(key))
+        if v0 is None or not vn or vn <= 0: return None
+        return ((v0 / vn) ** (1 / n) - 1) * 100
+
+    def eps_cagr(n):
+        ys = sorted(a_is.keys(), reverse=True)
+        if len(ys) < n + 1: return None
+        def get_eps(y):
+            v = fv(a_is[y].get("netIncomeApplicableToCommonShares"))
+            return v if v is not None else fv(a_is[y].get("netIncome"))
+        v0 = get_eps(ys[0]); vn = get_eps(ys[n])
+        if v0 is None or not vn or vn <= 0: return None
+        return ((v0 / vn) ** (1 / n) - 1) * 100
 
     def fcf_yr(y):
         d = a_cf.get(y, {})
@@ -2992,28 +2977,12 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             return (rows[0] / rows[4] - 1) * 100
         return None
 
-    def fcf_yoy():
-        qs = sorted(q_cf.keys(), reverse=True)
-        if len(qs) < 5: return None
-        def get_fcf(q):
-            f = fv(q_cf[q].get("freeCashFlow"))
-            if f is None:
-                cfo  = fv(q_cf[q].get("totalCashFromOperatingActivities"))
-                capex= fv(q_cf[q].get("capitalExpenditures"))
-                f = cfo - abs(capex) if cfo and capex else None
-            return f
-        v0 = get_fcf(qs[0]); v4 = get_fcf(qs[4])
-        if v0 is None or v4 is None or v4 <= 0: return None
-        return (v0 / v4 - 1) * 100
-
-    def fcf_hist_yoy(n):
+    def fcf_cagr(n):
         ys = sorted(a_cf.keys(), reverse=True)
-        vals = []
-        for i in range(min(n, len(ys) - 1)):
-            f0 = fcf_yr(ys[i]); f1 = fcf_yr(ys[i+1])
-            if f0 is not None and f1 and f1 > 0:
-                vals.append((f0 / f1 - 1) * 100)
-        return sum(vals) / len(vals) if vals else None
+        if len(ys) < n + 1: return None
+        v0 = fcf_yr(ys[0]); vn = fcf_yr(ys[n])
+        if v0 is None or not vn or vn <= 0: return None
+        return ((v0 / vn) ** (1 / n) - 1) * 100
 
     # ── Forward estimates from Earnings Trends ────────────────────────
     trends = data.get("Earnings", {}).get("Trend", {})
@@ -3024,41 +2993,24 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     if ni_gr_fwd: ni_gr_fwd *= 100
     eps_gr_fwd = ni_gr_fwd  # same source
 
-    # ── Current values ────────────────────────────────────────────────
-    rev_gr_ttm  = ttm_gr(q_is, "totalRevenue")
-    rev_gr_yoy  = yoy_gr(q_is, "totalRevenue")
-    rev_gr_yr   = yr_gr(a_is,  "totalRevenue")
-
-    ni_gr_ttm   = ttm_gr(q_is, "netIncome")
-    ni_gr_yoy   = yoy_gr(q_is, "netIncome")
-    ni_gr_yr    = yr_gr(a_is,  "netIncome")
-
-    ni_common   = a_is[years_is[0]].get("netIncomeApplicableToCommonShares") if years_is else None
-    ni_common0  = fv(ni_common) or fv(a_is[years_is[0]].get("netIncome")) if years_is else None
-    ni_common1  = fv(a_is[years_is[1]].get("netIncomeApplicableToCommonShares")) if len(years_is)>1 else None
-    ni_common1  = ni_common1 or (fv(a_is[years_is[1]].get("netIncome")) if len(years_is)>1 else None)
-    eps_gr_yr   = (ni_common0 / ni_common1 - 1) * 100 if ni_common0 and ni_common1 and ni_common1 != 0 else None
-    eps_gr_ttm  = ttm_gr(q_is, "netIncomeApplicableToCommonShares") or ttm_gr(q_is, "netIncome")
-    eps_gr_yoy  = yoy_gr(q_is, "netIncomeApplicableToCommonShares") or yoy_gr(q_is, "netIncome")
-
-    ebit_gr_ttm = ttm_gr(q_is, "ebit")
-    ebit_gr_yoy = yoy_gr(q_is, "ebit")
-    ebit_gr_yr  = yr_gr(a_is,  "ebit")
-
+    # ── TTM values ────────────────────────────────────────────────────
+    rev_gr_ttm    = ttm_gr(q_is, "totalRevenue")
+    ni_gr_ttm     = ttm_gr(q_is, "netIncome")
+    eps_gr_ttm    = ttm_gr(q_is, "netIncomeApplicableToCommonShares") or ttm_gr(q_is, "netIncome")
+    ebit_gr_ttm   = ttm_gr(q_is, "ebit")
     ebitda_gr_ttm = ttm_gr(q_is, "ebitda")
-    ebitda_gr_yoy = yoy_gr(q_is, "ebitda")
-    ebitda_gr_yr  = yr_gr(a_is,  "ebitda")
-
     fcf_gr_ttm_v  = fcf_gr_ttm()
-    fcf_gr_yoy_v  = fcf_yoy()
-    fcf_gr_yr     = None
-    _fcf_ys = sorted(a_cf.keys(), reverse=True)
-    if len(_fcf_ys) >= 2:
-        _f0 = fcf_yr(_fcf_ys[0]); _f1 = fcf_yr(_fcf_ys[1])
-        if _f0 is not None and _f1 and _f1 > 0:
-            fcf_gr_yr = (_f0 / _f1 - 1) * 100 if _f1 > 0 else None  # guard negative base
 
-    # Rule of 40: Revenue Growth + FCF Margin
+    # ── CAGR values ───────────────────────────────────────────────────
+    rev_3y  = cagr(a_is, "totalRevenue", 3);   rev_5y  = cagr(a_is, "totalRevenue", 5);   rev_10y  = cagr(a_is, "totalRevenue", 10)
+    ni_3y   = cagr(a_is, "netIncome",    3);   ni_5y   = cagr(a_is, "netIncome",    5);   ni_10y   = cagr(a_is, "netIncome",    10)
+    eps_3y  = eps_cagr(3);                     eps_5y  = eps_cagr(5);                     eps_10y  = eps_cagr(10)
+    ebit_3y = cagr(a_is, "ebit",   3);        ebit_5y = cagr(a_is, "ebit",   5);        ebit_10y = cagr(a_is, "ebit",   10)
+    ebitda_3y= cagr(a_is, "ebitda", 3);       ebitda_5y= cagr(a_is, "ebitda", 5);       ebitda_10y= cagr(a_is, "ebitda", 10)
+    fcf_3y  = fcf_cagr(3);                    fcf_5y  = fcf_cagr(5);                    fcf_10y  = fcf_cagr(10)
+
+    # ── Rule of 40 (keeps YoY rev growth as per convention) ──────────
+    rev_gr_yr = yr_gr(a_is, "totalRevenue")
     rev_ttm_v = sum(fv(q_is[q].get("totalRevenue")) or 0 for q in sorted(q_is.keys(), reverse=True)[:4])
     fcf_ttm_v = fcf_ttm_sum()
     fcfm_ttm  = fcf_ttm_v / rev_ttm_v * 100 if rev_ttm_v and fcf_ttm_v is not None else None
@@ -3069,49 +3021,36 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     fcfm_yr   = fcf_yr_v / rev_yr_v * 100 if rev_yr_v and fcf_yr_v is not None else None
     ro40_yr   = (rev_gr_yr or 0) + (fcfm_yr or 0) if rev_gr_yr is not None and fcfm_yr is not None else None
 
-    # ── Historical averages ───────────────────────────────────────────
-    rev_3y  = hist_yoy_avg(a_is, "totalRevenue", 3)
-    rev_5y  = hist_yoy_avg(a_is, "totalRevenue", 5)
-    rev_10y = hist_yoy_avg(a_is, "totalRevenue", 10)
-    ni_3y   = hist_yoy_avg(a_is, "netIncome",    3)
-    ni_5y   = hist_yoy_avg(a_is, "netIncome",    5)
-    ni_10y  = hist_yoy_avg(a_is, "netIncome",    10)
-    eps_3y  = hist_yoy_avg(a_is, "netIncomeApplicableToCommonShares", 3) or hist_yoy_avg(a_is, "netIncome", 3)
-    eps_5y  = hist_yoy_avg(a_is, "netIncomeApplicableToCommonShares", 5) or hist_yoy_avg(a_is, "netIncome", 5)
-    eps_10y = hist_yoy_avg(a_is, "netIncomeApplicableToCommonShares", 10) or hist_yoy_avg(a_is, "netIncome", 10)
-    ebit_3y = hist_yoy_avg(a_is, "ebit",   3)
-    ebit_5y = hist_yoy_avg(a_is, "ebit",   5)
-    ebit_10y= hist_yoy_avg(a_is, "ebit",   10)
-    ebitda_3y = hist_yoy_avg(a_is, "ebitda", 3)
-    ebitda_5y = hist_yoy_avg(a_is, "ebitda", 5)
-    ebitda_10y= hist_yoy_avg(a_is, "ebitda", 10)
-    fcf_3y  = fcf_hist_yoy(3)
-    fcf_5y  = fcf_hist_yoy(5)
-    fcf_10y = fcf_hist_yoy(10)
-
-    # Rule of 40 hist avg: rev_gr + fcf_margin per year
     def ro40_hist(n):
         ys = sorted(a_is.keys(), reverse=True)
         vals = []
         for i in range(min(n, len(ys) - 1)):
             r0 = fv(a_is[ys[i]].get("totalRevenue"))
             r1 = fv(a_is[ys[i+1]].get("totalRevenue"))
-            rg = (r0/r1 - 1)*100 if r0 and r1 and r1 != 0 else None
+            rg = (r0/r1 - 1)*100 if r0 and r1 and r1 > 0 else None
             fc = fcf_yr(ys[i])
             fm = fc/r0*100 if fc is not None and r0 and r0 != 0 else None
             if rg is not None and fm is not None: vals.append(rg + fm)
         return sum(vals)/len(vals) if vals else None
 
-    ro40_3y  = ro40_hist(3);  ro40_5y  = ro40_hist(5);  ro40_10y = ro40_hist(10)
+    ro40_3y = ro40_hist(3); ro40_5y = ro40_hist(5); ro40_10y = ro40_hist(10)
 
-    # ── Grade thresholds (higher = better) ───────────────────────────
-    REV_T   = [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
-    NI_T    = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
-    EPS_T   = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
-    EBIT_T  = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
-    EBITDA_T= [(40,"ap"),(25,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
-    FCF_T   = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
-    RO40_T  = [(60,"ap"),(50,"a"),(40,"am"),(30,"bp"),(20,"b"),(10,"bm"),(0,"cp"),(-10,"c")]
+    # ── Grade thresholds ─────────────────────────────────────────────
+    # Single-period (Fwd, TTM): higher expected volatility
+    REV_T    = [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
+    NI_T     = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    EPS_T    = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    EBIT_T   = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    EBITDA_T = [(40,"ap"),(25,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    FCF_T    = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    RO40_T   = [(60,"ap"),(50,"a"),(40,"am"),(30,"bp"),(20,"b"),(10,"bm"),(0,"cp"),(-10,"c")]
+    # CAGR: smoother, lower thresholds
+    REV_CAGR_T    = [(15,"ap"),(10,"a"),(7,"am"),(5,"bp"),(3,"b"),(0,"bm"),(-3,"cp"),(-7,"c")]
+    NI_CAGR_T     = [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
+    EPS_CAGR_T    = [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
+    EBIT_CAGR_T   = [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
+    EBITDA_CAGR_T = [(15,"ap"),(12,"a"),(8,"am"),(5,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
+    FCF_CAGR_T    = [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
 
     def fmt(v): return f"{v:.2f} %" if v is not None else "—"
 
@@ -3127,29 +3066,42 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         }
 
     rows = [
-        row("Revenue Growth (Fwd)",       rev_gr_fwd,    None,      None,      None,      REV_T),
-        row("Revenue Growth (TTM)",        rev_gr_ttm,    rev_3y,    rev_5y,    rev_10y,   REV_T),
-        row("Revenue Growth (YoY)",        rev_gr_yoy,    rev_3y,    rev_5y,    rev_10y,   REV_T),
-        row("Revenue Growth (Year)",       rev_gr_yr,     rev_3y,    rev_5y,    rev_10y,   REV_T),
-        row("Net Income Growth (Fwd)",     ni_gr_fwd,     None,      None,      None,      NI_T),
-        row("Net Income Growth (TTM)",     ni_gr_ttm,     ni_3y,     ni_5y,     ni_10y,    NI_T),
-        row("Net Income Growth (YoY)",     ni_gr_yoy,     ni_3y,     ni_5y,     ni_10y,    NI_T),
-        row("Net Income Growth (Year)",    ni_gr_yr,      ni_3y,     ni_5y,     ni_10y,    NI_T),
-        row("EPS Growth (Fwd)",            eps_gr_fwd,    None,      None,      None,      EPS_T),
-        row("EPS Growth (TTM)",            eps_gr_ttm,    eps_3y,    eps_5y,    eps_10y,   EPS_T),
-        row("EPS Growth (YoY)",            eps_gr_yoy,    eps_3y,    eps_5y,    eps_10y,   EPS_T),
-        row("EPS Growth (Year)",           eps_gr_yr,     eps_3y,    eps_5y,    eps_10y,   EPS_T),
-        row("EBIT Growth (TTM)",           ebit_gr_ttm,   ebit_3y,   ebit_5y,   ebit_10y,  EBIT_T),
-        row("EBIT Growth (YoY)",           ebit_gr_yoy,   ebit_3y,   ebit_5y,   ebit_10y,  EBIT_T),
-        row("EBIT Growth (Year)",          ebit_gr_yr,    ebit_3y,   ebit_5y,   ebit_10y,  EBIT_T),
-        row("EBITDA Growth (TTM)",         ebitda_gr_ttm, ebitda_3y, ebitda_5y, ebitda_10y,EBITDA_T),
-        row("EBITDA Growth (YoY)",         ebitda_gr_yoy, ebitda_3y, ebitda_5y, ebitda_10y,EBITDA_T),
-        row("EBITDA Growth (Year)",        ebitda_gr_yr,  ebitda_3y, ebitda_5y, ebitda_10y,EBITDA_T),
-        row("FCF Growth (TTM)",            fcf_gr_ttm_v,  fcf_3y,    fcf_5y,    fcf_10y,   FCF_T),
-        row("FCF Growth (YoY)",            fcf_gr_yoy_v,  fcf_3y,    fcf_5y,    fcf_10y,   FCF_T),
-        row("FCF Growth (Year)",           fcf_gr_yr,     fcf_3y,    fcf_5y,    fcf_10y,   FCF_T),
-        row("Rule of 40 (TTM)",            ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,  RO40_T),
-        row("Rule of 40 (Year)",           ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,  RO40_T),
+        # Revenue
+        row("Revenue Growth (Fwd)",         rev_gr_fwd,    rev_3y,    rev_5y,    rev_10y,    REV_T),
+        row("Revenue Growth (TTM)",          rev_gr_ttm,    rev_3y,    rev_5y,    rev_10y,    REV_T),
+        row("Revenue Growth (3Y CAGR)",      rev_3y,        None,      None,      None,       REV_CAGR_T),
+        row("Revenue Growth (5Y CAGR)",      rev_5y,        None,      None,      None,       REV_CAGR_T),
+        row("Revenue Growth (10Y CAGR)",     rev_10y,       None,      None,      None,       REV_CAGR_T),
+        # Net Income
+        row("Net Income Growth (Fwd)",       ni_gr_fwd,     ni_3y,     ni_5y,     ni_10y,     NI_T),
+        row("Net Income Growth (TTM)",       ni_gr_ttm,     ni_3y,     ni_5y,     ni_10y,     NI_T),
+        row("Net Income Growth (3Y CAGR)",   ni_3y,         None,      None,      None,       NI_CAGR_T),
+        row("Net Income Growth (5Y CAGR)",   ni_5y,         None,      None,      None,       NI_CAGR_T),
+        row("Net Income Growth (10Y CAGR)",  ni_10y,        None,      None,      None,       NI_CAGR_T),
+        # EPS
+        row("EPS Growth (Fwd)",              eps_gr_fwd,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
+        row("EPS Growth (TTM)",              eps_gr_ttm,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
+        row("EPS Growth (3Y CAGR)",          eps_3y,        None,      None,      None,       EPS_CAGR_T),
+        row("EPS Growth (5Y CAGR)",          eps_5y,        None,      None,      None,       EPS_CAGR_T),
+        row("EPS Growth (10Y CAGR)",         eps_10y,       None,      None,      None,       EPS_CAGR_T),
+        # EBIT
+        row("EBIT Growth (TTM)",             ebit_gr_ttm,   ebit_3y,   ebit_5y,   ebit_10y,   EBIT_T),
+        row("EBIT Growth (3Y CAGR)",         ebit_3y,       None,      None,      None,       EBIT_CAGR_T),
+        row("EBIT Growth (5Y CAGR)",         ebit_5y,       None,      None,      None,       EBIT_CAGR_T),
+        row("EBIT Growth (10Y CAGR)",        ebit_10y,      None,      None,      None,       EBIT_CAGR_T),
+        # EBITDA
+        row("EBITDA Growth (TTM)",           ebitda_gr_ttm, ebitda_3y, ebitda_5y, ebitda_10y, EBITDA_T),
+        row("EBITDA Growth (3Y CAGR)",       ebitda_3y,     None,      None,      None,       EBITDA_CAGR_T),
+        row("EBITDA Growth (5Y CAGR)",       ebitda_5y,     None,      None,      None,       EBITDA_CAGR_T),
+        row("EBITDA Growth (10Y CAGR)",      ebitda_10y,    None,      None,      None,       EBITDA_CAGR_T),
+        # FCF
+        row("FCF Growth (TTM)",              fcf_gr_ttm_v,  fcf_3y,    fcf_5y,    fcf_10y,    FCF_T),
+        row("FCF Growth (3Y CAGR)",          fcf_3y,        None,      None,      None,       FCF_CAGR_T),
+        row("FCF Growth (5Y CAGR)",          fcf_5y,        None,      None,      None,       FCF_CAGR_T),
+        row("FCF Growth (10Y CAGR)",         fcf_10y,       None,      None,      None,       FCF_CAGR_T),
+        # Rule of 40 (unchanged — uses YoY rev growth by convention)
+        row("Rule of 40 (TTM)",              ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
+        row("Rule of 40 (Year)",             ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
@@ -3160,7 +3112,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         (96,"ap"),(92,"a"),(84,"am"),(76,"bp"),(68,"b"),(60,"bm"),(52,"cp"),(44,"c"),(36,"cm"),(0,"d")
     ])
 
-    # ── Chart data: annual YoY growth rates as ratio ──────────────────
+    # ── Chart data: annual YoY growth (for visual bar chart) ─────────
     chart_rows = []
     for i, y in enumerate(sorted(a_is.keys())):
         idx = sorted(a_is.keys(), reverse=True).index(y)
