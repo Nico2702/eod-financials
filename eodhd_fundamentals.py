@@ -123,7 +123,8 @@ def get_grade(value, thresholds):
     For 'higher is better' metrics pass ascending=True (default).
     For 'lower is better' metrics (like P/E) pass ascending=False.
     """
-    if value is None:
+    import math
+    if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
         return "na", "N/A"
     grades_map = {
         "ap": ("grade-ap", "A+"), "a":  ("grade-a",  "A"),
@@ -3328,12 +3329,14 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
 
     # ── CAGR: (V0 / Vn)^(1/n) − 1 ───────────────────────────────────
     def cagr(stmt, key, n):
+        import math
         ys = sorted(stmt.keys(), reverse=True)
         if len(ys) < n + 1: return None
         v0 = fv(stmt[ys[0]].get(key))
         vn = fv(stmt[ys[n]].get(key))
         if v0 is None or not vn or vn <= 0: return None
-        return ((v0 / vn) ** (1 / n) - 1) * 100
+        r = ((v0 / vn) ** (1 / n) - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
 
     def get_eps_annual(y):
         """EPS = NI / shares for a given annual period."""
@@ -3343,12 +3346,14 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         return ni / shs
 
     def eps_cagr(n):
+        import math
         ys = sorted(a_is.keys(), reverse=True)
         if len(ys) < n + 1: return None
         eps0 = get_eps_annual(ys[0])
         epsn = get_eps_annual(ys[n])
         if eps0 is None or not epsn or epsn <= 0: return None
-        return ((eps0 / epsn) ** (1 / n) - 1) * 100
+        r = ((eps0 / epsn) ** (1 / n) - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
 
     def eps_ttm_gr():
         """EPS TTM growth: (NI_TTM/shares_Q0) vs (NI_TTM_1Yago/shares_Q4)."""
@@ -3407,11 +3412,13 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         return None
 
     def fcf_cagr(n):
+        import math
         ys = sorted(a_cf.keys(), reverse=True)
         if len(ys) < n + 1: return None
         v0 = fcf_yr(ys[0]); vn = fcf_yr(ys[n])
         if v0 is None or not vn or vn <= 0: return None
-        return ((v0 / vn) ** (1 / n) - 1) * 100
+        r = ((v0 / vn) ** (1 / n) - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
 
     # ── Forward estimates from Earnings Trends ────────────────────────
     trends = data.get("Earnings", {}).get("Trend", {})
