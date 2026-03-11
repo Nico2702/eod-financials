@@ -192,7 +192,7 @@ def compute_kennzahlen(data, hl, val, tech):
     equity   = latest(ttm_bs, "totalStockholderEquity")
     lt_debt  = latest(ttm_bs, "longTermDebt")
     st_debt  = latest(ttm_bs, "shortLongTermDebt")
-    cash     = latest(ttm_bs, "cash")
+    cash     = (latest(ttm_bs, "cash") or latest(ttm_bs, "cashAndEquivalents") or 0) + (latest(ttm_bs, "shortTermInvestments") or 0)
     cur_ass  = latest(ttm_bs, "totalCurrentAssets")
     cur_lia  = latest(ttm_bs, "totalCurrentLiabilities")
     inv      = latest(ttm_bs, "inventory")
@@ -779,11 +779,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
 
     def cash_comps(bs_dict, dt):
         """Returns component rows for cash showing cashAndEquivalents + shortTermInvestments breakdown."""
-        cae = fv(bs_dict.get("cashAndEquivalents")) or fv(bs_dict.get("cash"))
+        cae = fv(bs_dict.get("cash")) or fv(bs_dict.get("cashAndEquivalents"))
         sti = fv(bs_dict.get("shortTermInvestments"))
         total = (cae or 0) + (sti or 0)
         rows = [
-            (f"  cashAndEquivalents  [{dt}]",    raw(cae)),
+            (f"  cash (primary)  [{dt}]",        raw(fv(bs_dict.get("cash")))),
+            (f"  cashAndEquivalents (fallback)  [{dt}]", raw(fv(bs_dict.get("cashAndEquivalents"))) if not fv(bs_dict.get("cash")) else "— (not used)"),
             (f"  shortTermInvestments  [{dt}]",  raw(sti) if sti else "0  (not reported)"),
             (f"  → Cash Total (used)",           raw(total)),
         ]
@@ -880,7 +881,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     fcf_a, fcf_a_cfo, fcf_a_cx, fcf_a_direct, _ = get_fcf_detail(False)
 
     # ── BS quarterly ──────────────────────────────────────────────────
-    cash_q = (fv(bsQ.get("cashAndEquivalents")) or fv(bsQ.get("cash")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
+    cash_q = (fv(bsQ.get("cash")) or fv(bsQ.get("cashAndEquivalents")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
     ltd_q  = fv(bsQ.get("longTermDebt")) or 0
     std_q  = fv(bsQ.get("shortLongTermDebt")) or 0
     debt_q = ltd_q + std_q
@@ -894,7 +895,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     sh_q   = fv(bsQ.get("commonStockSharesOutstanding"))
 
     # ── BS annual ─────────────────────────────────────────────────────
-    cash_a = (fv(bsA.get("cashAndEquivalents")) or fv(bsA.get("cash")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
+    cash_a = (fv(bsA.get("cash")) or fv(bsA.get("cashAndEquivalents")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
     ltd_a  = fv(bsA.get("longTermDebt")) or 0
     std_a  = fv(bsA.get("shortLongTermDebt")) or 0
     debt_a = ltd_a + std_a
@@ -1826,7 +1827,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         r    = safe(cash, debt)
         return {
             "formula": "Cash & Equivalents ÷ Total Debt",
-            "fields":  ["Balance_Sheet.cashAndEquivalents", "Balance_Sheet.longTermDebt",
+            "fields":  ["Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Balance_Sheet.longTermDebt",
                         "Balance_Sheet.shortLongTermDebt"],
             "unit": "x",
             "components": [
@@ -1944,7 +1945,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         r    = safe(cash, cl)
         return {
             "formula": "Cash & Equivalents ÷ Current Liabilities",
-            "fields":  ["Balance_Sheet.cashAndEquivalents", "Balance_Sheet.totalCurrentLiabilities"],
+            "fields":  ["Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Balance_Sheet.totalCurrentLiabilities"],
             "unit": "x",
             "components": [
                 ("── Cash breakdown ──",                                        ""),
@@ -1987,7 +1988,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {
             "formula": "Net Debt ÷ Equity\nNet Debt = Total Debt − Cash",
             "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
-                        "Balance_Sheet.cashAndEquivalents", "Balance_Sheet.totalStockholderEquity"],
+                        "Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Balance_Sheet.totalStockholderEquity"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
@@ -2052,7 +2053,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {
             "formula": "Net Debt ÷ Total Assets\nNet Debt = Total Debt − Cash",
             "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
-                        "Balance_Sheet.cashAndEquivalents", "Balance_Sheet.totalAssets"],
+                        "Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Balance_Sheet.totalAssets"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
@@ -2103,7 +2104,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {
             "formula": "Net Debt ÷ EBIT\nNet Debt = Total Debt − Cash",
             "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
-                        "Balance_Sheet.cashAndEquivalents", "Income_Statement.ebit"],
+                        "Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Income_Statement.ebit"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
@@ -2155,7 +2156,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {
             "formula": "Net Debt ÷ EBITDA\nNet Debt = Total Debt − Cash",
             "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
-                        "Balance_Sheet.cashAndEquivalents", "Income_Statement.ebitda"],
+                        "Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Income_Statement.ebitda"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
@@ -2436,7 +2437,7 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
         debt = ltd + std
         ca   = fv(bs_d.get("totalCurrentAssets"))
         cl   = fv(bs_d.get("totalCurrentLiabilities"))
-        cash = (fv(bs_d.get("cashAndEquivalents")) or fv(bs_d.get("cash")) or 0) + (fv(bs_d.get("shortTermInvestments")) or 0)
+        cash = (fv(bs_d.get("cash")) or fv(bs_d.get("cashAndEquivalents")) or 0) + (fv(bs_d.get("shortTermInvestments")) or 0)
         de   = debt/eq   if eq   and eq   != 0 else None
         cr   = cash/cl   if cl   and cl   != 0 and cash is not None else None
         if de is not None or cr is not None:
@@ -2486,7 +2487,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
 
     # ── Latest quarterly snapshot ─────────────────────────────────────
     bsQ  = q_bs.get(qbs[0], {}) if qbs else {}
-    cash_q  = (fv(bsQ.get("cashAndEquivalents")) or fv(bsQ.get("cash")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
+    cash_q  = (fv(bsQ.get("cash")) or fv(bsQ.get("cashAndEquivalents")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
     ltd_q   = fv(bsQ.get("longTermDebt"))  or 0
     std_q   = fv(bsQ.get("shortLongTermDebt")) or 0
     debt_q  = ltd_q + std_q
@@ -2504,7 +2505,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     bsA  = a_bs.get(years_bs[0], {}) if years_bs else {}
     isA  = a_is.get(years[0], {}) if years else {}
     cfA  = a_cf.get(years[0], {}) if years else {}
-    cash_a  = (fv(bsA.get("cashAndEquivalents")) or fv(bsA.get("cash")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
+    cash_a  = (fv(bsA.get("cash")) or fv(bsA.get("cashAndEquivalents")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
     ltd_a   = fv(bsA.get("longTermDebt"))  or 0
     std_a   = fv(bsA.get("shortLongTermDebt")) or 0
     debt_a  = ltd_a + std_a
@@ -2689,7 +2690,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
 
     def yr_cd(i):
         bs = a_bs.get(years_bs[i], {}); cf = a_cf.get(years_bs[i], {})
-        c = (fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
+        c = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
         d = (fv(bs.get("longTermDebt")) or 0) + (fv(bs.get("shortLongTermDebt")) or 0)
         return safe(c, d)
     def yr_dc(i):
@@ -2708,7 +2709,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(e, abs(ie)) if ie else None
     def yr_cr(i):
         bs  = a_bs.get(years_bs[i], {})
-        c   = (fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
+        c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
         cl  = fv(bs.get("totalCurrentLiabilities"))
         return safe(c, cl)
     def yr_de(i):
@@ -2718,7 +2719,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(d, e)
     def yr_nde(i):
         bs  = a_bs.get(years_bs[i], {})
-        c   = (fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
+        c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
         d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         e   = fv(bs.get("totalStockholderEquity"))
         return safe(d-(c or 0), e)
@@ -2731,7 +2732,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(d, fv(bs.get("totalAssets")))
     def yr_nda(i):
         bs  = a_bs.get(years_bs[i], {})
-        c   = (fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
+        c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
         d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         return safe(d-(c or 0), fv(bs.get("totalAssets")))
     def yr_debit(i):
@@ -2740,7 +2741,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(d, fv(is_d.get("ebit")))
     def yr_ndebit(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
-        c  = (fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
+        c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
         d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         return safe(d-(c or 0), fv(is_d.get("ebit")))
     def yr_debitda(i):
@@ -2749,7 +2750,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(d, fv(is_d.get("ebitda")))
     def yr_ndebitda(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
-        c  = (fv(bs.get("cashAndEquivalents")) or fv(bs.get("cash")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
+        c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
         d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         return safe(d-(c or 0), fv(is_d.get("ebitda")))
     def yr_cur(i):
@@ -4267,6 +4268,9 @@ with tab1:
         # Total cash = cash + shortTermInvestments, Total debt = shortLongTermDebt + longTermDebt
         if not df_bs_chart.empty:
             cash_s = df_bs_chart.get("cash", pd.Series(dtype=float))
+            cae_s  = df_bs_chart.get("cashAndEquivalents", pd.Series(dtype=float))
+            # Use cash as primary; fall back to cashAndEquivalents where cash is null
+            cash_s = cash_s.combine_first(cae_s)
             sti_s  = df_bs_chart.get("shortTermInvestments", pd.Series(dtype=float))
             ltd_s  = df_bs_chart.get("longTermDebt", pd.Series(dtype=float))
             std_s  = df_bs_chart.get("shortLongTermDebt", pd.Series(dtype=float))
