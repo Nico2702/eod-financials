@@ -252,7 +252,7 @@ def compute_kennzahlen(data, hl, val, tech):
     # TTM growth — from TTM history
     rev_gr_ttm    = ttm_growth(ttm_is, "totalRevenue")
     earn_gr_ttm   = ttm_growth(ttm_is, "netIncome")
-    eps_gr_ttm    = ttm_growth(ttm_is, "netIncomeApplicableToCommonShares")
+    eps_gr_ttm    = ttm_growth(ttm_is, "epsCalc")
     ebit_gr_ttm   = ttm_growth(ttm_is, "operatingIncome")
     ebitda_gr_ttm = ttm_growth(ttm_is, "ebitda")
     fcf_gr_ttm    = ttm_growth(ttm_cf, "freeCashFlowCalc")
@@ -260,7 +260,7 @@ def compute_kennzahlen(data, hl, val, tech):
     # QoQ growth — from raw quarterly data
     rev_gr_qoq    = qoq_growth(q_is, "totalRevenue")
     earn_gr_qoq   = qoq_growth(q_is, "netIncome")
-    eps_gr_qoq    = qoq_growth(q_is, "netIncomeApplicableToCommonShares")
+    eps_gr_qoq    = qoq_growth(q_is, "dilutedEps")
     ebit_gr_qoq   = qoq_growth(q_is, "operatingIncome")
     ebitda_gr_qoq = qoq_growth(q_is, "ebitda")
     fcf_gr_qoq    = qoq_growth(q_cf, "freeCashFlow")
@@ -268,7 +268,7 @@ def compute_kennzahlen(data, hl, val, tech):
     # YoY growth — from raw quarterly data (Q[0] vs Q[4])
     rev_gr_yoy    = yoy_growth(q_is, "totalRevenue")
     earn_gr_yoy   = yoy_growth(q_is, "netIncome")
-    eps_gr_yoy    = yoy_growth(q_is, "netIncomeApplicableToCommonShares")
+    eps_gr_yoy    = yoy_growth(q_is, "dilutedEps")
     ebit_gr_yoy   = yoy_growth(q_is, "operatingIncome")
     ebitda_gr_yoy = yoy_growth(q_is, "ebitda")
     fcf_gr_yoy    = yoy_growth(q_cf, "freeCashFlow")
@@ -470,6 +470,10 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
         "totalCashflowsFromInvestingActivities",
         "totalCashFromFinancingActivities",
     }
+    AVG_FIELDS = {
+        # Point-in-time fields that should be averaged over the 4-quarter window
+        "dilutedAverageShares", "commonStockSharesOutstanding",
+    }
     LATEST_FIELDS = {
         "totalAssets", "totalCurrentAssets", "cash", "shortTermInvestments",
         "netReceivables", "inventory", "otherCurrentAssets",
@@ -506,6 +510,12 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
                         try: vals.append(float(quarterly[q].get(field)))
                         except (TypeError, ValueError): pass
                     ttm_row[field] = sum(vals) if vals else None
+                elif field in AVG_FIELDS:
+                    vals = []
+                    for q in window:
+                        try: vals.append(float(quarterly[q].get(field)))
+                        except (TypeError, ValueError): pass
+                    ttm_row[field] = sum(vals) / len(vals) if vals else None
                 elif field in LATEST_FIELDS:
                     try: ttm_row[field] = float(quarterly[latest].get(field))
                     except (TypeError, ValueError): ttm_row[field] = None
@@ -544,6 +554,11 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
             ttm_row["freeCashFlowCalc"] = fcf
             ttm_row["fcfMargin"]        = fcf / rev    if rev and fcf    else None
             ttm_row["debtToEquity"]     = debt / equity if equity and debt else None
+
+            # EPS calc: ni_common / avg_shares, fallback to netIncome
+            ni_common = ttm_row.get("netIncomeApplicableToCommonShares") or ttm_row.get("netIncome")
+            shares    = ttm_row.get("dilutedAverageShares") or ttm_row.get("commonStockSharesOutstanding")
+            ttm_row["epsCalc"] = ni_common / shares if ni_common and shares else None
 
             rows.append(ttm_row)
 
