@@ -408,8 +408,9 @@ def render_kz_col(title, rows, results):
 
 
 # ── Value Score ───────────────────────────────────────────────────────────────
-def compute_value_score(data: dict, hl: dict, val: dict) -> dict:
+def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None) -> dict:
     """Compute all Value tab ratios, grades, historical averages and chart data."""
+    price_data = price_data or {}
 
     def fv(v):
         try: return float(v) if v not in (None, "", "NA", "None") else None
@@ -487,76 +488,84 @@ def compute_value_score(data: dict, hl: dict, val: dict) -> dict:
     earn_yield_yr  = (ni_yr / mcap * 100)   if ni_yr and mcap and mcap > 0 else None
     fcf_yield_yr   = (fcf_yr / mcap * 100)  if fcf_yr and mcap and mcap > 0 else None
 
-    # ── Historical averages (current mcap / historical fundamentals) ──
-    # Note: approximation — accurate only if mcap hasn't changed significantly
-    def hist_avg(statement, key, n, divisor=mcap, invert=True):
+    # ── Historical averages using real year-end prices ────────────────
+    # price_data: {YYYY: adjusted_close} — last trading day of each year
+    def hist_multiple(statement, key, n, use_ev=False, invert_fcf=False):
+        """Return n-year average multiple using real year-end prices."""
         years = sorted(statement.keys(), reverse=True)
         vals = []
         for y in years[:n]:
-            v = fv(statement[y].get(key))
-            if v and v > 0 and divisor:
-                vals.append(divisor / v if invert else v / divisor)
+            yr_str = y[:4]
+            price  = price_data.get(yr_str)
+            fund   = fv(statement[y].get(key))
+            if price is None or not fund or fund <= 0:
+                continue
+            if use_ev:
+                # For EV multiples: approximate EV per year as price * shares + debt - cash
+                bs_y   = data["Financials"]["Balance_Sheet"]["yearly"].get(y, {})
+                ltd    = fv(bs_y.get("longTermDebt")) or 0
+                std    = fv(bs_y.get("shortLongTermDebt")) or 0
+                csh    = fv(bs_y.get("cash")) or fv(bs_y.get("cashAndEquivalents")) or 0
+                shs    = fv(bs_y.get("commonStockSharesOutstanding"))
+                if not shs: continue
+                ev_y   = price * shs + ltd + std - csh
+                vals.append(ev_y / fund)
+            else:
+                shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+                if not shs: continue
+                mcap_y = price * shs
+                vals.append(mcap_y / fund)
         return sum(vals) / len(vals) if vals else None
 
-    pe_3y   = hist_avg(a_is, "netIncome", 3)
-    pe_5y   = hist_avg(a_is, "netIncome", 5)
-    ps_3y   = hist_avg(a_is, "totalRevenue", 3)
-    ps_5y   = hist_avg(a_is, "totalRevenue", 5)
-    pb_3y   = hist_avg(a_bs, "totalStockholderEquity", 3)
-    pb_5y   = hist_avg(a_bs, "totalStockholderEquity", 5)
-
-    def fcf_hist(statement_cf, n):
-        years = sorted(statement_cf.keys(), reverse=True)
+    def fcf_hist_real(n):
+        years = sorted(a_cf.keys(), reverse=True)
         vals = []
         for y in years[:n]:
-            f = fv(statement_cf[y].get("freeCashFlow"))
+            yr_str = y[:4]
+            price  = price_data.get(yr_str)
+            f = fv(a_cf[y].get("freeCashFlow"))
             if not f:
-                cfo  = fv(statement_cf[y].get("totalCashFromOperatingActivities"))
-                capex= fv(statement_cf[y].get("capitalExpenditures"))
+                cfo   = fv(a_cf[y].get("totalCashFromOperatingActivities"))
+                capex = fv(a_cf[y].get("capitalExpenditures"))
                 f = cfo - abs(capex) if cfo and capex else None
-            if f and f > 0 and mcap: vals.append(mcap / f)
+            if price is None or not f or f <= 0: continue
+            shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+            if not shs: continue
+            vals.append(price * shs / f)
         return sum(vals) / len(vals) if vals else None
 
-    pfcf_3y = fcf_hist(a_cf, 3)
-    pfcf_5y = fcf_hist(a_cf, 5)
-
-    ev_rev_3y = hist_avg(a_is, "totalRevenue", 3, divisor=ev, invert=True) if ev else None
-    ev_rev_5y = hist_avg(a_is, "totalRevenue", 5, divisor=ev, invert=True) if ev else None
-
-    def ebit_hist_avg(n):
-        years = sorted(a_is.keys(), reverse=True)
-        vals = []
-        for y in years[:n]:
-            e = fv(a_is[y].get("ebit"))
-            if e and e > 0 and ev: vals.append(ev / e)
-        return sum(vals) / len(vals) if vals else None
-
-    ev_ebit_3y  = ebit_hist_avg(3)
-    ev_ebit_5y  = ebit_hist_avg(5)
-
-    def ebitda_hist_avg(n):
-        years = sorted(a_is.keys(), reverse=True)
-        vals = []
-        for y in years[:n]:
-            e = fv(a_is[y].get("ebitda"))
-            if e and e > 0 and ev: vals.append(ev / e)
-        return sum(vals) / len(vals) if vals else None
-
-    ev_ebitda_3y = ebitda_hist_avg(3)
-    ev_ebitda_5y = ebitda_hist_avg(5)
-
-    def yield_hist_avg(statement, key, n):
+    def yield_hist_real(statement, key, n):
         years = sorted(statement.keys(), reverse=True)
         vals = []
         for y in years[:n]:
-            v = fv(statement[y].get(key))
-            if v and mcap: vals.append(v / mcap * 100)
+            yr_str = y[:4]
+            price  = price_data.get(yr_str)
+            fund   = fv(statement[y].get(key))
+            if price is None or not fund: continue
+            shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+            if not shs: continue
+            mcap_y = price * shs
+            if mcap_y > 0: vals.append(fund / mcap_y * 100)
         return sum(vals) / len(vals) if vals else None
 
-    earn_yield_3y = yield_hist_avg(a_is, "netIncome", 3)
-    earn_yield_5y = yield_hist_avg(a_is, "netIncome", 5)
-    fcf_yield_3y  = yield_hist_avg(a_cf, "freeCashFlow", 3)
-    fcf_yield_5y  = yield_hist_avg(a_cf, "freeCashFlow", 5)
+    pe_3y   = hist_multiple(a_is, "netIncome",             3)
+    pe_5y   = hist_multiple(a_is, "netIncome",             5)
+    ps_3y   = hist_multiple(a_is, "totalRevenue",          3)
+    ps_5y   = hist_multiple(a_is, "totalRevenue",          5)
+    pb_3y   = hist_multiple(a_bs, "totalStockholderEquity",3)
+    pb_5y   = hist_multiple(a_bs, "totalStockholderEquity",5)
+    pfcf_3y = fcf_hist_real(3)
+    pfcf_5y = fcf_hist_real(5)
+    ev_rev_3y   = hist_multiple(a_is, "totalRevenue",          3, use_ev=True)
+    ev_rev_5y   = hist_multiple(a_is, "totalRevenue",          5, use_ev=True)
+    ev_ebit_3y  = hist_multiple(a_is, "ebit",                  3, use_ev=True)
+    ev_ebit_5y  = hist_multiple(a_is, "ebit",                  5, use_ev=True)
+    ev_ebitda_3y= hist_multiple(a_is, "ebitda",                3, use_ev=True)
+    ev_ebitda_5y= hist_multiple(a_is, "ebitda",                5, use_ev=True)
+    earn_yield_3y = yield_hist_real(a_is, "netIncome",    3)
+    earn_yield_5y = yield_hist_real(a_is, "netIncome",    5)
+    fcf_yield_3y  = yield_hist_real(a_cf, "freeCashFlow", 3)
+    fcf_yield_5y  = yield_hist_real(a_cf, "freeCashFlow", 5)
 
     # ── Grade thresholds ─────────────────────────────────────────────
     PE_T    = [(0,"ap"),(10,"a"),(15,"am"),(20,"bp"),(25,"b"),(30,"bm"),(40,"cp"),(50,"c")]
@@ -650,7 +659,20 @@ def compute_value_score(data: dict, hl: dict, val: dict) -> dict:
 
 # ── API ───────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_fundamentals(ticker: str, api_token: str) -> dict:
+def fetch_prices(ticker: str, api_token: str) -> dict:
+    """Fetch daily EOD prices and return a dict of {YYYY: year_end_close_price}."""
+    url = f"https://eodhd.com/api/eod/{ticker}?api_token={api_token}&fmt=json&period=d"
+    r = requests.get(url, timeout=30)
+    r.raise_for_status()
+    raw = r.json()
+    # Build year → last available close price for that year
+    year_prices = {}
+    for entry in raw:
+        year = entry["date"][:4]
+        year_prices[year] = float(entry["adjusted_close"] or entry["close"])
+    return year_prices  # keeps last entry per year (since sorted ascending)
+
+
     url = f"https://eodhd.com/api/fundamentals/{ticker}?api_token={api_token}&fmt=json"
     r = requests.get(url, timeout=20)
     r.raise_for_status()
@@ -1128,6 +1150,7 @@ if not fetch_btn and "fund_data" not in st.session_state:
 if fetch_btn:
     st.session_state.pop("fund_data", None)
     st.session_state.pop("fund_ticker", None)
+    st.session_state.pop("price_data", None)
 
 if "fund_data" not in st.session_state:
     with st.spinner(f"Lade Daten für **{ticker_input}** …"):
@@ -1139,7 +1162,17 @@ if "fund_data" not in st.session_state:
             st.error(f"Fehler beim Laden: {e}")
             st.stop()
 
-data = st.session_state["fund_data"]
+if "price_data" not in st.session_state:
+    with st.spinner("Lade Preis-History …"):
+        try:
+            prices = fetch_prices(ticker_input, api_token)
+            st.session_state["price_data"] = prices
+        except Exception as e:
+            st.warning(f"Preis-History nicht verfügbar: {e}")
+            st.session_state["price_data"] = {}
+
+data        = st.session_state["fund_data"]
+price_data  = st.session_state.get("price_data", {})
 
 g    = safe_dict(data, "General")
 hl   = safe_dict(data, "Highlights")
@@ -1528,7 +1561,7 @@ with tab2b:
     score_tabs = st.tabs(["💎 Value", "📈 Profitability", "🚀 Growth", "🏥 Health", "⭐ Quality"])
 
     with score_tabs[0]:  # Value
-        vs = compute_value_score(data, hl, val)
+        vs = compute_value_score(data, hl, val, price_data)
         rows_all = vs["rows"]
 
         # ── Header ────────────────────────────────────────────────────
