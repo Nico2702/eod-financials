@@ -2068,41 +2068,68 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "result": num(r, 2)}
 
     if "Altman Z" in L:
-        wc  = (ca_q - cl_q) if ca_q and cl_q else None
-        x1  = safe(wc, ta_q);  x2 = safe(re_q, ta_q)
-        x3  = safe(ebit_ttm, ta_q); x4 = safe(mcap, tl_q); x5 = safe(rev_ttm, ta_q)
-        z   = (1.2*(x1 or 0) + 1.4*(x2 or 0) + 3.3*(x3 or 0) +
-               0.6*(x4 or 0) + 1.0*(x5 or 0)) if all([x1,x2,x3,x4,x5]) else None
-        zone = ("≥ 2.99 → Safe Zone" if z and z>=2.99 else
-                ("1.81–2.99 → Grey Zone" if z and z>=1.81 else "< 1.81 → Distress Zone")) if z else "—"
+        is_annual = "Year" in L
+
+        if is_annual:
+            # Annual: BS from latest annual, income from annual
+            _ta  = ta_a;    _ca  = ca_a;    _cl  = cl_a
+            _re  = fv(bsA.get("retainedEarnings"))
+            _tl  = tl_a;    _dt  = bsA_dt
+            _ebit = ebit_a; _rev = rev_a
+            _ebit_lbl = f"Income_Statement.ebit  [{isA_dt}]"
+            _rev_lbl  = f"Income_Statement.totalRevenue  [{isA_dt}]"
+            _ebit_qs  = [(f"Income_Statement.ebit  [{isA_dt}]", raw(_ebit))]
+            _rev_qs   = [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(_rev))]
+            mode_note = "Annual: Balance Sheet from latest annual report; EBIT/Revenue from annual"
+        else:
+            # Cur: BS from latest quarter, EBIT/Revenue as TTM sum
+            _ta  = ta_q;    _ca  = ca_q;    _cl  = cl_q
+            _re  = fv(bsQ.get("retainedEarnings"))
+            _tl  = tl_q;    _dt  = bsQ_dt
+            _ebit = ebit_ttm; _rev = rev_ttm
+            _ebit_qs = ttm_rows(q_is, "ebit", "Income_Statement.ebit")
+            _rev_qs  = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue")
+            mode_note = "Cur: Balance Sheet from latest quarter; EBIT/Revenue as TTM (4-quarter sum)"
+
+        wc = (_ca - _cl) if _ca is not None and _cl is not None else None
+        x1 = safe(wc,   _ta); x2 = safe(_re,  _ta)
+        x3 = safe(_ebit,_ta); x4 = safe(mcap,  _tl); x5 = safe(_rev, _ta)
+        z  = (1.2*(x1 or 0) + 1.4*(x2 or 0) + 3.3*(x3 or 0) +
+              0.6*(x4 or 0) + 1.0*(x5 or 0)) if all([x1, x2, x3, x4, x5]) else None
+        zone = ("≥ 2.99 → Safe Zone" if z and z >= 2.99 else
+                ("1.81–2.99 → Grey Zone" if z and z >= 1.81 else "< 1.81 → Distress Zone")) if z else "—"
+
         return {
-            "formula": "1.2·X1 + 1.4·X2 + 3.3·X3 + 0.6·X4 + 1.0·X5\n>2.99 Safe | 1.81–2.99 Grey | <1.81 Distress",
-            "fields":  ["Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities",
-                        "Balance_Sheet.retainedEarnings", "Balance_Sheet.totalAssets",
-                        "Balance_Sheet.totalLiab", "Income_Statement.ebit (TTM)",
-                        "Income_Statement.totalRevenue (TTM)", "Highlights.MarketCapitalization"],
+            "formula": f"1.2·X1 + 1.4·X2 + 3.3·X3 + 0.6·X4 + 1.0·X5\n>2.99 Safe | 1.81–2.99 Grey | <1.81 Distress\n{mode_note}",
+            "fields": ["Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities",
+                       "Balance_Sheet.retainedEarnings", "Balance_Sheet.totalAssets",
+                       "Balance_Sheet.totalLiab", "Income_Statement.ebit",
+                       "Income_Statement.totalRevenue", "Highlights.MarketCapitalization"],
             "unit": "",
             "components": [
-                (f"Current Assets  [{bsQ_dt}]",                                         bn(ca_q)),
-                (f"Current Liabilities  [{bsQ_dt}]",                                   bn(cl_q)),
-                (f"Working Capital = CA − CL",                                         bn(wc)),
-                (f"Retained Earnings  [Balance_Sheet.retainedEarnings {bsQ_dt}]",     bn(re_q)),
-                (f"Total Assets  [{bsQ_dt}]",                                          bn(ta_q)),
-                (f"EBIT  [Income_Statement.ebit TTM]",                                 bn(ebit_ttm)),
-                (f"Market Cap  [Highlights.MarketCapitalization]",                     bn(mcap)),
-                (f"Total Liabilities  [Balance_Sheet.totalLiab {bsQ_dt}]",            bn(tl_q)),
-                (f"Revenue  [Income_Statement.totalRevenue TTM]",                      bn(rev_ttm)),
-                ("── Factor Calculation ──",                                             ""),
-                (f"X1 = WC ÷ TA  =  {bn(wc)} ÷ {bn(ta_q)}",                          num(x1, 6) if x1 else "—"),
-                (f"X2 = RE ÷ TA  =  {bn(re_q)} ÷ {bn(ta_q)}",                        num(x2, 6) if x2 else "—"),
-                (f"X3 = EBIT ÷ TA  =  {bn(ebit_ttm)} ÷ {bn(ta_q)}",                  num(x3, 6) if x3 else "—"),
-                (f"X4 = MCap ÷ TL  =  {bn(mcap)} ÷ {bn(tl_q)}",                      num(x4, 6) if x4 else "—"),
-                (f"X5 = Rev ÷ TA  =  {bn(rev_ttm)} ÷ {bn(ta_q)}",                    num(x5, 6) if x5 else "—"),
-                ("── Z-Score = 1.2·X1 + 1.4·X2 + 3.3·X3 + 0.6·X4 + 1.0·X5 ──",     ""),
+                ("── Balance Sheet inputs ──",                                                f"[{_dt}]"),
+                (f"Balance_Sheet.totalCurrentAssets  [{_dt}]",                              raw(_ca)),
+                (f"Balance_Sheet.totalCurrentLiabilities  [{_dt}]",                        raw(_cl)),
+                (f"Working Capital = CA − CL  =  {raw(_ca)} − {raw(_cl)}",                raw(wc)),
+                (f"Balance_Sheet.retainedEarnings  [{_dt}]",                               raw(_re)),
+                (f"Balance_Sheet.totalAssets  [{_dt}]",                                    raw(_ta)),
+                (f"Balance_Sheet.totalLiab  [{_dt}]",                                      raw(_tl)),
+                (f"Highlights.MarketCapitalization",                                        raw(mcap)),
+                (f"── EBIT {'TTM quarters' if not is_annual else isA_dt} ──",              ""),
+                *_ebit_qs,
+                (f"── Revenue {'TTM quarters' if not is_annual else isA_dt} ──",           ""),
+                *_rev_qs,
+                ("── Factor Calculation ──",                                                ""),
+                (f"X1 = WC ÷ TA  =  {raw(wc)} ÷ {raw(_ta)}",                             num(x1, 6) if x1 else "—"),
+                (f"X2 = RE ÷ TA  =  {raw(_re)} ÷ {raw(_ta)}",                            num(x2, 6) if x2 else "—"),
+                (f"X3 = EBIT ÷ TA  =  {raw(_ebit)} ÷ {raw(_ta)}",                        num(x3, 6) if x3 else "—"),
+                (f"X4 = MCap ÷ TL  =  {raw(mcap)} ÷ {raw(_tl)}",                         num(x4, 6) if x4 else "—"),
+                (f"X5 = Rev ÷ TA  =  {raw(_rev)} ÷ {raw(_ta)}",                           num(x5, 6) if x5 else "—"),
+                ("── Z-Score = 1.2·X1 + 1.4·X2 + 3.3·X3 + 0.6·X4 + 1.0·X5 ──",         ""),
                 (f"= 1.2·{num(x1,4)} + 1.4·{num(x2,4)} + 3.3·{num(x3,4)} + 0.6·{num(x4,4)} + 1.0·{num(x5,4)}", ""),
-                ("── Result ──",                                                         ""),
-                ("Altman Z-Score",                                                       num(z, 4) if z else "—"),
-                ("Zone",                                                                 zone),
+                ("── Result ──",                                                             ""),
+                ("Altman Z-Score",                                                           num(z, 4) if z else "—"),
+                ("Zone",                                                                     zone),
             ],
             "result": num(z, 2) if z else "—"}
 
@@ -2672,7 +2699,6 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         row("Quick Ratio (Quarterly)",    qr_q,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T),
         row("Quick Ratio (Year)",         qr_a,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T),
         row("Altman Z-Score (Cur)",       az_cur,      h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
-        row("Altman Z-Score (Quarterly)", az_q,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
         row("Altman Z-Score (Year)",      az_a,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
     ]
 
