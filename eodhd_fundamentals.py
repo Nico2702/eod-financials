@@ -1708,9 +1708,9 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                     (f"({raw(v0)} ÷ {raw(vn)})^(1/{n}) − 1",  f"{(gr / 100):.6f}" if gr is not None else (gr_note or "—")),
                     ("× 100",                                                        ""),
                     ("── Result ──",                                                 ""),
-                    (f"{field_label} Growth ({n}Y CAGR)",  pct(gr) if gr is not None else (gr_note or "—")),
+                    (f"{field_label} Growth ({n}Y CAGR)",  f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
                 ],
-                "result": pct(gr) if gr is not None else (gr_note or "—")}
+                "result": f"{gr:.4f} %" if gr is not None else (gr_note or "—")}
 
         elif "Fwd" in L:
             trends   = data.get("Earnings", {}).get("Trend", {})
