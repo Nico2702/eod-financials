@@ -542,7 +542,29 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     ni_cur  = yr(a_is, "netIncome", 0)   # kept for drilldown display only
     ni_prev = yr(a_is, "netIncome", 1)   # kept for drilldown display only
     eps_gr_yr = ((_eps0_peg / _eps1_peg - 1) * 100) if _eps0_peg and _eps1_peg and _eps1_peg > 0 else None
-    peg_fwd  = (pe_fwd / eps_gr_yr)  if pe_fwd  and eps_gr_yr and eps_gr_yr > 0 else None
+    # PEG (Fwd): earningsEstimateGrowth(+1y) -> eps_gr_ttm_peg -> eps_gr_yr
+    _tr_sc   = data.get("Earnings", {}).get("Trend", {})
+    _p1y_sc  = next((v for v in _tr_sc.values() if v.get("period") == "+1y"), {})
+    _eg_raw  = fv(_p1y_sc.get("earningsEstimateGrowth"))
+    _eg_pct  = _eg_raw * 100 if _eg_raw is not None else None
+    # TTM EPS growth for fallback
+    _qis_sc  = data["Financials"]["Income_Statement"].get("quarterly", {})
+    _qbs_sc  = data["Financials"]["Balance_Sheet"].get("quarterly", {})
+    _qs_sc   = sorted(_qis_sc.keys(), reverse=True)
+    _qbss    = sorted(_qbs_sc.keys(), reverse=True)
+    def _ni_ttm_sc(st):
+        vs = [fv(_qis_sc[q].get("netIncomeApplicableToCommonShares")) or fv(_qis_sc[q].get("netIncome")) for q in _qs_sc[st:st+4]]
+        return sum(vs) if len(vs)==4 and all(v is not None for v in vs) else None
+    _ni0_sc  = _ni_ttm_sc(0); _ni4_sc = _ni_ttm_sc(4)
+    _sh0_sc  = fv(_qbs_sc[_qbss[0]].get("commonStockSharesOutstanding")) if _qbss else None
+    _sh4_sc  = fv(_qbs_sc[_qbss[4]].get("commonStockSharesOutstanding")) if len(_qbss)>4 else None
+    _ep0_sc  = (_ni0_sc/_sh0_sc) if _ni0_sc and _sh0_sc and _sh0_sc>0 else None
+    _ep4_sc  = (_ni4_sc/_sh4_sc) if _ni4_sc and _sh4_sc and _sh4_sc>0 else None
+    _eg_ttm  = ((_ep0_sc/_ep4_sc-1)*100) if _ep0_sc and _ep4_sc and _ep4_sc>0 else None
+    _peg_fwd_gr = (_eg_pct  if (_eg_pct  and _eg_pct  > 0) else
+                  (_eg_ttm  if (_eg_ttm  and _eg_ttm  > 0) else
+                  (eps_gr_yr if (eps_gr_yr and eps_gr_yr > 0) else None)))
+    peg_fwd  = (pe_fwd / _peg_fwd_gr) if pe_fwd and _peg_fwd_gr else None
     peg_cur  = (pe_cur / eps_gr_yr)  if pe_cur  and eps_gr_yr and eps_gr_yr > 0 else None
     peg_yr   = (pe_yr  / eps_gr_yr)  if pe_yr   and eps_gr_yr and eps_gr_yr > 0 else None
 
@@ -1294,48 +1316,151 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "unit": "%", "components": comps, "result": pct(r)}
 
     if "PEG" in L:
-        # ── Growth rate: historical YoY NI growth (same as compute_value_score) ──
-        ni_cur_yr  = fv(a_is.get(years[0], {}).get("netIncome")) if years else None
-        ni_prev_yr = fv(a_is.get(years[1], {}).get("netIncome")) if len(years) > 1 else None
-        y0         = years[0] if years else "—"
-        y1         = years[1] if len(years) > 1 else "—"
-        eps_gr_pct = ((ni_cur_yr / ni_prev_yr - 1) * 100) if ni_cur_yr and ni_prev_yr and ni_prev_yr > 0 else None
+        y0 = years[0] if years else "-"
+        y1 = years[1] if len(years) > 1 else "-"
 
-        # ── P/E numerator depends on variant ──
         if "Fwd" in L:
-            pe_used     = fv(val.get("ForwardPE"))
-            pe_label    = "Valuation.ForwardPE  (API direct)"
-            pe_src      = "ForwardPE"
-        elif "Cur" in L:
-            pe_used     = fv(val.get("TrailingPE")) or fv(hl.get("PERatio"))
-            pe_label    = "Valuation.TrailingPE  (fallback: Highlights.PERatio)"
-            pe_src      = "TrailingPE / PERatio"
-        else:  # Year
-            pe_used     = safe(mcap, ni_cur_yr)
-            pe_label    = f"P/E (Year) = MCap ÷ NI({y0})"
-            pe_src      = "Highlights.MarketCapitalization ÷ Income_Statement.netIncome (annual)"
+            pe_used    = fv(val.get("ForwardPE"))
+            trends_dd  = data.get("Earnings", {}).get("Trend", {})
+            p1y_dd     = next((v for v in trends_dd.values() if v.get("period") == "+1y"), {})
+            gr_raw     = fv(p1y_dd.get("earningsEstimateGrowth"))
+            gr_fwd_pct = gr_raw * 100 if gr_raw is not None else None
+            # Fallback 1: TTM EPS growth (NI/shares based)
+            _q_is_fb   = data["Financials"]["Income_Statement"].get("quarterly", {})
+            _q_bs_fb   = data["Financials"]["Balance_Sheet"].get("quarterly", {})
+            _qs_fb     = sorted(_q_is_fb.keys(), reverse=True)
+            _qbs_fb    = sorted(_q_bs_fb.keys(), reverse=True)
+            def _ni_eps_ttm(start):
+                vals = []
+                for q in _qs_fb[start:start+4]:
+                    v = fv(_q_is_fb[q].get("netIncomeApplicableToCommonShares")) or fv(_q_is_fb[q].get("netIncome"))
+                    if v is not None: vals.append(v)
+                return sum(vals) if len(vals) == 4 else None
+            _ni_now    = _ni_eps_ttm(0)
+            _ni_1yago  = _ni_eps_ttm(4)
+            _shs_q0    = fv(_q_bs_fb[_qbs_fb[0]].get("commonStockSharesOutstanding")) if _qbs_fb else None
+            _shs_q4    = fv(_q_bs_fb[_qbs_fb[4]].get("commonStockSharesOutstanding")) if len(_qbs_fb) > 4 else None
+            _eps_now   = (_ni_now   / _shs_q0) if _ni_now   and _shs_q0 and _shs_q0 > 0 else None
+            _eps_1yago = (_ni_1yago / _shs_q4) if _ni_1yago and _shs_q4 and _shs_q4 > 0 else None
+            gr_ttm_fb  = ((_eps_now / _eps_1yago - 1) * 100) if _eps_now and _eps_1yago and _eps_1yago > 0 else None
+            # Fallback 2: YoY EPS growth (annual NI/shares)
+            _a_bs_fb2  = data["Financials"]["Balance_Sheet"].get("yearly", {})
+            _a_is_fb2  = data["Financials"]["Income_Statement"].get("yearly", {})
+            _ys_fb2    = sorted(_a_is_fb2.keys(), reverse=True)
+            def _eps_ann(idx):
+                if idx >= len(_ys_fb2): return None
+                y   = _ys_fb2[idx]
+                ni  = fv(_a_is_fb2[y].get("netIncomeApplicableToCommonShares")) or fv(_a_is_fb2[y].get("netIncome"))
+                shs = fv(_a_bs_fb2.get(y, {}).get("commonStockSharesOutstanding"))
+                return (ni / shs) if ni and shs and shs > 0 else None
+            _ea0 = _eps_ann(0); _ea1 = _eps_ann(1)
+            gr_yoy_fb  = ((_ea0 / _ea1 - 1) * 100) if _ea0 and _ea1 and _ea1 > 0 else None
+            # Select source
+            if gr_fwd_pct and gr_fwd_pct > 0:
+                gr_used = gr_fwd_pct
+                src     = "Earnings.Trend[+1y].earningsEstimateGrowth  (primary, forward-looking)"
+                src_key = "primary"
+            elif gr_ttm_fb and gr_ttm_fb > 0:
+                gr_used = gr_ttm_fb
+                src     = "EPS Growth TTM  (fallback 1 - estimate missing/negative)"
+                src_key = "ttm"
+            elif gr_yoy_fb and gr_yoy_fb > 0:
+                gr_used = gr_yoy_fb
+                src     = "EPS Growth YoY  (fallback 2 - TTM also unavailable)"
+                src_key = "yoy"
+            else:
+                gr_used = None
+                src     = "- (no growth data available)"
+                src_key = "none"
+            peg = (pe_used / gr_used) if pe_used and gr_used and gr_used > 0 else None
+            return {
+                "formula": (
+                    "ForwardPE / EPS Growth (%)\n"
+                    "Numerator:   Valuation.ForwardPE\n"
+                    "Denominator [priority chain]:\n"
+                    "  1. Earnings.Trend[+1y].earningsEstimateGrowth  (forward-looking, analyst consensus)\n"
+                    "  2. EPS Growth TTM  (NI_TTM/shares, fallback 1)\n"
+                    "  3. EPS Growth YoY  (NI_annual/shares, fallback 2)\n"
+                    "N/A when growth <= 0"
+                ),
+                "fields":  ["Valuation.ForwardPE",
+                            "Earnings.Trend[+1y].earningsEstimateGrowth",
+                            "EPS Growth TTM / YoY  (fallback only)"],
+                "unit": "x",
+                "components": [
+                    ("── P/E Numerator ──",                                              ""),
+                    ("Valuation.ForwardPE",                                                num(pe_used, 4) if pe_used else "— (not available)"),
+                    ("── EPS Growth Denominator ──",                                      ""),
+                    ("1. earningsEstimateGrowth (+1y)  [raw decimal]",                    f"{gr_raw:.6f}" if gr_raw is not None else "—"),
+                    ("   -> as percentage",                                                f"{gr_fwd_pct:.4f} %" if gr_fwd_pct is not None else "—"),
+                    ("2. EPS Growth TTM  [fallback 1]",                                   f"{gr_ttm_fb:.4f} %" if gr_ttm_fb is not None else "—"),
+                    ("3. EPS Growth YoY  [fallback 2]",                                   f"{gr_yoy_fb:.4f} %" if gr_yoy_fb is not None else "—"),
+                    ("── Source used ──",                                                 ""),
+                    (src,                                                                  f"{gr_used:.4f} %" if gr_used else "—"),
+                    ("── Calculation ──",                                                  ""),
+                    ("ForwardPE / EPS Growth %",                                          f"{num(pe_used,4)} / {gr_used:.4f}" if gr_used else "N/A"),
+                    ("── Result ──",                                                       ""),
+                    ("PEG Ratio (Fwd)",                                                    num(peg, 4) + " x" if peg else "—"),
+                ],
+                "result": num(peg, 2) if peg else "—"}
+
+        # PEG (Cur) / PEG (Year): historical EPS growth = NI/shares YoY
+        a_bs_dd = data["Financials"]["Balance_Sheet"].get("yearly", {})
+        def _eps_peg_dd(idx):
+            if idx >= len(years): return None
+            y   = years[idx]
+            ni  = fv(a_is.get(y, {}).get("netIncomeApplicableToCommonShares")) or fv(a_is.get(y, {}).get("netIncome"))
+            shs = fv(a_bs_dd.get(y, {}).get("commonStockSharesOutstanding"))
+            return (ni / shs) if ni and shs and shs > 0 else None
+        eps0_dd    = _eps_peg_dd(0)
+        eps1_dd    = _eps_peg_dd(1)
+        ni0_dd     = fv(a_is.get(y0, {}).get("netIncomeApplicableToCommonShares")) or fv(a_is.get(y0, {}).get("netIncome"))
+        ni1_dd     = fv(a_is.get(y1, {}).get("netIncomeApplicableToCommonShares")) or fv(a_is.get(y1, {}).get("netIncome"))
+        shs0_dd    = fv(a_bs_dd.get(y0, {}).get("commonStockSharesOutstanding"))
+        shs1_dd    = fv(a_bs_dd.get(y1, {}).get("commonStockSharesOutstanding"))
+        eps_gr_pct = ((eps0_dd / eps1_dd - 1) * 100) if eps0_dd and eps1_dd and eps1_dd > 0 else None
+        ni_cur_yr  = fv(a_is.get(y0, {}).get("netIncome")) if years else None
+
+        if "Cur" in L:
+            pe_used  = fv(val.get("TrailingPE")) or fv(hl.get("PERatio"))
+            pe_label = "Valuation.TrailingPE  (fallback: Highlights.PERatio)"
+        else:
+            pe_used  = safe(mcap, ni_cur_yr)
+            pe_label = f"P/E (Year) = MarketCap / NI ({y0})"
 
         peg = safe(pe_used, eps_gr_pct) if eps_gr_pct and eps_gr_pct > 0 else None
-
+        gr_str  = f"{eps_gr_pct:.4f} %" if eps_gr_pct else "\u2014"
+        eps0_str = f"{eps0_dd:.4f}" if eps0_dd else "?"
+        eps1_str = f"{eps1_dd:.4f}" if eps1_dd else "?"
         return {
-            "formula": "P/E ÷ EPS Growth Rate (%)\n(Growth = YoY NI change, annual — same denominator for all 3 variants)",
-            "fields":  ["Valuation.ForwardPE / TrailingPE / Highlights.PERatio",
-                        "Income_Statement.netIncome (annual Y0 and Y-1)"],
+            "formula": (
+                "P/E / EPS Growth Rate (%)\n"
+                "Denominator: historical YoY EPS growth  (NI / commonStockSharesOutstanding)\n"
+                "N/A when growth <= 0"
+            ),
+            "fields":  ["Valuation.TrailingPE / Highlights.PERatio / self-calc",
+                        "Income_Statement.netIncomeApplicableToCommonShares (fallback: netIncome)",
+                        "Balance_Sheet.commonStockSharesOutstanding"],
             "unit": "x",
             "components": [
-                ("── P/E Numerator ──",                                          ""),
-                (pe_label,                                                        num(pe_used, 4) if pe_used else "—"),
-                ("── EPS Growth Denominator ──",                                 ""),
-                (f"Income_Statement.netIncome  [{y0}]",                         raw(ni_cur_yr)),
-                (f"Income_Statement.netIncome  [{y1}]",                         raw(ni_prev_yr)),
-                (f"eps_gr_yr = ({raw(ni_cur_yr)} ÷ {raw(ni_prev_yr)} − 1) × 100", ""),
-                ("EPS Growth (historical YoY, %)",                               f"{eps_gr_pct:.4f} %" if eps_gr_pct else "—"),
-                ("── Calculation ──",                                             ""),
-                (f"P/E ÷ EPS Growth %  =  {num(pe_used,4)} ÷ {f'{eps_gr_pct:.4f}' if eps_gr_pct else '—'}", ""),
-                ("── Result ──",                                                  ""),
-                ("PEG Ratio",                                                     num(peg, 4) + " x" if peg else "—"),
+                ("\u2500\u2500 P/E Numerator \u2500\u2500",                                          ""),
+                (pe_label,                                                            num(pe_used, 4) if pe_used else "\u2014"),
+                ("\u2500\u2500 EPS Growth Denominator \u2500\u2500",                                 ""),
+                (f"-- EPS {y0} --",                                                  ""),
+                (f"  NI  [Income_Statement {y0}]",                                  raw(ni0_dd)),
+                (f"  Shares  [Balance_Sheet {y0}]",                                 raw(shs0_dd)),
+                (f"  -> EPS {y0}",                                                   f"{eps0_dd:.6f}" if eps0_dd else "\u2014"),
+                (f"-- EPS {y1} --",                                                  ""),
+                (f"  NI  [Income_Statement {y1}]",                                  raw(ni1_dd)),
+                (f"  Shares  [Balance_Sheet {y1}]",                                 raw(shs1_dd)),
+                (f"  -> EPS {y1}",                                                   f"{eps1_dd:.6f}" if eps1_dd else "\u2014"),
+                ("\u2500\u2500 Calculation \u2500\u2500",                                             ""),
+                (f"EPS growth = ({eps0_str} / {eps1_str}) - 1 x 100",               gr_str),
+                ("P/E / EPS Growth %",                                               f"{num(pe_used,4)} / {eps_gr_pct:.4f}" if eps_gr_pct else "N/A"),
+                ("\u2500\u2500 Result \u2500\u2500",                                                  ""),
+                ("PEG Ratio",                                                         num(peg, 4) + " x" if peg else "\u2014"),
             ],
-            "result": num(peg, 2) if peg else "—"}
+            "result": num(peg, 2) if peg else "\u2014"}
 
     # ═══════════════════════════════════════════════════════════════════
     # PROFITABILITY
