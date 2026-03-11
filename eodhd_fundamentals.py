@@ -1765,7 +1765,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     if "Rule of 40" in L:
         is_ttm  = "TTM" in L
         rev0    = rev_ttm; rev1_a = fv(a_is.get(years[1], {}).get("totalRevenue")) if len(years)>1 else None
-        rev_gr  = safe(rev_ttm, rev1_a) - 1 if rev_ttm and rev1_a else None
+        rev_gr  = (rev_ttm / rev1_a - 1) if rev_ttm and rev1_a and rev1_a > 0 else None
         fcf     = fcf_ttm if is_ttm else fcf_a
         rev     = rev_ttm if is_ttm else rev_a
         fcfm    = safe(fcf, rev)
@@ -2901,7 +2901,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             vals = [fv(stmt[q].get(key)) for q in w]
             if all(v is not None for v in vals):
                 rows.append(sum(vals))
-        if len(rows) >= 5 and rows[4] and rows[4] != 0:
+        if len(rows) >= 5 and rows[4] and rows[4] > 0:
             return (rows[0] / rows[4] - 1) * 100
         return None
 
@@ -2911,7 +2911,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         if len(qs) < 5: return None
         v0 = fv(stmt[qs[0]].get(key))
         v4 = fv(stmt[qs[4]].get(key))
-        if v0 is None or not v4 or v4 == 0: return None
+        if v0 is None or not v4 or v4 <= 0: return None
         return (v0 / v4 - 1) * 100
 
     # ── Annual YoY: year[0] vs year[1] ───────────────────────────────
@@ -2920,7 +2920,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         if len(ys) < 2: return None
         v0 = fv(stmt[ys[0]].get(key))
         v1 = fv(stmt[ys[1]].get(key))
-        if v0 is None or not v1 or v1 == 0: return None
+        if v0 is None or not v1 or v1 <= 0: return None
         return (v0 / v1 - 1) * 100
 
     # ── Historical rolling YoY avg ────────────────────────────────────
@@ -2930,7 +2930,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         for i in range(min(n, len(ys) - 1)):
             v0 = fv(stmt[ys[i]].get(key))
             v1 = fv(stmt[ys[i+1]].get(key))
-            if v0 is not None and v1 and v1 != 0:
+            if v0 is not None and v1 and v1 > 0:
                 vals.append((v0 / v1 - 1) * 100)
         return sum(vals) / len(vals) if vals else None
 
@@ -3037,7 +3037,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     if len(_fcf_ys) >= 2:
         _f0 = fcf_yr(_fcf_ys[0]); _f1 = fcf_yr(_fcf_ys[1])
         if _f0 is not None and _f1 and _f1 > 0:
-            fcf_gr_yr = (_f0 / _f1 - 1) * 100
+            fcf_gr_yr = (_f0 / _f1 - 1) * 100 if _f1 > 0 else None  # guard negative base
 
     # Rule of 40: Revenue Growth + FCF Margin
     rev_ttm_v = sum(fv(q_is[q].get("totalRevenue")) or 0 for q in sorted(q_is.keys(), reverse=True)[:4])
@@ -3151,12 +3151,12 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         def gr(stmt, key):
             v0 = fv(stmt.get(y, {}).get(key))
             v1 = fv(stmt.get(y_prev, {}).get(key))
-            return (v0/v1 - 1) if v0 and v1 and v1 != 0 else None
+            return (v0/v1 - 1) if v0 and v1 and v1 > 0 else None
         rev_g = gr(a_is, "totalRevenue")
         ni_g  = gr(a_is, "netIncome")
         ocf_g = gr(a_cf, "totalCashFromOperatingActivities")
         fc0   = fcf_yr(y); fc1 = fcf_yr(y_prev)
-        fcf_g = (fc0/fc1 - 1) if fc0 and fc1 and fc1 != 0 else None
+        fcf_g = (fc0/fc1 - 1) if fc0 is not None and fc1 and fc1 > 0 else None
         if rev_g is not None:
             chart_rows.append({
                 "Year": y[:4],
@@ -3301,14 +3301,17 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
 
     def return_hist(ni_key, asset_key, n, use_avg=False):
         ys = sorted(a_is.keys(), reverse=True)
-        bsy= sorted(a_bs.keys(), reverse=True)
         vals = []
         for i, y in enumerate(ys[:n]):
             ni  = fv(a_is[y].get(ni_key))
             bs  = fv(a_bs[y].get(asset_key)) if y in a_bs else None
-            if use_avg and i+1 < len(bsy):
-                bs_p = fv(a_bs[bsy[i+1]].get(asset_key))
-                bs = (bs + bs_p) / 2 if bs and bs_p else bs
+            if use_avg:
+                # Find correct prior year BS (same key as IS year y, one step back)
+                bsy_all = sorted(a_bs.keys(), reverse=True)
+                y_idx   = bsy_all.index(y) if y in bsy_all else None
+                if y_idx is not None and y_idx + 1 < len(bsy_all):
+                    bs_p = fv(a_bs[bsy_all[y_idx + 1]].get(asset_key))
+                    bs = (bs + bs_p) / 2 if bs and bs_p else bs
             if ni is not None and bs and bs != 0:
                 vals.append(ni / bs)
         return sum(vals)/len(vals) if vals else None
@@ -3327,12 +3330,13 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
 
     def at_hist(n):
         ys = sorted(a_is.keys(), reverse=True)
-        bsy= sorted(a_bs.keys(), reverse=True)
+        bsy_all = sorted(a_bs.keys(), reverse=True)
         vals = []
-        for i, y in enumerate(ys[:n]):
+        for y in ys[:n]:
             r = fv(a_is[y].get("totalRevenue"))
             a = fv(a_bs[y].get("totalAssets")) if y in a_bs else None
-            a_p = fv(a_bs[bsy[i+1]].get("totalAssets")) if i+1 < len(bsy) else None
+            y_idx = bsy_all.index(y) if y in bsy_all else None
+            a_p   = fv(a_bs[bsy_all[y_idx + 1]].get("totalAssets")) if y_idx is not None and y_idx + 1 < len(bsy_all) else None
             a_avg = (a + a_p)/2 if a and a_p else a
             if r and a_avg and a_avg != 0: vals.append(r / a_avg)
         return sum(vals)/len(vals) if vals else None
