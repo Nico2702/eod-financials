@@ -472,10 +472,22 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     ps_yr    = (mcap / rev_yr)    if mcap and rev_yr and rev_yr > 0 else None
     pb_cur   = fv(val.get("PriceBookMRQ"))
     pb_yr    = (mcap / equity_yr) if mcap and equity_yr and equity_yr > 0 else None
-    pfcf_cur = (mcap / fv(hl.get("RevenueTTM")) * fv(val.get("PriceSalesTTM"))) if False else None
-    # P/FCF from Highlights FCF
-    pfcf_cur = None
-    pfcf_yr  = (mcap / fcf_yr)    if mcap and fcf_yr and fcf_yr > 0 else None
+
+    # P/FCF (Cur) — TTM FCF from latest 4 quarters
+    q_cf_data = data["Financials"]["Cash_Flow"].get("quarterly", {})
+    sorted_qcf = sorted(q_cf_data.keys(), reverse=True)
+    fcf_ttm_vals = []
+    for q in sorted_qcf[:4]:
+        f = fv(q_cf_data[q].get("freeCashFlow"))
+        if f is None:
+            cfo   = fv(q_cf_data[q].get("totalCashFromOperatingActivities"))
+            capex = fv(q_cf_data[q].get("capitalExpenditures"))
+            f = cfo - abs(capex) if cfo and capex else None
+        if f is not None:
+            fcf_ttm_vals.append(f)
+    fcf_ttm = sum(fcf_ttm_vals) if len(fcf_ttm_vals) == 4 else None
+    pfcf_cur = (mcap / fcf_ttm) if mcap and fcf_ttm and fcf_ttm > 0 else None
+    pfcf_yr  = (mcap / fcf_yr)  if mcap and fcf_yr  and fcf_yr  > 0 else None
 
     ev_rev_cur = fv(val.get("EnterpriseValueRevenue"))
     ev_rev_yr  = (ev / rev_yr)    if ev and rev_yr   and rev_yr  > 0 else None
