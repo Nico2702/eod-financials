@@ -659,6 +659,13 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
 # ── API ───────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
+def fetch_fundamentals(ticker: str, api_token: str) -> dict:
+    url = f"https://eodhd.com/api/fundamentals/{ticker}?api_token={api_token}&fmt=json"
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_prices(ticker: str, api_token: str) -> dict:
     """Fetch daily EOD prices and return a dict of {YYYY: year_end_close_price}."""
     url = f"https://eodhd.com/api/eod/{ticker}?api_token={api_token}&fmt=json&period=d"
