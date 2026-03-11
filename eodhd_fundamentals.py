@@ -253,7 +253,7 @@ def compute_kennzahlen(data, hl, val, tech):
     rev_gr_ttm    = ttm_growth(ttm_is, "totalRevenue")
     earn_gr_ttm   = ttm_growth(ttm_is, "netIncome")
     eps_gr_ttm    = ttm_growth(ttm_is, "epsCalc")
-    ebit_gr_ttm   = ttm_growth(ttm_is, "operatingIncome")
+    ebit_gr_ttm   = ttm_growth(ttm_is, "ebit")
     ebitda_gr_ttm = ttm_growth(ttm_is, "ebitda")
     fcf_gr_ttm    = ttm_growth(ttm_cf, "freeCashFlowCalc")
 
@@ -262,7 +262,7 @@ def compute_kennzahlen(data, hl, val, tech):
     earn_gr_qoq   = qoq_growth(q_is, "netIncome")
     eps_gr_qoq    = (qoq_growth(q_is, "netIncomeApplicableToCommonShares")
                      or qoq_growth(q_is, "netIncome"))
-    ebit_gr_qoq   = qoq_growth(q_is, "operatingIncome")
+    ebit_gr_qoq   = qoq_growth(q_is, "ebit")
     ebitda_gr_qoq = qoq_growth(q_is, "ebitda")
     fcf_gr_qoq    = (qoq_growth(q_cf, "freeCashFlow")
                      or qoq_growth(q_cf, "freeCashFlowCalc"))
@@ -272,10 +272,9 @@ def compute_kennzahlen(data, hl, val, tech):
     earn_gr_yoy   = yoy_growth(q_is, "netIncome")
     eps_gr_yoy    = (yoy_growth(q_is, "netIncomeApplicableToCommonShares")
                      or yoy_growth(q_is, "netIncome"))
-    ebit_gr_yoy   = yoy_growth(q_is, "operatingIncome")
-    ebitda_gr_yoy = yoy_growth(q_is, "ebitda")
-    fcf_gr_yoy    = (yoy_growth(q_cf, "freeCashFlow")
-                     or yoy_growth(q_cf, "freeCashFlowCalc"))
+    ebit_gr_yoy   = ttm_growth(ttm_is, "ebit")
+    ebitda_gr_yoy = ttm_growth(ttm_is, "ebitda")
+    fcf_gr_yoy    = ttm_growth(ttm_cf, "freeCashFlowCalc")
 
     # aliases for Key Facts
     ebit_gr    = ebit_gr_yoy
