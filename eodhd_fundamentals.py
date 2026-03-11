@@ -1115,8 +1115,18 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         row("Altman Z-Score (Cur)",       az_cur,      h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
         row("Altman Z-Score (Quarterly)", az_q,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
         row("Altman Z-Score (Year)",      az_a,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
-        row("Piotroski F-Score (Cur)",    pf_cur,      None,          None,          None,           PF_T, decimals=0),
-        row("Piotroski F-Score (Year)",   pf_a,        None,          None,          None,           PF_T, decimals=0),
+    ]
+
+    def yr_pf(i):
+        if i + 1 >= len(years_bs): return None
+        y    = years_bs[i]
+        is_d = a_is.get(y, {}); cf_d = a_cf.get(y, {}); bs_d = a_bs.get(y, {})
+        bs_p = a_bs.get(years_bs[i + 1], {})
+        return piotroski(is_d, cf_d, bs_d, bs_p)
+
+    rows += [
+        row("Piotroski F-Score (Cur)",  pf_cur, h(yr_pf,3), h(yr_pf,5), h(yr_pf,10), PF_T, decimals=0),
+        row("Piotroski F-Score (Year)", pf_a,   h(yr_pf,3), h(yr_pf,5), h(yr_pf,10), PF_T, decimals=0),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
