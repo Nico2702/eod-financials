@@ -462,7 +462,18 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
     # TTM from Highlights
     rev_ttm = fv(hl.get("RevenueTTM"))
-    eps_ttm = fv(hl.get("EarningsShare"))
+    # EPS TTM = NI_TTM / shares (latest quarter) — self-calculated
+    _q_is_vs = data["Financials"]["Income_Statement"].get("quarterly", {})
+    _q_bs_vs = data["Financials"]["Balance_Sheet"].get("quarterly", {})
+    _qs_vs   = sorted(_q_is_vs.keys(), reverse=True)
+    _qbs_vs  = sorted(_q_bs_vs.keys(), reverse=True)
+    _ni_ttm_vals = []
+    for _q in _qs_vs[:4]:
+        _v = fv(_q_is_vs[_q].get("netIncomeApplicableToCommonShares")) or fv(_q_is_vs[_q].get("netIncome"))
+        if _v is not None: _ni_ttm_vals.append(_v)
+    _ni_ttm_sum = sum(_ni_ttm_vals) if len(_ni_ttm_vals) == 4 else None
+    _shs_latest = fv(_q_bs_vs[_qbs_vs[0]].get("commonStockSharesOutstanding")) if _qbs_vs else None
+    eps_ttm = (_ni_ttm_sum / _shs_latest) if _ni_ttm_sum and _shs_latest and _shs_latest > 0 else None
 
     # ── Current Ratios ───────────────────────────────────────────────
     pe_fwd   = fv(val.get("ForwardPE"))
@@ -503,10 +514,21 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     fcf_yield_yr   = (fcf_yr  / mcap * 100)  if fcf_yr  and mcap and mcap > 0 else None
 
     # PEG Ratio = P/E / EPS Growth Rate (%)
-    # Growth rate: YoY EPS growth from annual NI
-    ni_cur  = yr(a_is, "netIncome", 0)
-    ni_prev = yr(a_is, "netIncome", 1)
-    eps_gr_yr = ((ni_cur / ni_prev - 1) * 100) if ni_cur and ni_prev and ni_prev > 0 else None
+    # Growth rate: YoY EPS growth — self-calculated as NI/shares
+    _a_bs_peg = data["Financials"]["Balance_Sheet"].get("yearly", {})
+    _a_is_peg = data["Financials"]["Income_Statement"].get("yearly", {})
+    _ys_peg   = sorted(_a_is_peg.keys(), reverse=True)
+    def _get_eps_peg(idx):
+        if idx >= len(_ys_peg): return None
+        y   = _ys_peg[idx]
+        ni  = fv(_a_is_peg[y].get("netIncomeApplicableToCommonShares")) or fv(_a_is_peg[y].get("netIncome"))
+        shs = fv(_a_bs_peg.get(y, {}).get("commonStockSharesOutstanding"))
+        return (ni / shs) if ni and shs and shs > 0 else None
+    _eps0_peg = _get_eps_peg(0)
+    _eps1_peg = _get_eps_peg(1)
+    ni_cur  = yr(a_is, "netIncome", 0)   # kept for drilldown display only
+    ni_prev = yr(a_is, "netIncome", 1)   # kept for drilldown display only
+    eps_gr_yr = ((_eps0_peg / _eps1_peg - 1) * 100) if _eps0_peg and _eps1_peg and _eps1_peg > 0 else None
     peg_fwd  = (pe_fwd / eps_gr_yr)  if pe_fwd  and eps_gr_yr and eps_gr_yr > 0 else None
     peg_cur  = (pe_cur / eps_gr_yr)  if pe_cur  and eps_gr_yr and eps_gr_yr > 0 else None
     peg_yr   = (pe_yr  / eps_gr_yr)  if pe_yr   and eps_gr_yr and eps_gr_yr > 0 else None
