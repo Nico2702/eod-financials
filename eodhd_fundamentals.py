@@ -213,6 +213,16 @@ def compute_kennzahlen(data, hl, val, tech):
     fcf_mar    = (fcf / rev_ttm * 100) if fcf and rev_ttm             else None
     roce       = (ebit / (assets - cur_lia) * 100) if ebit and assets and cur_lia else None
     roic       = (ni / (equity + (total_debt or 0)) * 100) if ni and equity else None
+    # ROE: NI TTM / avg(equity now, equity 1Y ago) — fallback to EOD value
+    try:
+        eq_series = ttm_bs["totalStockholderEquity"].dropna()
+        eq_now  = eq_series.iloc[0] if len(eq_series) >= 1 else None
+        eq_prev = eq_series.iloc[4] if len(eq_series) >= 5 else (eq_series.iloc[-1] if len(eq_series) >= 2 else None)
+        eq_avg  = (eq_now + eq_prev) / 2 if eq_now and eq_prev else eq_now
+        roe_calc = (ni / eq_avg * 100) if ni and eq_avg and eq_avg > 0 else None
+    except:
+        roe_calc = None
+    roe = roe_calc if roe_calc is not None else roe
     de_ratio   = (total_debt / equity)  if total_debt and equity and equity > 0 else None
     da_ratio   = (total_debt / assets)  if total_debt and assets and assets > 0 else None
     ea_ratio   = (equity / assets)      if equity and assets and assets > 0     else None
@@ -920,7 +930,7 @@ with col_info:
 st.markdown("---")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📈 Highlights", "💰 Financials", "📊 Earnings", "🔬 Valuation", "🌐 Info"])
+tab1, tab2, tab2b, tab3, tab4, tab5 = st.tabs(["📈 Highlights", "💰 Financials", "🏆 Score", "📊 Earnings", "🔬 Valuation", "🌐 Info"])
 
 # ═══════════════════════════════════════════════════════════════════
 # TAB 1 · Highlights
@@ -1268,6 +1278,32 @@ with tab2:
             if show_growth:
                 display_df = add_growth_rows(raw_df, display_df, period=period_type)
             st.dataframe(display_df, use_container_width=True)
+
+# ═══════════════════════════════════════════════════════════════════
+# TAB 2b · Score
+# ═══════════════════════════════════════════════════════════════════
+with tab2b:
+    score_tabs = st.tabs(["💎 Value", "📈 Profitability", "🚀 Growth", "🏥 Health", "⭐ Quality"])
+
+    with score_tabs[0]:  # Value
+        st.markdown('<div class="section-header">Value Score</div>', unsafe_allow_html=True)
+        st.info("Coming soon — Value scoring model")
+
+    with score_tabs[1]:  # Profitability
+        st.markdown('<div class="section-header">Profitability Score</div>', unsafe_allow_html=True)
+        st.info("Coming soon — Profitability scoring model")
+
+    with score_tabs[2]:  # Growth
+        st.markdown('<div class="section-header">Growth Score</div>', unsafe_allow_html=True)
+        st.info("Coming soon — Growth scoring model")
+
+    with score_tabs[3]:  # Health
+        st.markdown('<div class="section-header">Health Score</div>', unsafe_allow_html=True)
+        st.info("Coming soon — Health scoring model")
+
+    with score_tabs[4]:  # Quality
+        st.markdown('<div class="section-header">Quality Score</div>', unsafe_allow_html=True)
+        st.info("Coming soon — Quality scoring model")
 
 # ═══════════════════════════════════════════════════════════════════
 # TAB 3 · Earnings
