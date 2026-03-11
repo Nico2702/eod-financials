@@ -180,7 +180,7 @@ def compute_kennzahlen(data, hl, val, tech):
 
     # From TTM history
     ebitda   = latest(ttm_is, "ebitda")
-    ebit     = latest(ttm_is, "operatingIncome")
+    ebit     = latest(ttm_is, "ebit")
     fcf      = latest(ttm_cf, "freeCashFlowCalc")
     cfo      = latest(ttm_cf, "totalCashFromOperatingActivities")
     rev_ttm  = latest(ttm_is, "totalRevenue") or revenue
@@ -197,6 +197,10 @@ def compute_kennzahlen(data, hl, val, tech):
     cur_lia  = latest(ttm_bs, "totalCurrentLiabilities")
     inv      = latest(ttm_bs, "inventory")
     total_debt = (lt_debt or 0) + (st_debt or 0) if lt_debt or st_debt else None
+
+    # EV: use Highlights value, fallback to MarketCap + Debt - Cash
+    if not ev and mcap:
+        ev = mcap + (total_debt or 0) - (cash or 0)
 
     # Computed ratios
     p_fcf      = mcap / fcf         if mcap and fcf and fcf > 0       else None
