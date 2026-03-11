@@ -288,7 +288,8 @@ def compute_kennzahlen(data, hl, val, tech):
                      or yoy_growth(q_is, "netIncome"))
     ebit_gr_yoy   = ttm_growth(ttm_is, "ebit")
     ebitda_gr_yoy = ttm_growth(ttm_is, "ebitda")
-    fcf_gr_yoy    = ttm_growth(ttm_cf, "freeCashFlowCalc")
+    fcf_gr_yoy    = (yoy_growth(q_cf, "freeCashFlow")
+                     or yoy_growth(q_cf, "freeCashFlowCalc"))
 
     # aliases for Key Facts
     ebit_gr    = ebit_gr_yoy
@@ -2968,7 +2969,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
                     f = cfo - abs(capex) if cfo and capex else None
                 if f is not None: vals.append(f)
             if len(vals) == 4: rows.append(sum(vals))
-        if len(rows) >= 5 and rows[4] and rows[4] != 0:
+        if len(rows) >= 5 and rows[4] and rows[4] > 0:
             return (rows[0] / rows[4] - 1) * 100
         return None
 
@@ -2983,7 +2984,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
                 f = cfo - abs(capex) if cfo and capex else None
             return f
         v0 = get_fcf(qs[0]); v4 = get_fcf(qs[4])
-        if v0 is None or not v4 or v4 == 0: return None
+        if v0 is None or v4 is None or v4 <= 0: return None
         return (v0 / v4 - 1) * 100
 
     def fcf_hist_yoy(n):
@@ -2991,7 +2992,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         vals = []
         for i in range(min(n, len(ys) - 1)):
             f0 = fcf_yr(ys[i]); f1 = fcf_yr(ys[i+1])
-            if f0 is not None and f1 and f1 != 0:
+            if f0 is not None and f1 and f1 > 0:
                 vals.append((f0 / f1 - 1) * 100)
         return sum(vals) / len(vals) if vals else None
 
@@ -3031,7 +3032,12 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
 
     fcf_gr_ttm_v  = fcf_gr_ttm()
     fcf_gr_yoy_v  = fcf_yoy()
-    fcf_gr_yr     = yr_gr(a_cf, "freeCashFlow")
+    fcf_gr_yr     = None
+    _fcf_ys = sorted(a_cf.keys(), reverse=True)
+    if len(_fcf_ys) >= 2:
+        _f0 = fcf_yr(_fcf_ys[0]); _f1 = fcf_yr(_fcf_ys[1])
+        if _f0 is not None and _f1 and _f1 > 0:
+            fcf_gr_yr = (_f0 / _f1 - 1) * 100
 
     # Rule of 40: Revenue Growth + FCF Margin
     rev_ttm_v = sum(fv(q_is[q].get("totalRevenue")) or 0 for q in sorted(q_is.keys(), reverse=True)[:4])
