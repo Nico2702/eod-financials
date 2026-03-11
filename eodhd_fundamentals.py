@@ -1765,8 +1765,11 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         a_vals   = [fv(a_is.get(y, {}).get(eps_a)) for y in sorted(a_is.keys(), reverse=True)[:3]]
         if sum(1 for v in a_vals if v is not None) == 0:
             eps_a = "netIncome"
-        # For TTM use quarterly key; for CAGR use annual key
-        key = eps_q if "CAGR" not in L else eps_a
+        # For TTM use quarterly key; for CAGR use annual key (with own fallback check)
+        if "CAGR" in L:
+            key = eps_a  # annual fallback already set above
+        else:
+            key = eps_q  # quarterly for TTM
         return growth_dd("EPS", q_is, a_is, key)
     if "EPS Growth (Fwd)" in L:  return growth_dd("EPS", None, None, None)
     if "EBIT Growth" in L:       return growth_dd("EBIT", q_is, a_is, "ebit")
