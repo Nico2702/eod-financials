@@ -720,6 +720,300 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
 
 
+
+# ── Growth Score ──────────────────────────────────────────────────────────────
+def compute_growth_score(data: dict, hl: dict) -> dict:
+
+    def fv(v):
+        try: return float(v) if v not in (None, "", "NA", "None") else None
+        except: return None
+
+    a_is = data["Financials"]["Income_Statement"].get("yearly", {})
+    a_cf = data["Financials"]["Cash_Flow"].get("yearly", {})
+    q_is = data["Financials"]["Income_Statement"].get("quarterly", {})
+    q_cf = data["Financials"]["Cash_Flow"].get("quarterly", {})
+
+    years_is = sorted(a_is.keys(), reverse=True)
+    years_cf = sorted(a_cf.keys(), reverse=True)
+
+    # ── TTM growth: TTM[0] vs TTM[4] ─────────────────────────────────
+    def ttm_gr(stmt, key):
+        qs = sorted(stmt.keys(), reverse=True)
+        rows = []
+        for i in range(len(qs) - 3):
+            w = qs[i:i+4]
+            vals = [fv(stmt[q].get(key)) for q in w]
+            if all(v is not None for v in vals):
+                rows.append(sum(vals))
+        if len(rows) >= 5 and rows[4] and rows[4] != 0:
+            return (rows[0] / rows[4] - 1) * 100
+        return None
+
+    # ── YoY: Q[0] vs Q[4] ────────────────────────────────────────────
+    def yoy_gr(stmt, key):
+        qs = sorted(stmt.keys(), reverse=True)
+        if len(qs) < 5: return None
+        v0 = fv(stmt[qs[0]].get(key))
+        v4 = fv(stmt[qs[4]].get(key))
+        if v0 is None or not v4 or v4 == 0: return None
+        return (v0 / v4 - 1) * 100
+
+    # ── Annual YoY: year[0] vs year[1] ───────────────────────────────
+    def yr_gr(stmt, key):
+        ys = sorted(stmt.keys(), reverse=True)
+        if len(ys) < 2: return None
+        v0 = fv(stmt[ys[0]].get(key))
+        v1 = fv(stmt[ys[1]].get(key))
+        if v0 is None or not v1 or v1 == 0: return None
+        return (v0 / v1 - 1) * 100
+
+    # ── Historical rolling YoY avg ────────────────────────────────────
+    def hist_yoy_avg(stmt, key, n):
+        ys = sorted(stmt.keys(), reverse=True)
+        vals = []
+        for i in range(min(n, len(ys) - 1)):
+            v0 = fv(stmt[ys[i]].get(key))
+            v1 = fv(stmt[ys[i+1]].get(key))
+            if v0 is not None and v1 and v1 != 0:
+                vals.append((v0 / v1 - 1) * 100)
+        return sum(vals) / len(vals) if vals else None
+
+    def fcf_yr(y):
+        d = a_cf.get(y, {})
+        f = fv(d.get("freeCashFlow"))
+        if f is None:
+            cfo  = fv(d.get("totalCashFromOperatingActivities"))
+            capex= fv(d.get("capitalExpenditures"))
+            f = cfo - abs(capex) if cfo and capex else None
+        return f
+
+    def fcf_ttm_sum():
+        qs = sorted(q_cf.keys(), reverse=True)
+        vals = []
+        for q in qs[:4]:
+            f = fv(q_cf[q].get("freeCashFlow"))
+            if f is None:
+                cfo  = fv(q_cf[q].get("totalCashFromOperatingActivities"))
+                capex= fv(q_cf[q].get("capitalExpenditures"))
+                f = cfo - abs(capex) if cfo and capex else None
+            if f is not None: vals.append(f)
+        return sum(vals) if len(vals) == 4 else None
+
+    def fcf_gr_ttm():
+        qs = sorted(q_cf.keys(), reverse=True)
+        rows = []
+        for i in range(len(qs) - 3):
+            w = qs[i:i+4]
+            vals = []
+            for q in w:
+                f = fv(q_cf[q].get("freeCashFlow"))
+                if f is None:
+                    cfo  = fv(q_cf[q].get("totalCashFromOperatingActivities"))
+                    capex= fv(q_cf[q].get("capitalExpenditures"))
+                    f = cfo - abs(capex) if cfo and capex else None
+                if f is not None: vals.append(f)
+            if len(vals) == 4: rows.append(sum(vals))
+        if len(rows) >= 5 and rows[4] and rows[4] != 0:
+            return (rows[0] / rows[4] - 1) * 100
+        return None
+
+    def fcf_yoy():
+        qs = sorted(q_cf.keys(), reverse=True)
+        if len(qs) < 5: return None
+        def get_fcf(q):
+            f = fv(q_cf[q].get("freeCashFlow"))
+            if f is None:
+                cfo  = fv(q_cf[q].get("totalCashFromOperatingActivities"))
+                capex= fv(q_cf[q].get("capitalExpenditures"))
+                f = cfo - abs(capex) if cfo and capex else None
+            return f
+        v0 = get_fcf(qs[0]); v4 = get_fcf(qs[4])
+        if v0 is None or not v4 or v4 == 0: return None
+        return (v0 / v4 - 1) * 100
+
+    def fcf_hist_yoy(n):
+        ys = sorted(a_cf.keys(), reverse=True)
+        vals = []
+        for i in range(min(n, len(ys) - 1)):
+            f0 = fcf_yr(ys[i]); f1 = fcf_yr(ys[i+1])
+            if f0 is not None and f1 and f1 != 0:
+                vals.append((f0 / f1 - 1) * 100)
+        return sum(vals) / len(vals) if vals else None
+
+    # ── Forward estimates from Earnings Trends ────────────────────────
+    trends = data.get("Earnings", {}).get("Trend", {})
+    plus1y = next((v for v in trends.values() if v.get("period") == "+1y"), {})
+    rev_gr_fwd = fv(plus1y.get("revenueEstimateGrowth"))
+    if rev_gr_fwd: rev_gr_fwd *= 100
+    ni_gr_fwd  = fv(plus1y.get("earningsEstimateGrowth"))
+    if ni_gr_fwd: ni_gr_fwd *= 100
+    eps_gr_fwd = ni_gr_fwd  # same source
+
+    # ── Current values ────────────────────────────────────────────────
+    rev_gr_ttm  = ttm_gr(q_is, "totalRevenue")
+    rev_gr_yoy  = yoy_gr(q_is, "totalRevenue")
+    rev_gr_yr   = yr_gr(a_is,  "totalRevenue")
+
+    ni_gr_ttm   = ttm_gr(q_is, "netIncome")
+    ni_gr_yoy   = yoy_gr(q_is, "netIncome")
+    ni_gr_yr    = yr_gr(a_is,  "netIncome")
+
+    ni_common   = a_is[years_is[0]].get("netIncomeApplicableToCommonShares") if years_is else None
+    ni_common0  = fv(ni_common) or fv(a_is[years_is[0]].get("netIncome")) if years_is else None
+    ni_common1  = fv(a_is[years_is[1]].get("netIncomeApplicableToCommonShares")) if len(years_is)>1 else None
+    ni_common1  = ni_common1 or (fv(a_is[years_is[1]].get("netIncome")) if len(years_is)>1 else None)
+    eps_gr_yr   = (ni_common0 / ni_common1 - 1) * 100 if ni_common0 and ni_common1 and ni_common1 != 0 else None
+    eps_gr_ttm  = ttm_gr(q_is, "netIncomeApplicableToCommonShares") or ttm_gr(q_is, "netIncome")
+    eps_gr_yoy  = yoy_gr(q_is, "netIncomeApplicableToCommonShares") or yoy_gr(q_is, "netIncome")
+
+    ebit_gr_ttm = ttm_gr(q_is, "ebit")
+    ebit_gr_yoy = yoy_gr(q_is, "ebit")
+    ebit_gr_yr  = yr_gr(a_is,  "ebit")
+
+    ebitda_gr_ttm = ttm_gr(q_is, "ebitda")
+    ebitda_gr_yoy = yoy_gr(q_is, "ebitda")
+    ebitda_gr_yr  = yr_gr(a_is,  "ebitda")
+
+    fcf_gr_ttm_v  = fcf_gr_ttm()
+    fcf_gr_yoy_v  = fcf_yoy()
+    fcf_gr_yr     = yr_gr(a_cf, "freeCashFlow")
+
+    # Rule of 40: Revenue Growth + FCF Margin
+    rev_ttm_v = sum(fv(q_is[q].get("totalRevenue")) or 0 for q in sorted(q_is.keys(), reverse=True)[:4])
+    fcf_ttm_v = fcf_ttm_sum()
+    fcfm_ttm  = fcf_ttm_v / rev_ttm_v * 100 if rev_ttm_v and fcf_ttm_v is not None else None
+    ro40_ttm  = (rev_gr_ttm or 0) + (fcfm_ttm or 0) if rev_gr_ttm is not None and fcfm_ttm is not None else None
+
+    rev_yr_v  = fv(a_is[years_is[0]].get("totalRevenue")) if years_is else None
+    fcf_yr_v  = fcf_yr(years_is[0]) if years_is else None
+    fcfm_yr   = fcf_yr_v / rev_yr_v * 100 if rev_yr_v and fcf_yr_v is not None else None
+    ro40_yr   = (rev_gr_yr or 0) + (fcfm_yr or 0) if rev_gr_yr is not None and fcfm_yr is not None else None
+
+    # ── Historical averages ───────────────────────────────────────────
+    rev_3y  = hist_yoy_avg(a_is, "totalRevenue", 3)
+    rev_5y  = hist_yoy_avg(a_is, "totalRevenue", 5)
+    rev_10y = hist_yoy_avg(a_is, "totalRevenue", 10)
+    ni_3y   = hist_yoy_avg(a_is, "netIncome",    3)
+    ni_5y   = hist_yoy_avg(a_is, "netIncome",    5)
+    ni_10y  = hist_yoy_avg(a_is, "netIncome",    10)
+    eps_3y  = hist_yoy_avg(a_is, "netIncomeApplicableToCommonShares", 3) or hist_yoy_avg(a_is, "netIncome", 3)
+    eps_5y  = hist_yoy_avg(a_is, "netIncomeApplicableToCommonShares", 5) or hist_yoy_avg(a_is, "netIncome", 5)
+    eps_10y = hist_yoy_avg(a_is, "netIncomeApplicableToCommonShares", 10) or hist_yoy_avg(a_is, "netIncome", 10)
+    ebit_3y = hist_yoy_avg(a_is, "ebit",   3)
+    ebit_5y = hist_yoy_avg(a_is, "ebit",   5)
+    ebit_10y= hist_yoy_avg(a_is, "ebit",   10)
+    ebitda_3y = hist_yoy_avg(a_is, "ebitda", 3)
+    ebitda_5y = hist_yoy_avg(a_is, "ebitda", 5)
+    ebitda_10y= hist_yoy_avg(a_is, "ebitda", 10)
+    fcf_3y  = fcf_hist_yoy(3)
+    fcf_5y  = fcf_hist_yoy(5)
+    fcf_10y = fcf_hist_yoy(10)
+
+    # Rule of 40 hist avg: rev_gr + fcf_margin per year
+    def ro40_hist(n):
+        ys = sorted(a_is.keys(), reverse=True)
+        vals = []
+        for i in range(min(n, len(ys) - 1)):
+            r0 = fv(a_is[ys[i]].get("totalRevenue"))
+            r1 = fv(a_is[ys[i+1]].get("totalRevenue"))
+            rg = (r0/r1 - 1)*100 if r0 and r1 and r1 != 0 else None
+            fc = fcf_yr(ys[i])
+            fm = fc/r0*100 if fc is not None and r0 and r0 != 0 else None
+            if rg is not None and fm is not None: vals.append(rg + fm)
+        return sum(vals)/len(vals) if vals else None
+
+    ro40_3y  = ro40_hist(3);  ro40_5y  = ro40_hist(5);  ro40_10y = ro40_hist(10)
+
+    # ── Grade thresholds (higher = better) ───────────────────────────
+    REV_T   = [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
+    NI_T    = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    EPS_T   = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    EBIT_T  = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    EBITDA_T= [(40,"ap"),(25,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    FCF_T   = [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-10,"cp"),(-20,"c")]
+    RO40_T  = [(60,"ap"),(50,"a"),(40,"am"),(30,"bp"),(20,"b"),(10,"bm"),(0,"cp"),(-10,"c")]
+
+    def fmt(v): return f"{v:.2f} %" if v is not None else "—"
+
+    def row(label, cur, avg3, avg5, avg10, T):
+        css, lbl = get_grade(cur, T) if cur is not None else ("grade-na", "—")
+        return {
+            "label": label, "fmt": fmt(cur),
+            "css": css, "lbl": lbl,
+            "avg3":  fmt(avg3),
+            "avg5":  fmt(avg5),
+            "avg10": fmt(avg10),
+            "group": label.split(" ")[0],
+        }
+
+    rows = [
+        row("Revenue Growth (Fwd)",       rev_gr_fwd,    None,      None,      None,      REV_T),
+        row("Revenue Growth (TTM)",        rev_gr_ttm,    rev_3y,    rev_5y,    rev_10y,   REV_T),
+        row("Revenue Growth (YoY)",        rev_gr_yoy,    rev_3y,    rev_5y,    rev_10y,   REV_T),
+        row("Revenue Growth (Year)",       rev_gr_yr,     rev_3y,    rev_5y,    rev_10y,   REV_T),
+        row("Net Income Growth (Fwd)",     ni_gr_fwd,     None,      None,      None,      NI_T),
+        row("Net Income Growth (TTM)",     ni_gr_ttm,     ni_3y,     ni_5y,     ni_10y,    NI_T),
+        row("Net Income Growth (YoY)",     ni_gr_yoy,     ni_3y,     ni_5y,     ni_10y,    NI_T),
+        row("Net Income Growth (Year)",    ni_gr_yr,      ni_3y,     ni_5y,     ni_10y,    NI_T),
+        row("EPS Growth (Fwd)",            eps_gr_fwd,    None,      None,      None,      EPS_T),
+        row("EPS Growth (TTM)",            eps_gr_ttm,    eps_3y,    eps_5y,    eps_10y,   EPS_T),
+        row("EPS Growth (YoY)",            eps_gr_yoy,    eps_3y,    eps_5y,    eps_10y,   EPS_T),
+        row("EPS Growth (Year)",           eps_gr_yr,     eps_3y,    eps_5y,    eps_10y,   EPS_T),
+        row("EBIT Growth (TTM)",           ebit_gr_ttm,   ebit_3y,   ebit_5y,   ebit_10y,  EBIT_T),
+        row("EBIT Growth (YoY)",           ebit_gr_yoy,   ebit_3y,   ebit_5y,   ebit_10y,  EBIT_T),
+        row("EBIT Growth (Year)",          ebit_gr_yr,    ebit_3y,   ebit_5y,   ebit_10y,  EBIT_T),
+        row("EBITDA Growth (TTM)",         ebitda_gr_ttm, ebitda_3y, ebitda_5y, ebitda_10y,EBITDA_T),
+        row("EBITDA Growth (YoY)",         ebitda_gr_yoy, ebitda_3y, ebitda_5y, ebitda_10y,EBITDA_T),
+        row("EBITDA Growth (Year)",        ebitda_gr_yr,  ebitda_3y, ebitda_5y, ebitda_10y,EBITDA_T),
+        row("FCF Growth (TTM)",            fcf_gr_ttm_v,  fcf_3y,    fcf_5y,    fcf_10y,   FCF_T),
+        row("FCF Growth (YoY)",            fcf_gr_yoy_v,  fcf_3y,    fcf_5y,    fcf_10y,   FCF_T),
+        row("FCF Growth (Year)",           fcf_gr_yr,     fcf_3y,    fcf_5y,    fcf_10y,   FCF_T),
+        row("Rule of 40 (TTM)",            ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,  RO40_T),
+        row("Rule of 40 (Year)",           ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,  RO40_T),
+    ]
+
+    # ── Overall Score ─────────────────────────────────────────────────
+    grade_score = {"ap":100,"a":92,"am":84,"bp":76,"b":68,"bm":60,"cp":52,"c":44,"cm":36,"d":28,"na":0}
+    scores = [grade_score.get(r["css"].replace("grade-",""), 0) for r in rows if r["css"] != "grade-na"]
+    overall_score = sum(scores) / len(scores) if scores else 0
+    overall_css, overall_lbl = get_grade(overall_score, [
+        (96,"ap"),(92,"a"),(84,"am"),(76,"bp"),(68,"b"),(60,"bm"),(52,"cp"),(44,"c"),(36,"cm"),(0,"d")
+    ])
+
+    # ── Chart data: annual YoY growth rates as ratio ──────────────────
+    chart_rows = []
+    for i, y in enumerate(sorted(a_is.keys())):
+        idx = sorted(a_is.keys(), reverse=True).index(y)
+        ys  = sorted(a_is.keys(), reverse=True)
+        if idx + 1 >= len(ys): continue
+        y_prev = ys[idx + 1]
+        def gr(stmt, key):
+            v0 = fv(stmt.get(y, {}).get(key))
+            v1 = fv(stmt.get(y_prev, {}).get(key))
+            return (v0/v1 - 1) if v0 and v1 and v1 != 0 else None
+        rev_g = gr(a_is, "totalRevenue")
+        ni_g  = gr(a_is, "netIncome")
+        ocf_g = gr(a_cf, "totalCashFromOperatingActivities")
+        fc0   = fcf_yr(y); fc1 = fcf_yr(y_prev)
+        fcf_g = (fc0/fc1 - 1) if fc0 and fc1 and fc1 != 0 else None
+        if rev_g is not None:
+            chart_rows.append({
+                "Year": y[:4],
+                "Rev Growth":  round(rev_g, 4),
+                "Net Income":  round(ni_g,  4) if ni_g  is not None else None,
+                "OCF":         round(ocf_g, 4) if ocf_g is not None else None,
+                "FCF":         round(fcf_g, 4) if fcf_g is not None else None,
+            })
+
+    return {
+        "rows":          rows,
+        "overall_score": overall_score,
+        "overall_css":   overall_css,
+        "overall_lbl":   overall_lbl,
+        "chart_data":    chart_rows,
+    }
+
+
 # ── Profitability Score ───────────────────────────────────────────────────────
 def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     price_data = price_data or {}
@@ -2104,8 +2398,80 @@ with tab2b:
                 st.plotly_chart(fig_p, use_container_width=True)
 
     with score_tabs[2]:  # Growth
-        st.markdown('<div class="section-header">Growth Score</div>', unsafe_allow_html=True)
-        st.info("Coming soon — Growth scoring model")
+        gs = compute_growth_score(data, hl)
+        rows_all = gs["rows"]
+
+        col_hdr, col_filter = st.columns([3, 1])
+        with col_hdr:
+            st.markdown(
+                f'<div style="font-size:22px;font-weight:700;color:#e2e8f0;margin-bottom:8px;">'
+                f'Growth <span style="color:#94a3b8;">{gs["overall_score"]:.2f}</span>'
+                f' &nbsp;{grade_badge(gs["overall_css"], gs["overall_lbl"])}</div>',
+                unsafe_allow_html=True
+            )
+        with col_filter:
+            groups = ["All Values"] + sorted(set(r["label"].split(" ")[0] for r in rows_all))
+            filter_sel = st.selectbox("", groups, key="growth_score_filter", label_visibility="collapsed")
+
+        rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].startswith(filter_sel)]
+
+        col_table, col_chart = st.columns([1, 1])
+
+        with col_table:
+            tbl = '''
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead>
+                <tr style="color:#64748b;border-bottom:1px solid #2d3748;">
+                  <th style="text-align:left;padding:6px 4px;font-weight:500;">Ratio</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">Value</th>
+                  <th style="text-align:center;padding:6px 4px;font-weight:500;">Grade</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">3Y Avg.</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">5Y Avg.</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">10Y Avg.</th>
+                </tr>
+              </thead><tbody>'''
+            for r in rows_show:
+                tbl += f'''
+                <tr style="border-bottom:1px solid #1e2535;">
+                  <td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
+                  <td style="padding:6px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg3"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg5"]}</td>
+                  <td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg10"]}</td>
+                </tr>'''
+            tbl += "</tbody></table>"
+            st.markdown(tbl, unsafe_allow_html=True)
+
+        with col_chart:
+            chart_df = pd.DataFrame(gs["chart_data"])
+            if not chart_df.empty:
+                fig_g = go.Figure()
+                growth_colors = {
+                    "Rev Growth": ("#3b82f6", "rgba(59,130,246,0.08)"),
+                    "Net Income": ("#22c55e", "rgba(34,197,94,0.08)"),
+                    "OCF":        ("#f59e0b", "rgba(245,158,11,0.08)"),
+                    "FCF":        ("#ec4899", "rgba(236,72,153,0.08)"),
+                }
+                for col_name, (line_col, fill_col) in growth_colors.items():
+                    if col_name in chart_df.columns:
+                        fig_g.add_trace(go.Scatter(
+                            x=chart_df["Year"], y=chart_df[col_name],
+                            name=col_name, mode="lines",
+                            line=dict(color=line_col, width=2),
+                        ))
+                fig_g.add_hline(y=0, line_dash="dot", line_color="#475569", line_width=1)
+                fig_g.update_layout(
+                    title=dict(text="Growth of: Revenue | Net Income | OCF | FCF", font=dict(color="#e2e8f0", size=13)),
+                    paper_bgcolor="#0f1117", plot_bgcolor="#0f1117",
+                    font=dict(color="#94a3b8", size=11),
+                    legend=dict(orientation="h", y=-0.15, bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=0, r=0, t=40, b=30),
+                    xaxis=dict(gridcolor="#1e2535", showgrid=False),
+                    yaxis=dict(gridcolor="#1e2535", tickformat=".0%"),
+                    height=420,
+                )
+                st.plotly_chart(fig_g, use_container_width=True)
 
     with score_tabs[3]:  # Health
         st.markdown('<div class="section-header">Health Score</div>', unsafe_allow_html=True)
