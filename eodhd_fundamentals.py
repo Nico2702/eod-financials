@@ -895,15 +895,30 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
             if fcf is not None and rev and rev != 0: vals.append(fcf / rev)
         return sum(vals)/len(vals) if vals else None
 
+    def roc_hist(n):
+        ys  = sorted(a_is.keys(), reverse=True)
+        bsy = sorted(a_bs.keys(), reverse=True)
+        vals = []
+        for i, y in enumerate(ys[:n]):
+            ni  = fv(a_is[y].get("netIncome"))
+            bs  = a_bs.get(y, {})
+            eq  = fv(bs.get("totalStockholderEquity"))
+            ltd = fv(bs.get("longTermDebt")) or 0
+            std = fv(bs.get("shortLongTermDebt")) or 0
+            ic  = (eq or 0) + ltd + std
+            if ni is not None and ic > 0:
+                vals.append(ni / ic)
+        return sum(vals)/len(vals) if vals else None
+
     roa_3y  = return_hist("netIncome","totalAssets",3,use_avg=True)
     roa_5y  = return_hist("netIncome","totalAssets",5,use_avg=True)
     roa_10y = return_hist("netIncome","totalAssets",10,use_avg=True)
     roe_3y  = return_hist("netIncome","totalStockholderEquity",3,use_avg=True)
     roe_5y  = return_hist("netIncome","totalStockholderEquity",5,use_avg=True)
     roe_10y = return_hist("netIncome","totalStockholderEquity",10,use_avg=True)
-    roc_3y  = None; roc_5y = None; roc_10y = None  # skip complex invested capital hist
-    roce_3y = roce_hist(3);  roce_5y = roce_hist(5);  roce_10y = roce_hist(10)
-    roic_3y = None; roic_5y = None; roic_10y = None
+    roc_3y  = roc_hist(3);  roc_5y  = roc_hist(5);  roc_10y = roc_hist(10)
+    roce_3y = roce_hist(3); roce_5y = roce_hist(5);  roce_10y = roce_hist(10)
+    roic_3y = roc_hist(3);  roic_5y = roc_hist(5);  roic_10y = roc_hist(10)
 
     gm_3y   = margin_hist("grossProfit",  "totalRevenue",3)
     gm_5y   = margin_hist("grossProfit",  "totalRevenue",5)
