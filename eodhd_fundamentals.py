@@ -3335,7 +3335,9 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         v0 = fv(stmt[ys[0]].get(key))
         vn = fv(stmt[ys[n]].get(key))
         if v0 is None or not vn or vn <= 0: return None
-        r = ((v0 / vn) ** (1 / n) - 1) * 100
+        ratio = v0 / vn
+        if ratio < 0: return None  # negative base -> complex result
+        r = (ratio ** (1 / n) - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
 
     def get_eps_annual(y):
@@ -3417,7 +3419,9 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         if len(ys) < n + 1: return None
         v0 = fcf_yr(ys[0]); vn = fcf_yr(ys[n])
         if v0 is None or not vn or vn <= 0: return None
-        r = ((v0 / vn) ** (1 / n) - 1) * 100
+        ratio = v0 / vn
+        if ratio < 0: return None  # negative base -> complex result
+        r = (ratio ** (1 / n) - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
 
     # ── Forward estimates from Earnings Trends ────────────────────────
