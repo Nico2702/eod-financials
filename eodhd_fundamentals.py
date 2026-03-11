@@ -1663,12 +1663,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 (f"(TTM now ÷ TTM 1Y ago) − 1",                  f"({raw(t0)} ÷ {raw(t4)}) − 1"),
                 ("× 100",                                          ""),
                 ("── Result ──",                                   ""),
-                (f"{field_label} Growth (TTM)",                   pct(gr) if gr is not None else (gr_note or "—")),
+                (f"{field_label} Growth (TTM)",                   f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
             ]
             fcf_note = "\n⚠ FCF = freeCashFlow; fallback CFO−|CapEx| if null\n⚠ N/A when base period ≤ 0" if is_fcf else ""
             return {"formula": f"(TTM[now] ÷ TTM[1Y ago] − 1) × 100  |  4-quarter rolling sums{fcf_note}",
                     "fields": [f"{stmt_lbl}.{api_key} — quarterly, windows [Q0:Q3] and [Q4:Q7]"],
-                    "unit": "%", "components": comps, "result": pct(gr) if gr is not None else (gr_note or "—")}
+                    "unit": "%", "components": comps, "result": f"{gr:.4f} %" if gr is not None else (gr_note or "—")}
 
         elif "CAGR" in L:
             # Extract n from label: "3Y CAGR" → 3, "5Y CAGR" → 5, "10Y CAGR" → 10
