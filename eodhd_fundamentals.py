@@ -727,16 +727,21 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 # ── Drill-Down Engine ─────────────────────────────────────────────────────────
 def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: dict) -> dict:
     """
-    Returns { formula, components: [(name, value, note)], result, unit }
-    for any known metric label.
+    Returns { formula, fields, components: [(name, value)], result, unit }
+    Every raw value, intermediate step and final result is shown explicitly.
     """
     def fv(v):
         try: return float(v) if v not in (None, "", "NA", "None") else None
         except: return None
-    def pct(v): return f"{v*100:.2f} %" if v is not None else "—"
-    def num(v, d=2): return f"{v:.{d}f}" if v is not None else "—"
-    def bn(v): return f"{v/1e9:.3f} B" if v is not None else "—"
-    def safe(a, b): return a/b if a is not None and b and b != 0 else None
+    def pct(v):  return f"{v*100:.4f} %" if v is not None else "—"
+    def num(v, d=4): return f"{v:.{d}f}" if v is not None else "—"
+    def bn(v):   return f"{v/1e9:.4f} B" if v is not None else "—"
+    def safe(a, b): return a/b if (a is not None and b is not None and b != 0) else None
+    def div_str(a, b, unit=""):
+        r = safe(a, b)
+        a_s = bn(a); b_s = bn(b)
+        r_s = (f"{r:.4f} {unit}" if unit else f"{r:.4f}") if r is not None else "—"
+        return a_s, b_s, r_s
 
     a_is = data["Financials"]["Income_Statement"].get("yearly", {})
     a_cf = data["Financials"]["Cash_Flow"].get("yearly", {})
@@ -745,480 +750,1288 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     q_cf = data["Financials"]["Cash_Flow"].get("quarterly", {})
     q_bs = data["Financials"]["Balance_Sheet"].get("quarterly", {})
 
-    years   = sorted(a_is.keys(), reverse=True)
-    years_bs= sorted(a_bs.keys(), reverse=True)
-    qis     = sorted(q_is.keys(), reverse=True)
-    qcf_s   = sorted(q_cf.keys(), reverse=True)
-    qbs_s   = sorted(q_bs.keys(), reverse=True)
+    years    = sorted(a_is.keys(), reverse=True)
+    years_bs = sorted(a_bs.keys(), reverse=True)
+    years_cf = sorted(a_cf.keys(), reverse=True)
+    qis_s    = sorted(q_is.keys(), reverse=True)
+    qcf_s    = sorted(q_cf.keys(), reverse=True)
+    qbs_s    = sorted(q_bs.keys(), reverse=True)
+
+    def ttm_quarters(stmt, key):
+        qs   = sorted(stmt.keys(), reverse=True)
+        vals = [(q, fv(stmt[q].get(key))) for q in qs[:4]]
+        total = sum(v for _, v in vals if v is not None)
+        return total if sum(1 for _, v in vals if v is not None) == 4 else None, vals
 
     def ttm(stmt, key):
-        qs = sorted(stmt.keys(), reverse=True)
-        vals = [fv(stmt[q].get(key)) for q in qs[:4]]
-        return sum(v for v in vals if v is not None) if sum(1 for v in vals if v is not None)==4 else None
+        v, _ = ttm_quarters(stmt, key)
+        return v
 
-    def get_fcf_ttm():
-        qs = sorted(q_cf.keys(), reverse=True)
-        vals = []
-        for q in qs[:4]:
-            f = fv(q_cf[q].get("freeCashFlow"))
-            if f is None:
+    def get_fcf_detail(is_ttm, yr=None):
+        """Returns (fcf, cfo, capex, fcf_raw_available, quarters_used)"""
+        if is_ttm:
+            qs = sorted(q_cf.keys(), reverse=True)[:4]
+            fcf_qs, cfo_qs, cx_qs = [], [], []
+            for q in qs:
+                f  = fv(q_cf[q].get("freeCashFlow"))
                 c  = fv(q_cf[q].get("totalCashFromOperatingActivities"))
                 cx = fv(q_cf[q].get("capitalExpenditures"))
-                f  = c - abs(cx) if c and cx else None
-            if f is not None: vals.append(f)
-        return sum(vals) if len(vals)==4 else None
-
-    def get_fcf_annual(y):
-        cf = a_cf.get(y, {})
-        f  = fv(cf.get("freeCashFlow"))
-        if f is None:
-            c  = fv(cf.get("totalCashFromOperatingActivities"))
-            cx = fv(cf.get("capitalExpenditures"))
-            f  = c - abs(cx) if c and cx else None
-        return f
+                fcf_qs.append((q, f)); cfo_qs.append((q, c)); cx_qs.append((q, cx))
+            # try direct FCF sum
+            fcf_vals = [v for _, v in fcf_qs if v is not None]
+            if len(fcf_vals) == 4:
+                return sum(fcf_vals), sum(v for _,v in cfo_qs if v is not None), \
+                       sum(v for _,v in cx_qs if v is not None), True, qs
+            # fallback: CFO - |CapEx|
+            fallback = []
+            for i, q in enumerate(qs):
+                c  = cfo_qs[i][1]; cx = cx_qs[i][1]
+                if c is not None and cx is not None: fallback.append(c - abs(cx))
+            if len(fallback) == 4:
+                return sum(fallback), sum(v for _,v in cfo_qs if v is not None), \
+                       sum(v for _,v in cx_qs if v is not None), False, qs
+            return None, None, None, False, qs
+        else:
+            y   = yr or (years_cf[0] if years_cf else None)
+            if not y: return None, None, None, False, []
+            cf  = a_cf.get(y, {})
+            fcf = fv(cf.get("freeCashFlow"))
+            cfo = fv(cf.get("totalCashFromOperatingActivities"))
+            cx  = fv(cf.get("capitalExpenditures"))
+            if fcf is not None:
+                return fcf, cfo, cx, True, [y]
+            if cfo is not None and cx is not None:
+                return cfo - abs(cx), cfo, cx, False, [y]
+            return None, cfo, cx, False, [y]
 
     mcap   = fv(hl.get("MarketCapitalization"))
-    shares = fv(hl.get("SharesOutstanding")) or fv(q_bs[qbs_s[0]].get("commonStockSharesOutstanding")) if qbs_s else None
-    price  = mcap / shares if mcap and shares else None
+    shares = fv(hl.get("SharesOutstanding")) or (fv(q_bs[qbs_s[0]].get("commonStockSharesOutstanding")) if qbs_s else None)
     ev     = fv(val.get("EnterpriseValue"))
     bsQ    = q_bs.get(qbs_s[0], {}) if qbs_s else {}
+    bsQ_dt = qbs_s[0] if qbs_s else "—"
     bsA    = a_bs.get(years_bs[0], {}) if years_bs else {}
+    bsA_dt = years_bs[0] if years_bs else "—"
     isA    = a_is.get(years[0], {}) if years else {}
-    cfA    = a_cf.get(years[0], {}) if years else {}
+    isA_dt = years[0] if years else "—"
+    cfA    = a_cf.get(years_cf[0], {}) if years_cf else {}
+    cfA_dt = years_cf[0] if years_cf else "—"
 
-    # TTM values
+    # ── TTM values with quarter breakdown ─────────────────────────────
     rev_ttm    = ttm(q_is, "totalRevenue")
     ni_ttm     = ttm(q_is, "netIncome")
     ebit_ttm   = ttm(q_is, "ebit")
     ebitda_ttm = ttm(q_is, "ebitda")
     gp_ttm     = ttm(q_is, "grossProfit")
     oi_ttm     = ttm(q_is, "operatingIncome")
-    fcf_ttm    = get_fcf_ttm()
     cfo_ttm    = ttm(q_cf, "totalCashFromOperatingActivities")
     int_ttm    = ttm(q_is, "interestExpense")
+    fcf_ttm, fcf_ttm_cfo, fcf_ttm_cx, fcf_ttm_direct, fcf_ttm_qs = get_fcf_detail(True)
 
-    # Annual values
+    # ── Annual values ─────────────────────────────────────────────────
     rev_a    = fv(isA.get("totalRevenue"))
     ni_a     = fv(isA.get("netIncome"))
     ebit_a   = fv(isA.get("ebit"))
     ebitda_a = fv(isA.get("ebitda"))
     gp_a     = fv(isA.get("grossProfit"))
     oi_a     = fv(isA.get("operatingIncome"))
-    fcf_a    = get_fcf_annual(years[0]) if years else None
     int_a    = fv(isA.get("interestExpense"))
+    fcf_a, fcf_a_cfo, fcf_a_cx, fcf_a_direct, _ = get_fcf_detail(False)
 
-    # BS quarterly
-    cash_q   = fv(bsQ.get("cashAndEquivalents")) or fv(bsQ.get("cash"))
-    ltd_q    = fv(bsQ.get("longTermDebt")) or 0
-    std_q    = fv(bsQ.get("shortLongTermDebt")) or 0
-    debt_q   = ltd_q + std_q
-    eq_q     = fv(bsQ.get("totalStockholderEquity"))
-    ta_q     = fv(bsQ.get("totalAssets"))
-    ca_q     = fv(bsQ.get("totalCurrentAssets"))
-    cl_q     = fv(bsQ.get("totalCurrentLiabilities"))
+    # ── BS quarterly ──────────────────────────────────────────────────
+    cash_q = fv(bsQ.get("cashAndEquivalents")) or fv(bsQ.get("cash"))
+    ltd_q  = fv(bsQ.get("longTermDebt")) or 0
+    std_q  = fv(bsQ.get("shortLongTermDebt")) or 0
+    debt_q = ltd_q + std_q
+    eq_q   = fv(bsQ.get("totalStockholderEquity"))
+    ta_q   = fv(bsQ.get("totalAssets"))
+    ca_q   = fv(bsQ.get("totalCurrentAssets"))
+    cl_q   = fv(bsQ.get("totalCurrentLiabilities"))
+    tl_q   = fv(bsQ.get("totalLiab"))
+    inv_q  = fv(bsQ.get("inventory")) or 0
+    re_q   = fv(bsQ.get("retainedEarnings"))
+    sh_q   = fv(bsQ.get("commonStockSharesOutstanding"))
 
-    # BS annual
-    cash_a   = fv(bsA.get("cashAndEquivalents")) or fv(bsA.get("cash"))
-    ltd_a    = fv(bsA.get("longTermDebt")) or 0
-    std_a    = fv(bsA.get("shortLongTermDebt")) or 0
-    debt_a   = ltd_a + std_a
-    eq_a     = fv(bsA.get("totalStockholderEquity"))
-    ta_a     = fv(bsA.get("totalAssets"))
-    ca_a     = fv(bsA.get("totalCurrentAssets"))
-    cl_a     = fv(bsA.get("totalCurrentLiabilities"))
-    eq_prev  = fv(a_bs.get(years_bs[1], {}).get("totalStockholderEquity")) if len(years_bs)>1 else None
-    ta_prev  = fv(a_bs.get(years_bs[1], {}).get("totalAssets")) if len(years_bs)>1 else None
-    eq_avg   = (eq_a + eq_prev)/2 if eq_a and eq_prev else eq_a
-    ta_avg   = (ta_a + ta_prev)/2 if ta_a and ta_prev else ta_a
-    tl_q     = fv(bsQ.get("totalLiab"))
-    tl_a     = fv(bsA.get("totalLiab"))
+    # ── BS annual ─────────────────────────────────────────────────────
+    cash_a = fv(bsA.get("cashAndEquivalents")) or fv(bsA.get("cash"))
+    ltd_a  = fv(bsA.get("longTermDebt")) or 0
+    std_a  = fv(bsA.get("shortLongTermDebt")) or 0
+    debt_a = ltd_a + std_a
+    eq_a   = fv(bsA.get("totalStockholderEquity"))
+    ta_a   = fv(bsA.get("totalAssets"))
+    ca_a   = fv(bsA.get("totalCurrentAssets"))
+    cl_a   = fv(bsA.get("totalCurrentLiabilities"))
+    tl_a   = fv(bsA.get("totalLiab"))
+    inv_a  = fv(bsA.get("inventory")) or 0
+    sh_a   = fv(bsA.get("commonStockSharesOutstanding"))
 
-    nd_q = debt_q - (cash_q or 0)
-    nd_a = debt_a - (cash_a or 0)
-    cap_emp_ttm = (ta_q - cl_q) if ta_q and cl_q else None
+    # ── Prior-year BS (for averages) ──────────────────────────────────
+    bsA1   = a_bs.get(years_bs[1], {}) if len(years_bs) > 1 else {}
+    bsA1_dt= years_bs[1] if len(years_bs) > 1 else "—"
+    eq_a1  = fv(bsA1.get("totalStockholderEquity"))
+    ta_a1  = fv(bsA1.get("totalAssets"))
+    eq_avg = (eq_a + eq_a1) / 2 if eq_a and eq_a1 else eq_a
+    ta_avg = (ta_a + ta_a1) / 2 if ta_a and ta_a1 else ta_a
+
+    nd_q  = debt_q - (cash_q or 0)
+    nd_a  = debt_a - (cash_a or 0)
     ic_ttm = (eq_q or 0) + debt_q
     ic_a   = (eq_a or 0) + debt_a
+    ce_ttm = (ta_q - cl_q) if ta_q and cl_q else None
+    ce_a   = (ta_a - cl_a) if ta_a and cl_a else None
 
-    UNKNOWN = {"formula": "—", "components": [], "result": "—", "unit": ""}
+    UNKNOWN = {"formula": "—", "fields": [], "components": [], "result": "—", "unit": ""}
+    L = label
 
-    # ── lookup table ──────────────────────────────────────────────────
-    L = label  # shorthand
-
-    # ── VALUE ─────────────────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════
+    # VALUE
+    # ═══════════════════════════════════════════════════════════════════
     if "P/Earnings" in L or "P/E" in L:
-        pe = safe(mcap, ni_ttm) if "TTM" in L or "Cur" in L else safe(mcap, ni_a)
-        ni = ni_ttm if "TTM" in L or "Cur" in L else ni_a
-        return {"formula": "Market Cap ÷ Net Income", "fields": ["Highlights.MarketCapitalization", "Income_Statement.netIncome (quarterly, TTM sum)"], "unit": "x",
-                "components": [("Market Cap", bn(mcap)), ("Net Income", bn(ni))],
-                "result": num(pe)}
+        if "Fwd" in L:
+            fwd_pe_raw = fv(val.get("ForwardPE"))
+            return {
+                "formula": "Valuation.ForwardPE — direct EODHD API field (analyst consensus)",
+                "fields":  ["Valuation.ForwardPE"],
+                "unit": "x",
+                "components": [
+                    ("API field",                   "Valuation.ForwardPE"),
+                    ("Raw value",                   num(fwd_pe_raw, 4)),
+                    ("── Result ──",                ""),
+                    ("P/E (Fwd)",                   num(fwd_pe_raw, 4) + " x"),
+                ],
+                "result": num(fwd_pe_raw, 2)}
+
+        is_ttm = "TTM" in L or "Cur" in L
+        ni  = ni_ttm if is_ttm else ni_a
+        dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        pe  = safe(mcap, ni)
+        return {
+            "formula": "Market Cap ÷ Net Income",
+            "fields":  ["Highlights.MarketCapitalization",
+                        "Income_Statement.netIncome (quarterly TTM sum)" if is_ttm else "Income_Statement.netIncome (annual)"],
+            "unit": "x",
+            "components": [
+                ("Market Cap  [Highlights.MarketCapitalization]", bn(mcap)),
+                (f"Net Income  [{dt}]",                          bn(ni)),
+                ("── Calculation ──",                             ""),
+                (f"Market Cap ÷ Net Income",                      f"{bn(mcap)} ÷ {bn(ni)}"),
+                ("── Result ──",                                  ""),
+                ("P/E",                                           num(pe, 4) + " x"),
+            ],
+            "result": num(pe, 2)}
 
     if "P/Sales" in L:
-        rev = rev_ttm if "TTM" in L or "Cur" in L else rev_a
+        is_ttm = "TTM" in L or "Cur" in L
+        rev = rev_ttm if is_ttm else rev_a
+        dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         ps  = safe(mcap, rev)
-        return {"formula": "Market Cap ÷ Revenue", "fields": ["Highlights.MarketCapitalization", "Income_Statement.totalRevenue (quarterly, TTM sum)"], "unit": "x",
-                "components": [("Market Cap", bn(mcap)), ("Revenue", bn(rev))],
-                "result": num(ps)}
+        return {
+            "formula": "Market Cap ÷ Revenue",
+            "fields":  ["Highlights.MarketCapitalization",
+                        "Income_Statement.totalRevenue"],
+            "unit": "x",
+            "components": [
+                ("Market Cap  [Highlights.MarketCapitalization]", bn(mcap)),
+                (f"Revenue  [{dt}]",                              bn(rev)),
+                ("── Calculation ──",                             ""),
+                ("Market Cap ÷ Revenue",                          f"{bn(mcap)} ÷ {bn(rev)}"),
+                ("── Result ──",                                  ""),
+                ("P/S",                                           num(ps, 4) + " x"),
+            ],
+            "result": num(ps, 2)}
 
     if "P/Book" in L:
-        pb = safe(mcap, eq_q) if "Cur" in L or "Quarterly" in L else safe(mcap, eq_a)
-        eq = eq_q if "Cur" in L or "Quarterly" in L else eq_a
-        return {"formula": "Market Cap ÷ Stockholder Equity", "fields": ["Highlights.MarketCapitalization", "Balance_Sheet.totalStockholderEquity"], "unit": "x",
-                "components": [("Market Cap", bn(mcap)), ("Stockholder Equity", bn(eq))],
-                "result": num(pb)}
+        is_q = "Cur" in L or "Quarterly" in L
+        eq   = eq_q if is_q else eq_a
+        dt   = bsQ_dt if is_q else bsA_dt
+        pb   = safe(mcap, eq)
+        return {
+            "formula": "Market Cap ÷ Stockholder Equity",
+            "fields":  ["Highlights.MarketCapitalization",
+                        "Balance_Sheet.totalStockholderEquity"],
+            "unit": "x",
+            "components": [
+                ("Market Cap  [Highlights.MarketCapitalization]",      bn(mcap)),
+                (f"Stockholder Equity  [Balance_Sheet {dt}]",          bn(eq)),
+                ("── Calculation ──",                                   ""),
+                ("Market Cap ÷ Equity",                                 f"{bn(mcap)} ÷ {bn(eq)}"),
+                ("── Result ──",                                        ""),
+                ("P/B",                                                 num(pb, 4) + " x"),
+            ],
+            "result": num(pb, 2)}
 
     if "P/FCF" in L:
-        fcf = fcf_ttm if "TTM" in L or "Cur" in L else fcf_a
-        pf  = safe(mcap, fcf)
-        return {"formula": "Market Cap ÷ Free Cash Flow", "fields": ["Highlights.MarketCapitalization", "Cash_Flow.freeCashFlow → fallback: totalCashFromOperatingActivities − |capitalExpenditures|"], "unit": "x",
-                "components": [("Market Cap", bn(mcap)), ("FCF", bn(fcf)),
-                                ("FCF = CFO − CapEx" if fcf_a else "", "")],
-                "result": num(pf)}
+        is_ttm = "TTM" in L or "Cur" in L
+        fcf    = fcf_ttm    if is_ttm else fcf_a
+        cfo    = fcf_ttm_cfo if is_ttm else fcf_a_cfo
+        cx     = fcf_ttm_cx  if is_ttm else fcf_a_cx
+        direct = fcf_ttm_direct if is_ttm else fcf_a_direct
+        dt     = f"TTM ({qcf_s[0][:7]}…{qcf_s[3][:7]})" if is_ttm else cfA_dt
+        pf     = safe(mcap, fcf)
+        comps  = [("Market Cap  [Highlights.MarketCapitalization]", bn(mcap))]
+        if direct:
+            comps += [
+                (f"FCF (direct)  [Cash_Flow.freeCashFlow {dt}]",   bn(fcf)),
+                ("── No fallback needed ──",                         "freeCashFlow used directly"),
+            ]
+        else:
+            comps += [
+                (f"CFO  [Cash_Flow.totalCashFromOperatingActivities {dt}]", bn(cfo)),
+                (f"CapEx  [Cash_Flow.capitalExpenditures {dt}]",            bn(cx)),
+                ("── FCF fallback: CFO − |CapEx| ──",               "freeCashFlow was null"),
+                (f"FCF = {bn(cfo)} − |{bn(cx)}|",                   bn(fcf)),
+            ]
+        comps += [
+            ("── Calculation ──",                                    ""),
+            ("Market Cap ÷ FCF",                                     f"{bn(mcap)} ÷ {bn(fcf)}"),
+            ("── Result ──",                                         ""),
+            ("P/FCF",                                                num(pf, 4) + " x"),
+        ]
+        return {
+            "formula": "Market Cap ÷ Free Cash Flow\n(FCF = Cash_Flow.freeCashFlow; fallback: CFO − |CapEx|)",
+            "fields":  ["Highlights.MarketCapitalization",
+                        "Cash_Flow.freeCashFlow",
+                        "Cash_Flow.totalCashFromOperatingActivities (fallback numerator)",
+                        "Cash_Flow.capitalExpenditures (fallback subtractor)"],
+            "unit": "x",
+            "components": comps,
+            "result": num(pf, 2)}
 
     if "EV/Revenue" in L:
-        rev = rev_ttm if "Cur" in L or "TTM" in L else rev_a
-        evr = safe(ev, rev)
-        return {"formula": "Enterprise Value ÷ Revenue", "fields": ["Valuation.EnterpriseValue", "Income_Statement.totalRevenue"], "unit": "x",
-                "components": [("Enterprise Value", bn(ev)), ("Revenue", bn(rev))],
-                "result": num(evr)}
+        is_ttm = "Cur" in L or "TTM" in L
+        rev    = rev_ttm if is_ttm else rev_a
+        dt     = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        # EV breakdown
+        ev_raw = fv(val.get("EnterpriseValue"))
+        r      = safe(ev, rev)
+        return {
+            "formula": "Enterprise Value ÷ Revenue\n(EV = Valuation.EnterpriseValue; if null → MCap + Debt − Cash)",
+            "fields":  ["Valuation.EnterpriseValue", "Income_Statement.totalRevenue"],
+            "unit": "x",
+            "components": [
+                ("EV  [Valuation.EnterpriseValue]",         bn(ev_raw)),
+                (f"Revenue  [{dt}]",                        bn(rev)),
+                ("── Calculation ──",                        ""),
+                ("EV ÷ Revenue",                            f"{bn(ev)} ÷ {bn(rev)}"),
+                ("── Result ──",                             ""),
+                ("EV/Revenue",                              num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "EV/EBIT" in L and "EBITDA" not in L:
-        ebit = ebit_ttm if "Cur" in L or "TTM" in L else ebit_a
-        r    = safe(ev, ebit)
-        return {"formula": "Enterprise Value ÷ EBIT", "fields": ["Valuation.EnterpriseValue", "Income_Statement.ebit"], "unit": "x",
-                "components": [("Enterprise Value", bn(ev)), ("EBIT (TTM)", bn(ebit))],
-                "result": num(r)}
+        is_ttm = "Cur" in L or "TTM" in L
+        ebit   = ebit_ttm if is_ttm else ebit_a
+        dt     = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        r      = safe(ev, ebit)
+        return {
+            "formula": "Enterprise Value ÷ EBIT",
+            "fields":  ["Valuation.EnterpriseValue", "Income_Statement.ebit"],
+            "unit": "x",
+            "components": [
+                ("EV  [Valuation.EnterpriseValue]",   bn(ev)),
+                (f"EBIT  [Income_Statement.ebit {dt}]", bn(ebit)),
+                ("── Calculation ──",                   ""),
+                ("EV ÷ EBIT",                          f"{bn(ev)} ÷ {bn(ebit)}"),
+                ("── Result ──",                        ""),
+                ("EV/EBIT",                            num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "EV/EBITDA" in L:
-        ebitda = ebitda_ttm if "Cur" in L or "TTM" in L else ebitda_a
+        is_ttm = "Cur" in L or "TTM" in L
+        ebitda = ebitda_ttm if is_ttm else ebitda_a
+        dt     = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         r      = safe(ev, ebitda)
-        return {"formula": "Enterprise Value ÷ EBITDA", "fields": ["Valuation.EnterpriseValue", "Income_Statement.ebitda"], "unit": "x",
-                "components": [("Enterprise Value", bn(ev)), ("EBITDA", bn(ebitda))],
-                "result": num(r)}
+        return {
+            "formula": "Enterprise Value ÷ EBITDA",
+            "fields":  ["Valuation.EnterpriseValue", "Income_Statement.ebitda"],
+            "unit": "x",
+            "components": [
+                ("EV  [Valuation.EnterpriseValue]",        bn(ev)),
+                (f"EBITDA  [Income_Statement.ebitda {dt}]", bn(ebitda)),
+                ("── Calculation ──",                        ""),
+                ("EV ÷ EBITDA",                            f"{bn(ev)} ÷ {bn(ebitda)}"),
+                ("── Result ──",                             ""),
+                ("EV/EBITDA",                              num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Earnings Yield" in L:
-        ni = ni_ttm if "Cur" in L or "TTM" in L else ni_a
-        r  = safe(ni, mcap)
-        return {"formula": "Net Income ÷ Market Cap × 100", "unit": "%", "fields": ["Income_Statement.netIncome", "Highlights.MarketCapitalization"],
-                "components": [("Net Income", bn(ni)), ("Market Cap", bn(mcap))],
-                "result": pct(r)}
+        is_ttm = "Cur" in L or "TTM" in L
+        ni  = ni_ttm if is_ttm else ni_a
+        dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        r   = safe(ni, mcap)
+        return {
+            "formula": "Net Income ÷ Market Cap × 100  (inverse of P/E)",
+            "fields":  ["Income_Statement.netIncome", "Highlights.MarketCapitalization"],
+            "unit": "%",
+            "components": [
+                (f"Net Income  [Income_Statement.netIncome {dt}]",  bn(ni)),
+                ("Market Cap  [Highlights.MarketCapitalization]",   bn(mcap)),
+                ("── Calculation ──",                                ""),
+                ("Net Income ÷ Market Cap",                         f"{bn(ni)} ÷ {bn(mcap)}"),
+                ("× 100",                                           ""),
+                ("── Result ──",                                     ""),
+                ("Earnings Yield",                                  pct(r)),
+            ],
+            "result": pct(r)}
 
     if "FCF Yield" in L:
-        fcf = fcf_ttm if "TTM" in L or "Cur" in L else fcf_a
-        r   = safe(fcf, mcap)
-        return {"formula": "Free Cash Flow ÷ Market Cap × 100", "fields": ["Cash_Flow.freeCashFlow", "Highlights.MarketCapitalization"], "unit": "%",
-                "components": [("FCF", bn(fcf)), ("Market Cap", bn(mcap))],
-                "result": pct(r)}
+        is_ttm = "TTM" in L or "Cur" in L
+        fcf    = fcf_ttm if is_ttm else fcf_a
+        direct = fcf_ttm_direct if is_ttm else fcf_a_direct
+        cfo    = fcf_ttm_cfo if is_ttm else fcf_a_cfo
+        cx     = fcf_ttm_cx  if is_ttm else fcf_a_cx
+        dt     = f"TTM ({qcf_s[0][:7]}…{qcf_s[3][:7]})" if is_ttm else cfA_dt
+        r      = safe(fcf, mcap)
+        comps  = []
+        if direct:
+            comps.append((f"FCF  [Cash_Flow.freeCashFlow {dt}]", bn(fcf)))
+        else:
+            comps += [
+                (f"CFO  [Cash_Flow.totalCashFromOperatingActivities {dt}]", bn(cfo)),
+                (f"CapEx  [Cash_Flow.capitalExpenditures {dt}]",            bn(cx)),
+                ("FCF = CFO − |CapEx| (fallback)",                          bn(fcf)),
+            ]
+        comps += [
+            ("Market Cap  [Highlights.MarketCapitalization]",               bn(mcap)),
+            ("── Calculation ──",                                            ""),
+            ("FCF ÷ Market Cap × 100",                                      f"{bn(fcf)} ÷ {bn(mcap)}"),
+            ("── Result ──",                                                 ""),
+            ("FCF Yield",                                                    pct(r)),
+        ]
+        return {
+            "formula": "Free Cash Flow ÷ Market Cap × 100",
+            "fields":  ["Cash_Flow.freeCashFlow (fallback: CFO − |CapEx|)",
+                        "Highlights.MarketCapitalization"],
+            "unit": "%", "components": comps, "result": pct(r)}
 
     if "PEG" in L:
-        fwd_pe = safe(mcap, ni_a)
-        trends = data.get("Earnings",{}).get("Trend",{})
-        p1y = next((v for v in trends.values() if v.get("period")=="+1y"),{})
-        eg  = fv(p1y.get("earningsEstimateGrowth"))
-        peg = safe(fwd_pe, (eg*100) if eg else None)
-        return {"formula": "Forward P/E ÷ EPS Growth Rate (%)", "fields": ["Highlights.MarketCapitalization", "Income_Statement.netIncome (annual)", "Earnings.Trend[+1y].earningsEstimateGrowth"], "unit": "x",
-                "components": [("Forward P/E", num(fwd_pe)), ("EPS Growth (Fwd)", pct(eg))],
-                "result": num(peg)}
+        fwd_pe_raw  = fv(val.get("ForwardPE"))
+        fwd_pe_calc = safe(mcap, ni_a)
+        fwd_pe      = fwd_pe_raw or fwd_pe_calc
+        trends      = data.get("Earnings", {}).get("Trend", {})
+        p1y         = next((v for v in trends.values() if v.get("period") == "+1y"), {})
+        p1y_date    = next((k for k, v in trends.items() if v.get("period") == "+1y"), "—")
+        eg          = fv(p1y.get("earningsEstimateGrowth"))
+        eg_n        = p1y.get("earningsEstimateNumberOfAnalysts", "—")
+        peg         = safe(fwd_pe, (eg * 100) if eg else None)
+        return {
+            "formula": "Forward P/E ÷ EPS Growth Rate (%)",
+            "fields":  ["Valuation.ForwardPE",
+                        "Earnings.Trend[+1y].earningsEstimateGrowth",
+                        "Earnings.Trend[+1y].earningsEstimateNumberOfAnalysts"],
+            "unit": "x",
+            "components": [
+                ("Valuation.ForwardPE  (API direct)",         num(fwd_pe_raw, 4) if fwd_pe_raw else "null → fallback"),
+                ("Forward P/E fallback: MCap ÷ NI(annual)",   num(fwd_pe_calc, 4) if not fwd_pe_raw else "—  (not used)"),
+                ("Forward P/E  (used)",                        num(fwd_pe, 4)),
+                ("Earnings.Trend date key",                    p1y_date),
+                ("earningsEstimateGrowth  (raw, decimal)",    num(eg, 6) if eg else "—"),
+                ("EPS Growth  (×100 → %)",                    pct(eg)),
+                ("# Analysts",                                 str(eg_n)),
+                ("── Calculation ──",                          ""),
+                (f"PEG = {num(fwd_pe,4)} ÷ {pct(eg)}",        ""),
+                ("── Result ──",                               ""),
+                ("PEG Ratio",                                  num(peg, 4) + " x"),
+            ],
+            "result": num(peg, 2)}
 
-    # ── PROFITABILITY ──────────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════
+    # PROFITABILITY
+    # ═══════════════════════════════════════════════════════════════════
     if "Return on Assets" in L:
-        ni   = ni_ttm if "TTM" in L else ni_a
-        ta   = ta_q   if "TTM" in L else ta_avg
-        lbl  = "Avg(Assets Y0, Y-1)" if "Year" in L else "Total Assets (latest Q)"
-        return {"formula": "Net Income ÷ Total Assets × 100", "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalAssets"], "unit": "%",
-                "components": [("Net Income", bn(ni)), (lbl, bn(ta))],
-                "result": pct(safe(ni, ta))}
+        is_ttm = "TTM" in L
+        ni     = ni_ttm if is_ttm else ni_a
+        ta     = ta_q   if is_ttm else ta_avg
+        dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        r      = safe(ni, ta)
+        comps  = [
+            (f"Net Income  [Income_Statement.netIncome {dt_ni}]",      bn(ni)),
+            (f"Total Assets  [Balance_Sheet.totalAssets {bsQ_dt if is_ttm else bsA_dt}]", bn(ta)),
+        ]
+        if not is_ttm and eq_a and eq_a1:
+            comps += [
+                (f"Total Assets Y-1  [{bsA1_dt}]",                    bn(ta_a1)),
+                (f"Avg Assets = ({bn(ta_a)} + {bn(ta_a1)}) ÷ 2",     bn(ta_avg)),
+            ]
+        comps += [
+            ("── Calculation ──", ""),
+            (f"Net Income ÷ Assets × 100", f"{bn(ni)} ÷ {bn(ta)}"),
+            ("── Result ──", ""),
+            ("ROA", pct(r)),
+        ]
+        return {"formula": "Net Income ÷ Total Assets × 100",
+                "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalAssets"],
+                "unit": "%", "components": comps, "result": pct(r)}
 
     if "Return on Equity" in L and "Cap" not in L and "Inv" not in L:
-        ni   = ni_ttm if "TTM" in L else ni_a
-        eq   = eq_q   if "TTM" in L else eq_avg
-        lbl  = "Avg(Equity Y0, Y-1)" if "Year" in L else "Equity (latest Q)"
-        return {"formula": "Net Income ÷ Stockholder Equity × 100", "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity"], "unit": "%",
-                "components": [("Net Income", bn(ni)), (lbl, bn(eq))],
-                "result": pct(safe(ni, eq))}
+        is_ttm = "TTM" in L
+        ni     = ni_ttm if is_ttm else ni_a
+        eq     = eq_q   if is_ttm else eq_avg
+        dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        r      = safe(ni, eq)
+        comps  = [
+            (f"Net Income  [Income_Statement.netIncome {dt_ni}]",       bn(ni)),
+            (f"Equity  [Balance_Sheet.totalStockholderEquity {bsQ_dt if is_ttm else bsA_dt}]", bn(eq)),
+        ]
+        if not is_ttm and eq_a and eq_a1:
+            comps += [
+                (f"Equity Y-1  [{bsA1_dt}]",                           bn(eq_a1)),
+                (f"Avg Equity = ({bn(eq_a)} + {bn(eq_a1)}) ÷ 2",      bn(eq_avg)),
+            ]
+        comps += [
+            ("── Calculation ──", ""),
+            (f"Net Income ÷ Equity × 100", f"{bn(ni)} ÷ {bn(eq)}"),
+            ("── Result ──", ""),
+            ("ROE", pct(r)),
+        ]
+        return {"formula": "Net Income ÷ Stockholder Equity × 100",
+                "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity"],
+                "unit": "%", "components": comps, "result": pct(r)}
 
     if "Return on Cap. Empl" in L or "Return on Capital Empl" in L:
-        ebit = ebit_ttm if "TTM" in L else ebit_a
-        ce   = cap_emp_ttm if "TTM" in L else ((ta_a - cl_a) if ta_a and cl_a else None)
-        return {"formula": "EBIT ÷ Capital Employed × 100\n(Capital Employed = Total Assets − Current Liabilities)", "fields": ["Income_Statement.ebit", "Balance_Sheet.totalAssets", "Balance_Sheet.totalCurrentLiabilities"], "unit": "%",
-                "components": [("EBIT", bn(ebit)), ("Total Assets", bn(ta_q if "TTM" in L else ta_a)),
-                                ("Current Liabilities", bn(cl_q if "TTM" in L else cl_a)),
-                                ("Capital Employed", bn(ce))],
-                "result": pct(safe(ebit, ce))}
+        is_ttm = "TTM" in L
+        ebit   = ebit_ttm if is_ttm else ebit_a
+        ta     = ta_q if is_ttm else ta_a
+        cl     = cl_q if is_ttm else cl_a
+        ce     = (ta - cl) if ta and cl else None
+        dt_e   = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        dt_bs  = bsQ_dt if is_ttm else bsA_dt
+        r      = safe(ebit, ce)
+        return {
+            "formula": "EBIT ÷ Capital Employed × 100\nCapital Employed = Total Assets − Current Liabilities",
+            "fields":  ["Income_Statement.ebit", "Balance_Sheet.totalAssets", "Balance_Sheet.totalCurrentLiabilities"],
+            "unit": "%",
+            "components": [
+                (f"EBIT  [Income_Statement.ebit {dt_e}]",                             bn(ebit)),
+                (f"Total Assets  [Balance_Sheet.totalAssets {dt_bs}]",               bn(ta)),
+                (f"Current Liabilities  [Balance_Sheet.totalCurrentLiabilities {dt_bs}]", bn(cl)),
+                (f"Capital Employed = {bn(ta)} − {bn(cl)}",                          bn(ce)),
+                ("── Calculation ──",                                                  ""),
+                (f"EBIT ÷ Capital Employed × 100",                                    f"{bn(ebit)} ÷ {bn(ce)}"),
+                ("── Result ──",                                                       ""),
+                ("ROCE",                                                               pct(r)),
+            ],
+            "result": pct(r)}
 
     if "Return on Inv" in L or "ROIC" in L:
-        ni  = ni_ttm if "TTM" in L else ni_a
-        inv = ic_ttm if "TTM" in L else ic_a
-        return {"formula": "Net Income ÷ Invested Capital × 100\n(Invested Capital = Equity + Total Debt)", "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity", "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"], "unit": "%",
-                "components": [("Net Income", bn(ni)), ("Equity", bn(eq_q if "TTM" in L else eq_a)),
-                                ("Total Debt", bn(debt_q if "TTM" in L else debt_a)),
-                                ("Invested Capital", bn(inv))],
-                "result": pct(safe(ni, inv))}
+        is_ttm = "TTM" in L
+        ni     = ni_ttm if is_ttm else ni_a
+        eq     = eq_q if is_ttm else eq_a
+        ltd    = ltd_q if is_ttm else ltd_a
+        std    = std_q if is_ttm else std_a
+        debt   = ltd + std
+        ic     = ic_ttm if is_ttm else ic_a
+        dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        dt_bs  = bsQ_dt if is_ttm else bsA_dt
+        r      = safe(ni, ic)
+        return {
+            "formula": "Net Income ÷ Invested Capital × 100\nInvested Capital = Equity + Long-Term Debt + Short-Term Debt",
+            "fields":  ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity",
+                        "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
+            "unit": "%",
+            "components": [
+                (f"Net Income  [Income_Statement.netIncome {dt_ni}]",                  bn(ni)),
+                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",            bn(eq)),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",              bn(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt_bs}]",        bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}",                               bn(debt)),
+                (f"Invested Capital = {bn(eq)} + {bn(debt)}",                         bn(ic)),
+                ("── Calculation ──",                                                   ""),
+                (f"NI ÷ Invested Capital × 100",                                       f"{bn(ni)} ÷ {bn(ic)}"),
+                ("── Result ──",                                                        ""),
+                ("ROIC",                                                                pct(r)),
+            ],
+            "result": pct(r)}
 
     if "Return on Capital" in L and "Empl" not in L:
-        ni  = ni_ttm if "TTM" in L else ni_a
-        inv = ic_ttm if "TTM" in L else ic_a
-        return {"formula": "Net Income ÷ (Equity + Debt) × 100", "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity", "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"], "unit": "%",
-                "components": [("Net Income", bn(ni)), ("Equity + Debt", bn(inv))],
-                "result": pct(safe(ni, inv))}
+        is_ttm = "TTM" in L
+        ni     = ni_ttm if is_ttm else ni_a
+        eq     = eq_q if is_ttm else eq_a
+        ltd    = ltd_q if is_ttm else ltd_a
+        std    = std_q if is_ttm else std_a
+        debt   = ltd + std
+        ic     = ic_ttm if is_ttm else ic_a
+        dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        dt_bs  = bsQ_dt if is_ttm else bsA_dt
+        r      = safe(ni, ic)
+        return {
+            "formula": "Net Income ÷ (Equity + Debt) × 100",
+            "fields":  ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity",
+                        "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
+            "unit": "%",
+            "components": [
+                (f"Net Income  [{dt_ni}]",               bn(ni)),
+                (f"Equity  [{dt_bs}]",                   bn(eq)),
+                (f"Long-Term Debt  [{dt_bs}]",           bn(ltd)),
+                (f"Short-Term Debt  [{dt_bs}]",          bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"Equity + Debt = {bn(eq)} + {bn(debt)}", bn(ic)),
+                ("── Calculation ──",                    ""),
+                (f"NI ÷ (Eq + Debt) × 100",             f"{bn(ni)} ÷ {bn(ic)}"),
+                ("── Result ──",                         ""),
+                ("ROC",                                  pct(r)),
+            ],
+            "result": pct(r)}
 
     if "Gross Margin" in L:
-        gp  = gp_ttm if "TTM" in L else gp_a
-        rev = rev_ttm if "TTM" in L else rev_a
-        return {"formula": "Gross Profit ÷ Revenue × 100", "fields": ["Income_Statement.grossProfit", "Income_Statement.totalRevenue"], "unit": "%",
-                "components": [("Gross Profit", bn(gp)), ("Revenue", bn(rev))],
-                "result": pct(safe(gp, rev))}
+        is_ttm = "TTM" in L
+        gp  = gp_ttm if is_ttm else gp_a
+        rev = rev_ttm if is_ttm else rev_a
+        dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        r   = safe(gp, rev)
+        return {
+            "formula": "Gross Profit ÷ Revenue × 100",
+            "fields":  ["Income_Statement.grossProfit", "Income_Statement.totalRevenue"],
+            "unit": "%",
+            "components": [
+                (f"Gross Profit  [Income_Statement.grossProfit {dt}]", bn(gp)),
+                (f"Revenue  [Income_Statement.totalRevenue {dt}]",     bn(rev)),
+                ("── Calculation ──",                                    ""),
+                ("Gross Profit ÷ Revenue × 100",                       f"{bn(gp)} ÷ {bn(rev)}"),
+                ("── Result ──",                                         ""),
+                ("Gross Margin",                                         pct(r)),
+            ],
+            "result": pct(r)}
 
     if "Operating Margin" in L:
-        oi  = oi_ttm if "TTM" in L else oi_a
-        rev = rev_ttm if "TTM" in L else rev_a
-        return {"formula": "Operating Income ÷ Revenue × 100", "fields": ["Income_Statement.operatingIncome", "Income_Statement.totalRevenue"], "unit": "%",
-                "components": [("Operating Income", bn(oi)), ("Revenue", bn(rev))],
-                "result": pct(safe(oi, rev))}
+        is_ttm = "TTM" in L
+        oi  = oi_ttm if is_ttm else oi_a
+        rev = rev_ttm if is_ttm else rev_a
+        dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        r   = safe(oi, rev)
+        return {
+            "formula": "Operating Income ÷ Revenue × 100",
+            "fields":  ["Income_Statement.operatingIncome", "Income_Statement.totalRevenue"],
+            "unit": "%",
+            "components": [
+                (f"Operating Income  [Income_Statement.operatingIncome {dt}]", bn(oi)),
+                (f"Revenue  [{dt}]",                                           bn(rev)),
+                ("── Calculation ──",                                           ""),
+                ("Operating Income ÷ Revenue × 100",                          f"{bn(oi)} ÷ {bn(rev)}"),
+                ("── Result ──",                                                ""),
+                ("Operating Margin",                                            pct(r)),
+            ],
+            "result": pct(r)}
 
     if "EBIT Margin" in L:
-        rev = rev_ttm if "TTM" in L else rev_a
-        return {"formula": "EBIT ÷ Revenue × 100", "fields": ["Income_Statement.ebit", "Income_Statement.totalRevenue"], "unit": "%",
-                "components": [("EBIT", bn(ebit_ttm if "TTM" in L else ebit_a)), ("Revenue", bn(rev))],
-                "result": pct(safe(ebit_ttm if "TTM" in L else ebit_a, rev))}
+        is_ttm = "TTM" in L
+        ebit = ebit_ttm if is_ttm else ebit_a
+        rev  = rev_ttm  if is_ttm else rev_a
+        dt   = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        r    = safe(ebit, rev)
+        return {
+            "formula": "EBIT ÷ Revenue × 100",
+            "fields":  ["Income_Statement.ebit", "Income_Statement.totalRevenue"],
+            "unit": "%",
+            "components": [
+                (f"EBIT  [Income_Statement.ebit {dt}]",        bn(ebit)),
+                (f"Revenue  [Income_Statement.totalRevenue {dt}]", bn(rev)),
+                ("── Calculation ──",                            ""),
+                ("EBIT ÷ Revenue × 100",                       f"{bn(ebit)} ÷ {bn(rev)}"),
+                ("── Result ──",                                ""),
+                ("EBIT Margin",                                 pct(r)),
+            ],
+            "result": pct(r)}
 
     if "EBITDA Margin" in L:
-        rev = rev_ttm if "TTM" in L else rev_a
-        return {"formula": "EBITDA ÷ Revenue × 100", "fields": ["Income_Statement.ebitda", "Income_Statement.totalRevenue"], "unit": "%",
-                "components": [("EBITDA", bn(ebitda_ttm if "TTM" in L else ebitda_a)), ("Revenue", bn(rev))],
-                "result": pct(safe(ebitda_ttm if "TTM" in L else ebitda_a, rev))}
+        is_ttm = "TTM" in L
+        ebitda = ebitda_ttm if is_ttm else ebitda_a
+        rev    = rev_ttm    if is_ttm else rev_a
+        dt     = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        r      = safe(ebitda, rev)
+        return {
+            "formula": "EBITDA ÷ Revenue × 100",
+            "fields":  ["Income_Statement.ebitda", "Income_Statement.totalRevenue"],
+            "unit": "%",
+            "components": [
+                (f"EBITDA  [Income_Statement.ebitda {dt}]",        bn(ebitda)),
+                (f"Revenue  [Income_Statement.totalRevenue {dt}]", bn(rev)),
+                ("── Calculation ──",                               ""),
+                ("EBITDA ÷ Revenue × 100",                        f"{bn(ebitda)} ÷ {bn(rev)}"),
+                ("── Result ──",                                    ""),
+                ("EBITDA Margin",                                   pct(r)),
+            ],
+            "result": pct(r)}
 
     if "Net Margin" in L:
-        ni  = ni_ttm if "TTM" in L else ni_a
-        rev = rev_ttm if "TTM" in L else rev_a
-        return {"formula": "Net Income ÷ Revenue × 100", "fields": ["Income_Statement.netIncome", "Income_Statement.totalRevenue"], "unit": "%",
-                "components": [("Net Income", bn(ni)), ("Revenue", bn(rev))],
-                "result": pct(safe(ni, rev))}
+        is_ttm = "TTM" in L
+        ni  = ni_ttm if is_ttm else ni_a
+        rev = rev_ttm if is_ttm else rev_a
+        dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        r   = safe(ni, rev)
+        return {
+            "formula": "Net Income ÷ Revenue × 100",
+            "fields":  ["Income_Statement.netIncome", "Income_Statement.totalRevenue"],
+            "unit": "%",
+            "components": [
+                (f"Net Income  [Income_Statement.netIncome {dt}]",  bn(ni)),
+                (f"Revenue  [Income_Statement.totalRevenue {dt}]",  bn(rev)),
+                ("── Calculation ──",                                ""),
+                ("Net Income ÷ Revenue × 100",                     f"{bn(ni)} ÷ {bn(rev)}"),
+                ("── Result ──",                                     ""),
+                ("Net Margin",                                       pct(r)),
+            ],
+            "result": pct(r)}
 
     if "FCF Margin" in L:
-        fcf = fcf_ttm if "TTM" in L else fcf_a
-        rev = rev_ttm if "TTM" in L else rev_a
-        cfo_label = bn(cfo_ttm) if "TTM" in L else bn(fv(cfA.get("totalCashFromOperatingActivities")))
-        capex_label = bn(ttm(q_cf,"capitalExpenditures")) if "TTM" in L else bn(fv(cfA.get("capitalExpenditures")))
-        return {"formula": "Free Cash Flow ÷ Revenue × 100\n(FCF = CFO − |CapEx|)", "fields": ["Cash_Flow.freeCashFlow → fallback: totalCashFromOperatingActivities − |capitalExpenditures|", "Income_Statement.totalRevenue"], "unit": "%",
-                "components": [("FCF", bn(fcf)), ("CFO", cfo_label),
-                                ("CapEx", capex_label), ("Revenue", bn(rev))],
-                "result": pct(safe(fcf, rev))}
+        is_ttm = "TTM" in L
+        fcf    = fcf_ttm if is_ttm else fcf_a
+        cfo    = fcf_ttm_cfo if is_ttm else fcf_a_cfo
+        cx     = fcf_ttm_cx  if is_ttm else fcf_a_cx
+        direct = fcf_ttm_direct if is_ttm else fcf_a_direct
+        rev    = rev_ttm if is_ttm else rev_a
+        dt     = f"TTM ({qcf_s[0][:7]}…{qcf_s[3][:7]})" if is_ttm else cfA_dt
+        r      = safe(fcf, rev)
+        comps  = []
+        if direct:
+            comps.append((f"FCF  [Cash_Flow.freeCashFlow {dt}]", bn(fcf)))
+        else:
+            comps += [
+                (f"CFO  [Cash_Flow.totalCashFromOperatingActivities {dt}]", bn(cfo)),
+                (f"CapEx  [Cash_Flow.capitalExpenditures {dt}]",            bn(cx)),
+                ("FCF = CFO − |CapEx| (fallback, freeCashFlow was null)",   bn(fcf)),
+            ]
+        comps += [
+            (f"Revenue  [Income_Statement.totalRevenue {dt}]",              bn(rev)),
+            ("── Calculation ──",                                            ""),
+            ("FCF ÷ Revenue × 100",                                        f"{bn(fcf)} ÷ {bn(rev)}"),
+            ("── Result ──",                                                 ""),
+            ("FCF Margin",                                                   pct(r)),
+        ]
+        return {
+            "formula": "Free Cash Flow ÷ Revenue × 100\n(FCF = freeCashFlow; fallback: CFO − |CapEx|)",
+            "fields":  ["Cash_Flow.freeCashFlow (fallback: totalCashFromOperatingActivities − |capitalExpenditures|)",
+                        "Income_Statement.totalRevenue"],
+            "unit": "%", "components": comps, "result": pct(r)}
 
     if "Asset Turnover" in L:
-        rev = rev_ttm if "TTM" in L else rev_a
-        ta  = ta_q   if "TTM" in L else ta_avg
-        return {"formula": "Revenue ÷ Total Assets", "fields": ["Income_Statement.totalRevenue", "Balance_Sheet.totalAssets"], "unit": "x",
-                "components": [("Revenue", bn(rev)), ("Total Assets", bn(ta))],
-                "result": num(safe(rev, ta))}
+        is_ttm = "TTM" in L
+        rev    = rev_ttm if is_ttm else rev_a
+        ta     = ta_q   if is_ttm else ta_avg
+        dt_rev = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        dt_bs  = bsQ_dt if is_ttm else bsA_dt
+        r      = safe(rev, ta)
+        comps  = [
+            (f"Revenue  [Income_Statement.totalRevenue {dt_rev}]",        bn(rev)),
+            (f"Total Assets  [Balance_Sheet.totalAssets {dt_bs}]",        bn(ta)),
+        ]
+        if not is_ttm and ta_a and ta_a1:
+            comps += [
+                (f"Total Assets Y-1  [{bsA1_dt}]",                        bn(ta_a1)),
+                (f"Avg Assets = ({bn(ta_a)} + {bn(ta_a1)}) ÷ 2",        bn(ta_avg)),
+            ]
+        comps += [
+            ("── Calculation ──",    ""),
+            ("Revenue ÷ Avg Assets", f"{bn(rev)} ÷ {bn(ta)}"),
+            ("── Result ──",         ""),
+            ("Asset Turnover",        num(r, 4) + " x"),
+        ]
+        return {"formula": "Revenue ÷ Total Assets (avg Y0/Y-1 for annual)",
+                "fields": ["Income_Statement.totalRevenue", "Balance_Sheet.totalAssets"],
+                "unit": "x", "components": comps, "result": num(r, 2)}
 
-    # ── GROWTH ────────────────────────────────────────────────────────
-    def growth_dd(field_label, q_stmt, a_stmt, key, q_cf_stmt=None, cf_key=None):
-        use_cf = q_cf_stmt is not None
-        stmt_q = q_cf_stmt if use_cf else q_stmt
-        stmt_a = a_cf if use_cf else a_stmt
+    # ═══════════════════════════════════════════════════════════════════
+    # GROWTH
+    # ═══════════════════════════════════════════════════════════════════
+    def growth_dd(field_label, q_stmt, a_stmt, field_key, q_cf_stmt=None, cf_key=None):
+        use_cf  = q_cf_stmt is not None
+        stmt_q  = q_cf_stmt if use_cf else q_stmt
+        stmt_a  = a_cf if use_cf else a_stmt
+        api_key = cf_key if use_cf else field_key
+        stmt_lbl= "Cash_Flow" if use_cf else "Income_Statement"
+
         if "TTM" in L:
             qs = sorted(stmt_q.keys(), reverse=True)
-            def get_ttm(start):
-                vals = [fv(stmt_q[qs[i]].get(cf_key if use_cf else key)) for i in range(start, start+4)]
-                return sum(v for v in vals if v is not None) if sum(1 for v in vals if v is not None)==4 else None
-            t0 = get_ttm(0); t4 = get_ttm(4)
+            def get_ttm_with_qs(start):
+                vals = [(qs[i], fv(stmt_q[qs[i]].get(api_key))) for i in range(start, start+4)]
+                total = sum(v for _, v in vals if v is not None)
+                return total if sum(1 for _, v in vals if v is not None)==4 else None, vals
+            t0, t0_qs = get_ttm_with_qs(0)
+            t4, t4_qs = get_ttm_with_qs(4)
             gr = safe(t0, t4) - 1 if t0 and t4 else None
-            return {"formula": f"(TTM[now] ÷ TTM[1Y ago] − 1) × 100", "fields": ["Income_Statement / Cash_Flow — 4-quarter rolling sum, window[0:4] vs window[4:8]"], "unit": "%",
-                    "components": [(f"{field_label} TTM (now)", bn(t0)), (f"{field_label} TTM (1Y ago)", bn(t4))],
-                    "result": pct(gr)}
+            comps = [
+                (f"TTM now  ({qs[0][:7]}–{qs[3][:7]})", ""),
+            ]
+            for q, v in t0_qs: comps.append((f"  {stmt_lbl}.{api_key}  [{q}]", bn(v)))
+            comps.append((f"  → TTM Sum (now)", bn(t0)))
+            comps.append((f"TTM 1Y ago  ({qs[4][:7]}–{qs[7][:7]})" if len(qs)>7 else "TTM 1Y ago", ""))
+            for q, v in t4_qs: comps.append((f"  {stmt_lbl}.{api_key}  [{q}]", bn(v)))
+            comps.append((f"  → TTM Sum (1Y ago)", bn(t4)))
+            comps += [
+                ("── Calculation ──",                              ""),
+                (f"(TTM now ÷ TTM 1Y ago) − 1",                  f"({bn(t0)} ÷ {bn(t4)}) − 1"),
+                ("× 100",                                          ""),
+                ("── Result ──",                                   ""),
+                (f"{field_label} Growth (TTM)",                   pct(gr)),
+            ]
+            return {"formula": "(TTM[now] ÷ TTM[1Y ago] − 1) × 100  |  4-quarter rolling sums",
+                    "fields": [f"{stmt_lbl}.{api_key} — quarterly, windows [Q0:Q3] and [Q4:Q7]"],
+                    "unit": "%", "components": comps, "result": pct(gr)}
+
         elif "YoY" in L:
             qs = sorted(stmt_q.keys(), reverse=True)
-            v0 = fv(stmt_q[qs[0]].get(cf_key if use_cf else key)) if qs else None
-            v4 = fv(stmt_q[qs[4]].get(cf_key if use_cf else key)) if len(qs)>4 else None
+            v0 = fv(stmt_q[qs[0]].get(api_key)) if qs else None
+            v4 = fv(stmt_q[qs[4]].get(api_key)) if len(qs)>4 else None
             gr = safe(v0, v4) - 1 if v0 and v4 else None
-            return {"formula": f"(Q[latest] ÷ Q[same quarter -1Y] − 1) × 100", "fields": ["Income_Statement / Cash_Flow — Q[0] vs Q[4]"], "unit": "%",
-                    "components": [(f"{field_label} {qs[0][:7]}", bn(v0)), (f"{field_label} {qs[4][:7] if len(qs)>4 else '—'}", bn(v4))],
-                    "result": pct(gr)}
+            q0 = qs[0] if qs else "—"; q4 = qs[4] if len(qs)>4 else "—"
+            return {
+                "formula": "(Q[latest] ÷ Q[same quarter -1Y] − 1) × 100",
+                "fields":  [f"{stmt_lbl}.{api_key} — quarterly"],
+                "unit": "%",
+                "components": [
+                    (f"{stmt_lbl}.{api_key}  [{q0}]", bn(v0)),
+                    (f"{stmt_lbl}.{api_key}  [{q4}]", bn(v4)),
+                    ("── Calculation ──",               ""),
+                    (f"({bn(v0)} ÷ {bn(v4)}) − 1",    ""),
+                    ("× 100",                           ""),
+                    ("── Result ──",                    ""),
+                    (f"{field_label} Growth (YoY)",    pct(gr)),
+                ],
+                "result": pct(gr)}
+
         elif "Year" in L:
             ys = sorted(stmt_a.keys(), reverse=True)
-            v0 = fv(stmt_a[ys[0]].get(cf_key if use_cf else key)) if ys else None
-            v1 = fv(stmt_a[ys[1]].get(cf_key if use_cf else key)) if len(ys)>1 else None
+            v0 = fv(stmt_a[ys[0]].get(api_key)) if ys else None
+            v1 = fv(stmt_a[ys[1]].get(api_key)) if len(ys)>1 else None
+            y0 = ys[0] if ys else "—"; y1 = ys[1] if len(ys)>1 else "—"
             gr = safe(v0, v1) - 1 if v0 and v1 else None
-            return {"formula": f"(Year[0] ÷ Year[-1] − 1) × 100", "fields": ["Income_Statement / Cash_Flow — yearly[0] vs yearly[1]"], "unit": "%",
-                    "components": [(f"{field_label} {ys[0][:4]}", bn(v0)), (f"{field_label} {ys[1][:4] if len(ys)>1 else '—'}", bn(v1))],
-                    "result": pct(gr)}
+            return {
+                "formula": "(Year[0] ÷ Year[-1] − 1) × 100",
+                "fields":  [f"{stmt_lbl}.{api_key} — annual"],
+                "unit": "%",
+                "components": [
+                    (f"{stmt_lbl}.{api_key}  [{y0}]",          bn(v0)),
+                    (f"{stmt_lbl}.{api_key}  [{y1}]",          bn(v1)),
+                    ("── Calculation ──",                        ""),
+                    (f"({bn(v0)} ÷ {bn(v1)}) − 1",            ""),
+                    ("× 100",                                    ""),
+                    ("── Result ──",                             ""),
+                    (f"{field_label} Growth (Year)",            pct(gr)),
+                ],
+                "result": pct(gr)}
+
         elif "Fwd" in L:
-            trends = data.get("Earnings",{}).get("Trend",{})
-            p1y = next((v for v in trends.values() if v.get("period")=="+1y"),{})
-            g = fv(p1y.get("revenueEstimateGrowth" if "Revenue" in L else "earningsEstimateGrowth"))
-            return {"formula": "Analyst consensus estimate (Earnings.Trend +1y)", "fields": ["Earnings.Trend[+1y].revenueEstimateGrowth", "Earnings.Trend[+1y].earningsEstimateGrowth"], "unit": "%",
-                    "components": [("Source", "EODHD Earnings Trend"), ("Period", "+1y"),
-                                   ("Estimate", pct(g))],
-                    "result": pct(g)}
+            trends   = data.get("Earnings", {}).get("Trend", {})
+            p1y      = next((v for v in trends.values() if v.get("period") == "+1y"), {})
+            p1y_date = next((k for k, v in trends.items() if v.get("period") == "+1y"), "—")
+            is_rev   = "Revenue" in L
+            gr_key   = "revenueEstimateGrowth" if is_rev else "earningsEstimateGrowth"
+            avg_key  = "revenueEstimateAvg"    if is_rev else "earningsEstimateAvg"
+            lo_key   = "revenueEstimateLow"    if is_rev else "earningsEstimateLow"
+            hi_key   = "revenueEstimateHigh"   if is_rev else "earningsEstimateHigh"
+            na_key   = "revenueEstimateNumberOfAnalysts" if is_rev else "earningsEstimateNumberOfAnalysts"
+            g        = fv(p1y.get(gr_key))
+            est_avg  = fv(p1y.get(avg_key))
+            est_lo   = fv(p1y.get(lo_key))
+            est_hi   = fv(p1y.get(hi_key))
+            n_an     = p1y.get(na_key, "—")
+            def fmt_est(v): return f"{v/1e9:.4f} B" if v and abs(v) > 1e6 else (f"{v:.6f}" if v else "—")
+            hl_rev_gr  = fv(hl.get("RevenueGrowthQuarterlyYOY"))
+            hl_earn_gr = fv(hl.get("QuarterlyEarningsGrowthYOY"))
+            comps = [
+                ("Earnings.Trend key (date)",                        p1y_date),
+                (f"Earnings.Trend[+1y].{gr_key}  (raw decimal)",    num(g, 6) if g else "—"),
+                (f"Earnings.Trend[+1y].{avg_key}",                  fmt_est(est_avg)),
+                (f"Earnings.Trend[+1y].{lo_key}",                   fmt_est(est_lo)),
+                (f"Earnings.Trend[+1y].{hi_key}",                   fmt_est(est_hi)),
+                (f"Earnings.Trend[+1y].{na_key}",                   str(n_an)),
+            ]
+            if is_rev and hl_rev_gr is not None:
+                comps.append(("Highlights.RevenueGrowthQuarterlyYOY  (cross-check)", pct(hl_rev_gr)))
+            elif not is_rev and hl_earn_gr is not None:
+                comps.append(("Highlights.QuarterlyEarningsGrowthYOY  (cross-check)", pct(hl_earn_gr)))
+            comps += [
+                ("── Result ──",                   ""),
+                (f"{field_label} Growth (Fwd)",   pct(g)),
+            ]
+            return {"formula": "Analyst consensus — Earnings.Trend period +1y\nField: " + gr_key,
+                    "fields": [f"Earnings.Trend[+1y].{gr_key}", f"Earnings.Trend[+1y].{avg_key}",
+                               f"Earnings.Trend[+1y].{na_key}"],
+                    "unit": "%", "components": comps, "result": pct(g)}
         return UNKNOWN
 
-    if "Revenue Growth" in L:
-        return growth_dd("Revenue", q_is, a_is, "totalRevenue")
-    if "Net Income Growth" in L:
-        return growth_dd("Net Income", q_is, a_is, "netIncome")
+    if "Revenue Growth" in L:    return growth_dd("Revenue",  q_is, a_is, "totalRevenue")
+    if "Net Income Growth" in L: return growth_dd("Net Income", q_is, a_is, "netIncome")
     if "EPS Growth" in L and "Fwd" not in L:
-        return growth_dd("Net Inc (EPS proxy)", q_is, a_is, "netIncomeApplicableToCommonShares")
-    if "EPS Growth (Fwd)" in L:
-        return growth_dd("EPS", None, None, None)
-    if "EBIT Growth" in L:
-        return growth_dd("EBIT", q_is, a_is, "ebit")
-    if "EBITDA Growth" in L:
-        return growth_dd("EBITDA", q_is, a_is, "ebitda")
-    if "FCF Growth" in L:
-        return growth_dd("FCF", q_cf, a_cf, "freeCashFlow", q_cf, "freeCashFlow")
+        return growth_dd("EPS", q_is, a_is, "netIncomeApplicableToCommonShares")
+    if "EPS Growth (Fwd)" in L:  return growth_dd("EPS", None, None, None)
+    if "EBIT Growth" in L:       return growth_dd("EBIT", q_is, a_is, "ebit")
+    if "EBITDA Growth" in L:     return growth_dd("EBITDA", q_is, a_is, "ebitda")
+    if "FCF Growth" in L:        return growth_dd("FCF", q_cf, a_cf, "freeCashFlow", q_cf, "freeCashFlow")
 
     if "Rule of 40" in L:
-        rev_gr = safe(rev_ttm, rev_a) - 1 if rev_ttm and rev_a else None
-        fcfm   = safe(fcf_ttm, rev_ttm) if "TTM" in L else safe(fcf_a, rev_a)
-        r40    = ((rev_gr or 0)*100 + (fcfm or 0)*100) if rev_gr is not None and fcfm is not None else None
-        return {"formula": "Revenue Growth (%) + FCF Margin (%)", "fields": ["Income_Statement.totalRevenue (TTM growth)", "Cash_Flow.freeCashFlow ÷ Income_Statement.totalRevenue"], "unit": "%",
-                "components": [("Revenue Growth TTM", pct(rev_gr)),
-                                ("FCF Margin TTM", pct(fcfm)),
-                                ("= Rule of 40", f"{r40:.2f} %" if r40 else "—")],
-                "result": f"{r40:.2f} %" if r40 else "—"}
+        is_ttm  = "TTM" in L
+        rev0    = rev_ttm; rev1_a = fv(a_is.get(years[1], {}).get("totalRevenue")) if len(years)>1 else None
+        rev_gr  = safe(rev_ttm, rev1_a) - 1 if rev_ttm and rev1_a else None
+        fcf     = fcf_ttm if is_ttm else fcf_a
+        rev     = rev_ttm if is_ttm else rev_a
+        fcfm    = safe(fcf, rev)
+        r40     = ((rev_gr or 0)*100 + (fcfm or 0)*100) if rev_gr is not None and fcfm is not None else None
+        y0 = years[0] if years else "—"; y1 = years[1] if len(years)>1 else "—"
+        return {
+            "formula": "Revenue Growth (%) + FCF Margin (%)",
+            "fields":  ["Income_Statement.totalRevenue (TTM + annual Y-1 for growth)",
+                        "Cash_Flow.freeCashFlow (TTM)"],
+            "unit": "%",
+            "components": [
+                (f"Revenue TTM",                                               bn(rev_ttm)),
+                (f"Revenue Y-1  [Income_Statement.totalRevenue {y1}]",       bn(rev1_a)),
+                (f"Revenue Growth = ({bn(rev_ttm)} ÷ {bn(rev1_a)}) − 1",    pct(rev_gr)),
+                ("",                                                            ""),
+                (f"FCF {'TTM' if is_ttm else 'Annual'}",                      bn(fcf)),
+                (f"Revenue {'TTM' if is_ttm else 'Annual'}",                  bn(rev)),
+                (f"FCF Margin = {bn(fcf)} ÷ {bn(rev)}",                      pct(fcfm)),
+                ("── Calculation ──",                                           ""),
+                (f"Rev Growth % + FCF Margin %",
+                 f"{pct(rev_gr)} + {pct(fcfm)}"),
+                ("── Result ──",                                                ""),
+                ("Rule of 40",                                                  f"{r40:.4f} %" if r40 else "—"),
+            ],
+            "result": f"{r40:.2f} %" if r40 else "—"}
 
-    # ── HEALTH ─────────────────────────────────────────────────────────
-    def _debt(q=True): return debt_q if q else debt_a
-    def _cash(q=True): return cash_q if q else cash_a
-    def _eq(q=True):   return eq_q   if q else eq_a
-    def _ta(q=True):   return ta_q   if q else ta_a
-    def _cl(q=True):   return cl_q   if q else cl_a
-    def _nd(q=True):   return nd_q   if q else nd_a
+    # ═══════════════════════════════════════════════════════════════════
+    # HEALTH
+    # ═══════════════════════════════════════════════════════════════════
+    def _iq(q=True): return True if ("Quarterly" in L or "TTM" in L) else False
+
+    def health_debt_comps(is_q):
+        ltd  = ltd_q if is_q else ltd_a
+        std  = std_q if is_q else std_a
+        debt = ltd + std
+        dt   = bsQ_dt if is_q else bsA_dt
+        return ltd, std, debt, dt
+
     is_q = "Quarterly" in L or "TTM" in L
 
     if "Cash/Debt" in L:
-        c=_cash(is_q); d=_debt(is_q)
-        return {"formula": "Cash & Equivalents ÷ Total Debt", "fields": ["Balance_Sheet.cashAndEquivalents", "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"], "unit": "x",
-                "components": [("Cash", bn(c)), ("Long-Term Debt", bn(ltd_q if is_q else ltd_a)),
-                                ("Short-Term Debt", bn(std_q if is_q else std_a)), ("Total Debt", bn(d))],
-                "result": num(safe(c,d))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        cash = cash_q if is_q else cash_a
+        r    = safe(cash, debt)
+        return {
+            "formula": "Cash & Equivalents ÷ Total Debt",
+            "fields":  ["Balance_Sheet.cashAndEquivalents", "Balance_Sheet.longTermDebt",
+                        "Balance_Sheet.shortLongTermDebt"],
+            "unit": "x",
+            "components": [
+                (f"Cash  [Balance_Sheet.cashAndEquivalents {dt}]",        bn(cash)),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",    bn(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]", bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}",                  bn(debt)),
+                ("── Calculation ──",                                      ""),
+                (f"Cash ÷ Total Debt",                                    f"{bn(cash)} ÷ {bn(debt)}"),
+                ("── Result ──",                                           ""),
+                ("Cash/Debt",                                              num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Debt/Capital" in L:
-        d=_debt(is_q); e=_eq(is_q)
-        return {"formula": "Total Debt ÷ (Total Debt + Equity)", "fields": ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Balance_Sheet.totalStockholderEquity"], "unit": "x",
-                "components": [("Total Debt", bn(d)), ("Equity", bn(e)), ("Capital", bn(d+(e or 0)))],
-                "result": num(safe(d, d+(e or 0)))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        eq   = eq_q if is_q else eq_a
+        cap  = debt + (eq or 0)
+        r    = safe(debt, cap)
+        return {
+            "formula": "Total Debt ÷ (Total Debt + Equity)",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+                        "Balance_Sheet.totalStockholderEquity"],
+            "unit": "x",
+            "components": [
+                (f"Long-Term Debt  [{dt}]",       bn(ltd)),
+                (f"Short-Term Debt  [{dt}]",      bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"Equity  [{dt}]",               bn(eq)),
+                (f"Capital = Debt + Equity",      bn(cap)),
+                ("── Calculation ──",              ""),
+                (f"Debt ÷ Capital",               f"{bn(debt)} ÷ {bn(cap)}"),
+                ("── Result ──",                   ""),
+                ("Debt/Capital",                   num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "FCF/Debt" in L:
-        d=_debt(is_q); f=fcf_ttm if is_q else fcf_a
-        return {"formula": "Free Cash Flow ÷ Total Debt", "fields": ["Cash_Flow.freeCashFlow", "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"], "unit": "x",
-                "components": [("FCF", bn(f)), ("Total Debt", bn(d))],
-                "result": num(safe(f,d))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        fcf    = fcf_ttm if is_q else fcf_a
+        direct = fcf_ttm_direct if is_q else fcf_a_direct
+        cfo    = fcf_ttm_cfo if is_q else fcf_a_cfo
+        cx     = fcf_ttm_cx  if is_q else fcf_a_cx
+        r      = safe(fcf, debt)
+        comps  = []
+        if direct:
+            comps.append((f"FCF  [Cash_Flow.freeCashFlow {'TTM' if is_q else cfA_dt}]", bn(fcf)))
+        else:
+            comps += [
+                (f"CFO  [totalCashFromOperatingActivities {'TTM' if is_q else cfA_dt}]", bn(cfo)),
+                (f"CapEx  [capitalExpenditures {'TTM' if is_q else cfA_dt}]",             bn(cx)),
+                (f"FCF = CFO − |CapEx| (fallback)",                                       bn(fcf)),
+            ]
+        comps += [
+            (f"Long-Term Debt  [{dt}]",          bn(ltd)),
+            (f"Short-Term Debt  [{dt}]",         bn(std)),
+            (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+            ("── Calculation ──",                 ""),
+            (f"FCF ÷ Total Debt",               f"{bn(fcf)} ÷ {bn(debt)}"),
+            ("── Result ──",                      ""),
+            ("FCF/Debt",                          num(r, 4) + " x"),
+        ]
+        return {"formula": "Free Cash Flow ÷ Total Debt",
+                "fields": ["Cash_Flow.freeCashFlow", "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
+                "unit": "x", "components": comps, "result": num(r, 2)}
 
     if "Interest Coverage" in L:
-        e=ebit_ttm if "TTM" in L else ebit_a; i=int_ttm if "TTM" in L else int_a
-        return {"formula": "EBIT ÷ Interest Expense", "fields": ["Income_Statement.ebit", "Income_Statement.interestExpense"], "unit": "x",
-                "components": [("EBIT", bn(e)), ("Interest Expense", bn(i))],
-                "result": num(safe(e, abs(i) if i else None))}
+        is_ttm2 = "TTM" in L
+        ebit = ebit_ttm if is_ttm2 else ebit_a
+        intr = int_ttm  if is_ttm2 else int_a
+        dt   = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm2 else isA_dt
+        r    = safe(ebit, abs(intr) if intr else None)
+        return {
+            "formula": "EBIT ÷ |Interest Expense|\n(interestExpense is often negative in EODHD → use abs())",
+            "fields":  ["Income_Statement.ebit", "Income_Statement.interestExpense"],
+            "unit": "x",
+            "components": [
+                (f"EBIT  [Income_Statement.ebit {dt}]",                bn(ebit)),
+                (f"Interest Expense  [raw {dt}]",                      bn(intr)),
+                (f"Interest Expense  [|abs| used]",                    bn(abs(intr) if intr else None)),
+                ("── Calculation ──",                                   ""),
+                (f"EBIT ÷ |Interest|",                                f"{bn(ebit)} ÷ {bn(abs(intr) if intr else None)}"),
+                ("── Result ──",                                        ""),
+                ("Interest Coverage",                                   num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
-    if "Cash Ratio" in L or "Cash/Ratio" in L:
-        c=_cash(is_q); cl=_cl(is_q)
-        return {"formula": "Cash & Equivalents ÷ Current Liabilities", "fields": ["Balance_Sheet.cashAndEquivalents", "Balance_Sheet.totalCurrentLiabilities"], "unit": "x",
-                "components": [("Cash", bn(c)), ("Current Liabilities", bn(cl))],
-                "result": num(safe(c,cl))}
+    if "Cash Ratio" in L:
+        cash = cash_q if is_q else cash_a
+        cl   = cl_q   if is_q else cl_a
+        dt   = bsQ_dt if is_q else bsA_dt
+        r    = safe(cash, cl)
+        return {
+            "formula": "Cash & Equivalents ÷ Current Liabilities",
+            "fields":  ["Balance_Sheet.cashAndEquivalents", "Balance_Sheet.totalCurrentLiabilities"],
+            "unit": "x",
+            "components": [
+                (f"Cash  [Balance_Sheet.cashAndEquivalents {dt}]",             bn(cash)),
+                (f"Current Liabilities  [Balance_Sheet.totalCurrentLiabilities {dt}]", bn(cl)),
+                ("── Calculation ──",                                            ""),
+                (f"Cash ÷ Current Liabilities",                                f"{bn(cash)} ÷ {bn(cl)}"),
+                ("── Result ──",                                                 ""),
+                ("Cash Ratio",                                                   num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Debt/Equity" in L and "Net" not in L:
-        d=_debt(is_q); e=_eq(is_q)
-        return {"formula": "Total Debt ÷ Stockholder Equity", "fields": ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Balance_Sheet.totalStockholderEquity"], "unit": "x",
-                "components": [("Total Debt", bn(d)), ("Equity", bn(e))],
-                "result": num(safe(d,e))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        eq = eq_q if is_q else eq_a
+        r  = safe(debt, eq)
+        return {
+            "formula": "Total Debt ÷ Stockholder Equity",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+                        "Balance_Sheet.totalStockholderEquity"],
+            "unit": "x",
+            "components": [
+                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
+                (f"Short-Term Debt  [{dt}]",          bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"Equity  [{dt}]",                   bn(eq)),
+                ("── Calculation ──",                  ""),
+                (f"Total Debt ÷ Equity",             f"{bn(debt)} ÷ {bn(eq)}"),
+                ("── Result ──",                       ""),
+                ("D/E",                                num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "NetDebt/Equity" in L:
-        nd=_nd(is_q); e=_eq(is_q)
-        c=_cash(is_q); d=_debt(is_q)
-        return {"formula": "Net Debt ÷ Equity\n(Net Debt = Total Debt − Cash)", "fields": ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Balance_Sheet.cashAndEquivalents", "Balance_Sheet.totalStockholderEquity"], "unit": "x",
-                "components": [("Total Debt", bn(d)), ("Cash", bn(c)), ("Net Debt", bn(nd)), ("Equity", bn(e))],
-                "result": num(safe(nd,e))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        cash = cash_q if is_q else cash_a
+        nd   = debt - (cash or 0)
+        eq   = eq_q if is_q else eq_a
+        r    = safe(nd, eq)
+        return {
+            "formula": "Net Debt ÷ Equity\nNet Debt = Total Debt − Cash",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+                        "Balance_Sheet.cashAndEquivalents", "Balance_Sheet.totalStockholderEquity"],
+            "unit": "x",
+            "components": [
+                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
+                (f"Short-Term Debt  [{dt}]",          bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"Cash  [cashAndEquivalents {dt}]",  bn(cash)),
+                (f"Net Debt = Debt − Cash",           bn(nd)),
+                (f"Equity  [{dt}]",                   bn(eq)),
+                ("── Calculation ──",                  ""),
+                (f"Net Debt ÷ Equity",               f"{bn(nd)} ÷ {bn(eq)}"),
+                ("── Result ──",                       ""),
+                ("NetDebt/Equity",                     num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Equity/Assets" in L:
-        e=_eq(is_q); ta=_ta(is_q)
-        return {"formula": "Stockholder Equity ÷ Total Assets", "fields": ["Balance_Sheet.totalStockholderEquity", "Balance_Sheet.totalAssets"], "unit": "x",
-                "components": [("Equity", bn(e)), ("Total Assets", bn(ta))],
-                "result": num(safe(e,ta))}
+        eq  = eq_q if is_q else eq_a
+        ta  = ta_q if is_q else ta_a
+        dt  = bsQ_dt if is_q else bsA_dt
+        r   = safe(eq, ta)
+        return {
+            "formula": "Stockholder Equity ÷ Total Assets",
+            "fields":  ["Balance_Sheet.totalStockholderEquity", "Balance_Sheet.totalAssets"],
+            "unit": "x",
+            "components": [
+                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt}]", bn(eq)),
+                (f"Total Assets  [Balance_Sheet.totalAssets {dt}]",      bn(ta)),
+                ("── Calculation ──",                                      ""),
+                (f"Equity ÷ Total Assets",                               f"{bn(eq)} ÷ {bn(ta)}"),
+                ("── Result ──",                                           ""),
+                ("Equity/Assets",                                          num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Debt/Asset" in L and "Net" not in L:
-        d=_debt(is_q); ta=_ta(is_q)
-        return {"formula": "Total Debt ÷ Total Assets", "fields": ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Balance_Sheet.totalAssets"], "unit": "x",
-                "components": [("Total Debt", bn(d)), ("Total Assets", bn(ta))],
-                "result": num(safe(d,ta))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        ta = ta_q if is_q else ta_a
+        r  = safe(debt, ta)
+        return {
+            "formula": "Total Debt ÷ Total Assets",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Balance_Sheet.totalAssets"],
+            "unit": "x",
+            "components": [
+                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
+                (f"Short-Term Debt  [{dt}]",          bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"Total Assets  [{dt}]",             bn(ta)),
+                ("── Calculation ──",                  ""),
+                (f"Debt ÷ Assets",                   f"{bn(debt)} ÷ {bn(ta)}"),
+                ("── Result ──",                       ""),
+                ("Debt/Assets",                        num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "NetDebt/Asset" in L:
-        nd=_nd(is_q); ta=_ta(is_q)
-        c=_cash(is_q); d=_debt(is_q)
-        return {"formula": "Net Debt ÷ Total Assets\n(Net Debt = Total Debt − Cash)", "fields": ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Balance_Sheet.cashAndEquivalents", "Balance_Sheet.totalAssets"], "unit": "x",
-                "components": [("Total Debt", bn(d)), ("Cash", bn(c)), ("Net Debt", bn(nd)), ("Total Assets", bn(ta))],
-                "result": num(safe(nd,ta))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        cash = cash_q if is_q else cash_a
+        nd   = debt - (cash or 0)
+        ta   = ta_q if is_q else ta_a
+        r    = safe(nd, ta)
+        return {
+            "formula": "Net Debt ÷ Total Assets\nNet Debt = Total Debt − Cash",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+                        "Balance_Sheet.cashAndEquivalents", "Balance_Sheet.totalAssets"],
+            "unit": "x",
+            "components": [
+                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
+                (f"Short-Term Debt  [{dt}]",          bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"Cash  [{dt}]",                     bn(cash)),
+                (f"Net Debt = Debt − Cash",           bn(nd)),
+                (f"Total Assets  [{dt}]",             bn(ta)),
+                ("── Calculation ──",                  ""),
+                (f"Net Debt ÷ Assets",               f"{bn(nd)} ÷ {bn(ta)}"),
+                ("── Result ──",                       ""),
+                ("NetDebt/Assets",                     num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Debt/EBIT" in L and "EBITDA" not in L and "Net" not in L:
-        d=_debt(is_q); e=ebit_ttm if "TTM" in L else ebit_a
-        return {"formula": "Total Debt ÷ EBIT", "fields": ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Income_Statement.ebit"], "unit": "x",
-                "components": [("Total Debt", bn(d)), ("EBIT", bn(e))],
-                "result": num(safe(d,e))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        is_ttm2 = "TTM" in L
+        ebit    = ebit_ttm if is_ttm2 else ebit_a
+        dt_e    = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm2 else isA_dt
+        r       = safe(debt, ebit)
+        return {
+            "formula": "Total Debt ÷ EBIT",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Income_Statement.ebit"],
+            "unit": "x",
+            "components": [
+                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
+                (f"Short-Term Debt  [{dt}]",          bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"EBIT  [Income_Statement.ebit {dt_e}]", bn(ebit)),
+                ("── Calculation ──",                  ""),
+                (f"Debt ÷ EBIT",                     f"{bn(debt)} ÷ {bn(ebit)}"),
+                ("── Result ──",                       ""),
+                ("Debt/EBIT",                          num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "NetDebt/EBIT" in L and "EBITDA" not in L:
-        nd=_nd(is_q); e=ebit_ttm if "TTM" in L else ebit_a
-        c=_cash(is_q); d=_debt(is_q)
-        return {"formula": "Net Debt ÷ EBIT\n(Net Debt = Total Debt − Cash)", "fields": ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Balance_Sheet.cashAndEquivalents", "Income_Statement.ebit"], "unit": "x",
-                "components": [("Total Debt", bn(d)), ("Cash", bn(c)), ("Net Debt", bn(nd)), ("EBIT", bn(e))],
-                "result": num(safe(nd,e))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        cash    = cash_q if is_q else cash_a
+        nd      = debt - (cash or 0)
+        is_ttm2 = "TTM" in L
+        ebit    = ebit_ttm if is_ttm2 else ebit_a
+        dt_e    = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm2 else isA_dt
+        r       = safe(nd, ebit)
+        return {
+            "formula": "Net Debt ÷ EBIT\nNet Debt = Total Debt − Cash",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+                        "Balance_Sheet.cashAndEquivalents", "Income_Statement.ebit"],
+            "unit": "x",
+            "components": [
+                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
+                (f"Short-Term Debt  [{dt}]",          bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"Cash  [{dt}]",                     bn(cash)),
+                (f"Net Debt = Debt − Cash",           bn(nd)),
+                (f"EBIT  [{dt_e}]",                   bn(ebit)),
+                ("── Calculation ──",                  ""),
+                (f"Net Debt ÷ EBIT",                 f"{bn(nd)} ÷ {bn(ebit)}"),
+                ("── Result ──",                       ""),
+                ("NetDebt/EBIT",                       num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Debt/EBITDA" in L and "Net" not in L:
-        d=_debt(is_q); e=ebitda_ttm if "TTM" in L else ebitda_a
-        return {"formula": "Total Debt ÷ EBITDA", "fields": ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Income_Statement.ebitda"], "unit": "x",
-                "components": [("Total Debt", bn(d)), ("EBITDA", bn(e))],
-                "result": num(safe(d,e))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        is_ttm2 = "TTM" in L
+        ebitda  = ebitda_ttm if is_ttm2 else ebitda_a
+        dt_e    = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm2 else isA_dt
+        r       = safe(debt, ebitda)
+        return {
+            "formula": "Total Debt ÷ EBITDA",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Income_Statement.ebitda"],
+            "unit": "x",
+            "components": [
+                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
+                (f"Short-Term Debt  [{dt}]",          bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"EBITDA  [{dt_e}]",                 bn(ebitda)),
+                ("── Calculation ──",                  ""),
+                (f"Debt ÷ EBITDA",                   f"{bn(debt)} ÷ {bn(ebitda)}"),
+                ("── Result ──",                       ""),
+                ("Debt/EBITDA",                        num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "NetDebt/EBITDA" in L:
-        nd=_nd(is_q); e=ebitda_ttm if "TTM" in L else ebitda_a
-        c=_cash(is_q); d=_debt(is_q)
-        return {"formula": "Net Debt ÷ EBITDA\n(Net Debt = Total Debt − Cash)", "fields": ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Balance_Sheet.cashAndEquivalents", "Income_Statement.ebitda"], "unit": "x",
-                "components": [("Total Debt", bn(d)), ("Cash", bn(c)), ("Net Debt", bn(nd)), ("EBITDA", bn(e))],
-                "result": num(safe(nd,e))}
+        ltd, std, debt, dt = health_debt_comps(is_q)
+        cash    = cash_q if is_q else cash_a
+        nd      = debt - (cash or 0)
+        is_ttm2 = "TTM" in L
+        ebitda  = ebitda_ttm if is_ttm2 else ebitda_a
+        dt_e    = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm2 else isA_dt
+        r       = safe(nd, ebitda)
+        return {
+            "formula": "Net Debt ÷ EBITDA\nNet Debt = Total Debt − Cash",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+                        "Balance_Sheet.cashAndEquivalents", "Income_Statement.ebitda"],
+            "unit": "x",
+            "components": [
+                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
+                (f"Short-Term Debt  [{dt}]",          bn(std)),
+                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
+                (f"Cash  [{dt}]",                     bn(cash)),
+                (f"Net Debt = Debt − Cash",           bn(nd)),
+                (f"EBITDA  [{dt_e}]",                 bn(ebitda)),
+                ("── Calculation ──",                  ""),
+                (f"Net Debt ÷ EBITDA",               f"{bn(nd)} ÷ {bn(ebitda)}"),
+                ("── Result ──",                       ""),
+                ("NetDebt/EBITDA",                     num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Current Ratio" in L:
-        ca=ca_q if is_q else ca_a; cl=cl_q if is_q else cl_a
-        return {"formula": "Current Assets ÷ Current Liabilities", "fields": ["Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities"], "unit": "x",
-                "components": [("Current Assets", bn(ca)), ("Current Liabilities", bn(cl))],
-                "result": num(safe(ca,cl))}
+        ca  = ca_q if is_q else ca_a
+        cl  = cl_q if is_q else cl_a
+        dt  = bsQ_dt if is_q else bsA_dt
+        r   = safe(ca, cl)
+        return {
+            "formula": "Current Assets ÷ Current Liabilities",
+            "fields":  ["Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities"],
+            "unit": "x",
+            "components": [
+                (f"Current Assets  [Balance_Sheet.totalCurrentAssets {dt}]",          bn(ca)),
+                (f"Current Liabilities  [Balance_Sheet.totalCurrentLiabilities {dt}]", bn(cl)),
+                ("── Calculation ──",                                                   ""),
+                (f"CA ÷ CL",                                                          f"{bn(ca)} ÷ {bn(cl)}"),
+                ("── Result ──",                                                        ""),
+                ("Current Ratio",                                                       num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Quick Ratio" in L:
-        ca=ca_q if is_q else ca_a; cl=cl_q if is_q else cl_a
-        inv=fv(bsQ.get("inventory") if is_q else bsA.get("inventory")) or 0
-        return {"formula": "(Current Assets − Inventory) ÷ Current Liabilities", "fields": ["Balance_Sheet.totalCurrentAssets", "Balance_Sheet.inventory", "Balance_Sheet.totalCurrentLiabilities"], "unit": "x",
-                "components": [("Current Assets", bn(ca)), ("Inventory", bn(inv)),
-                                ("Current Liabilities", bn(cl))],
-                "result": num(safe((ca-inv) if ca else None, cl))}
+        ca  = ca_q if is_q else ca_a
+        cl  = cl_q if is_q else cl_a
+        inv = inv_q if is_q else inv_a
+        dt  = bsQ_dt if is_q else bsA_dt
+        r   = safe((ca - inv) if ca else None, cl)
+        return {
+            "formula": "(Current Assets − Inventory) ÷ Current Liabilities",
+            "fields":  ["Balance_Sheet.totalCurrentAssets", "Balance_Sheet.inventory",
+                        "Balance_Sheet.totalCurrentLiabilities"],
+            "unit": "x",
+            "components": [
+                (f"Current Assets  [{dt}]",                                             bn(ca)),
+                (f"Inventory  [Balance_Sheet.inventory {dt}]",                         bn(inv)),
+                (f"CA − Inventory = {bn(ca)} − {bn(inv)}",                            bn(ca - inv if ca else None)),
+                (f"Current Liabilities  [{dt}]",                                       bn(cl)),
+                ("── Calculation ──",                                                   ""),
+                (f"(CA − Inv) ÷ CL",                                                  f"{bn(ca-inv if ca else None)} ÷ {bn(cl)}"),
+                ("── Result ──",                                                        ""),
+                ("Quick Ratio",                                                         num(r, 4) + " x"),
+            ],
+            "result": num(r, 2)}
 
     if "Altman Z" in L:
-        wc=(ca_q-cl_q) if ca_q and cl_q else None
-        re=fv(bsQ.get("retainedEarnings"))
-        x1=safe(wc,ta_q); x2=safe(re,ta_q); x3=safe(ebit_ttm,ta_q)
-        x4=safe(mcap,tl_q); x5=safe(rev_ttm,ta_q)
-        z = 1.2*(x1 or 0)+1.4*(x2 or 0)+3.3*(x3 or 0)+0.6*(x4 or 0)+1.0*(x5 or 0) if all([x1,x2,x3,x4,x5]) else None
-        return {"formula": "1.2×(WC/TA) + 1.4×(RE/TA) + 3.3×(EBIT/TA) + 0.6×(MCap/TL) + 1.0×(Rev/TA)\n>2.99 = Safe | 1.81–2.99 = Grey | <1.81 = Distress", "fields": ["Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities", "Balance_Sheet.retainedEarnings", "Balance_Sheet.totalAssets", "Balance_Sheet.totalLiab", "Income_Statement.ebit (TTM)", "Income_Statement.totalRevenue (TTM)", "Highlights.MarketCapitalization"],
-                "unit": "",
-                "components": [("Working Capital / Total Assets (X1)", f"{x1:.4f}" if x1 else "—"),
-                                ("Retained Earnings / Total Assets (X2)", f"{x2:.4f}" if x2 else "—"),
-                                ("EBIT / Total Assets (X3)", f"{x3:.4f}" if x3 else "—"),
-                                ("Market Cap / Total Liabilities (X4)", f"{x4:.4f}" if x4 else "—"),
-                                ("Revenue / Total Assets (X5)", f"{x5:.4f}" if x5 else "—")],
-                "result": num(z)}
+        wc  = (ca_q - cl_q) if ca_q and cl_q else None
+        x1  = safe(wc, ta_q);  x2 = safe(re_q, ta_q)
+        x3  = safe(ebit_ttm, ta_q); x4 = safe(mcap, tl_q); x5 = safe(rev_ttm, ta_q)
+        z   = (1.2*(x1 or 0) + 1.4*(x2 or 0) + 3.3*(x3 or 0) +
+               0.6*(x4 or 0) + 1.0*(x5 or 0)) if all([x1,x2,x3,x4,x5]) else None
+        zone = ("≥ 2.99 → Safe Zone" if z and z>=2.99 else
+                ("1.81–2.99 → Grey Zone" if z and z>=1.81 else "< 1.81 → Distress Zone")) if z else "—"
+        return {
+            "formula": "1.2·X1 + 1.4·X2 + 3.3·X3 + 0.6·X4 + 1.0·X5\n>2.99 Safe | 1.81–2.99 Grey | <1.81 Distress",
+            "fields":  ["Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities",
+                        "Balance_Sheet.retainedEarnings", "Balance_Sheet.totalAssets",
+                        "Balance_Sheet.totalLiab", "Income_Statement.ebit (TTM)",
+                        "Income_Statement.totalRevenue (TTM)", "Highlights.MarketCapitalization"],
+            "unit": "",
+            "components": [
+                (f"Current Assets  [{bsQ_dt}]",                                         bn(ca_q)),
+                (f"Current Liabilities  [{bsQ_dt}]",                                   bn(cl_q)),
+                (f"Working Capital = CA − CL",                                         bn(wc)),
+                (f"Retained Earnings  [Balance_Sheet.retainedEarnings {bsQ_dt}]",     bn(re_q)),
+                (f"Total Assets  [{bsQ_dt}]",                                          bn(ta_q)),
+                (f"EBIT  [Income_Statement.ebit TTM]",                                 bn(ebit_ttm)),
+                (f"Market Cap  [Highlights.MarketCapitalization]",                     bn(mcap)),
+                (f"Total Liabilities  [Balance_Sheet.totalLiab {bsQ_dt}]",            bn(tl_q)),
+                (f"Revenue  [Income_Statement.totalRevenue TTM]",                      bn(rev_ttm)),
+                ("── Factor Calculation ──",                                             ""),
+                (f"X1 = WC ÷ TA  =  {bn(wc)} ÷ {bn(ta_q)}",                          num(x1, 6) if x1 else "—"),
+                (f"X2 = RE ÷ TA  =  {bn(re_q)} ÷ {bn(ta_q)}",                        num(x2, 6) if x2 else "—"),
+                (f"X3 = EBIT ÷ TA  =  {bn(ebit_ttm)} ÷ {bn(ta_q)}",                  num(x3, 6) if x3 else "—"),
+                (f"X4 = MCap ÷ TL  =  {bn(mcap)} ÷ {bn(tl_q)}",                      num(x4, 6) if x4 else "—"),
+                (f"X5 = Rev ÷ TA  =  {bn(rev_ttm)} ÷ {bn(ta_q)}",                    num(x5, 6) if x5 else "—"),
+                ("── Z-Score = 1.2·X1 + 1.4·X2 + 3.3·X3 + 0.6·X4 + 1.0·X5 ──",     ""),
+                (f"= 1.2·{num(x1,4)} + 1.4·{num(x2,4)} + 3.3·{num(x3,4)} + 0.6·{num(x4,4)} + 1.0·{num(x5,4)}", ""),
+                ("── Result ──",                                                         ""),
+                ("Altman Z-Score",                                                       num(z, 4) if z else "—"),
+                ("Zone",                                                                 zone),
+            ],
+            "result": num(z, 2) if z else "—"}
 
     if "Piotroski" in L:
-        return {"formula": "9-Point Score: Profitability (F1–F4) + Leverage (F5–F6) + Efficiency (F7–F9)\n8–9 Strong | 5–7 Neutral | 0–4 Weak", "fields": ["Income_Statement.netIncome", "Cash_Flow.totalCashFromOperatingActivities", "Balance_Sheet.totalAssets", "Balance_Sheet.longTermDebt", "Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities", "Balance_Sheet.commonStockSharesOutstanding", "Income_Statement.grossProfit", "Income_Statement.totalRevenue"],
-                "unit": "/9",
-                "components": [
-                    ("F1: ROA > 0", "✓/✗"),
-                    ("F2: CFO > 0", "✓/✗"),
-                    ("F3: ΔROA > 0", "✓/✗"),
-                    ("F4: CFO > Net Income (accrual)", "✓/✗"),
-                    ("F5: Δ Long-Term Debt ratio < 0", "✓/✗"),
-                    ("F6: Δ Current Ratio > 0", "✓/✗"),
-                    ("F7: No share dilution", "✓/✗"),
-                    ("F8: Δ Gross Margin > 0", "✓/✗"),
-                    ("F9: Δ Asset Turnover > 0", "✓/✗"),
-                ],
-                "result": "See Health tab for score"}
+        return {
+            "formula": "9 binary criteria (0 or 1 each) — sum = F-Score\n8–9 Strong | 5–7 Neutral | 0–4 Weak",
+            "fields":  ["Income_Statement.netIncome", "Cash_Flow.totalCashFromOperatingActivities",
+                        "Balance_Sheet.totalAssets", "Balance_Sheet.longTermDebt",
+                        "Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities",
+                        "Balance_Sheet.commonStockSharesOutstanding",
+                        "Income_Statement.grossProfit", "Income_Statement.totalRevenue"],
+            "unit": "/9",
+            "components": [
+                ("── Profitability ──",          ""),
+                ("F1: ROA > 0",                  "Net Income ÷ Total Assets > 0"),
+                ("F2: CFO > 0",                  "Cash_Flow.totalCashFromOperatingActivities > 0"),
+                ("F3: ΔROA > 0",                 "ROA[Y0] > ROA[Y-1]"),
+                ("F4: Accrual (CFO > NI)",       "CFO ÷ TA > NI ÷ TA"),
+                ("── Leverage / Liquidity ──",   ""),
+                ("F5: Δ Long-Term Debt < 0",     "LTD/TA[Y0] < LTD/TA[Y-1]"),
+                ("F6: Δ Current Ratio > 0",      "CurrentRatio[Y0] > CurrentRatio[Y-1]"),
+                ("F7: No new shares issued",     "Shares[Y0] ≤ Shares[Y-1]"),
+                ("── Efficiency ──",             ""),
+                ("F8: Δ Gross Margin > 0",       "GrossMargin[Y0] > GrossMargin[Y-1]"),
+                ("F9: Δ Asset Turnover > 0",     "AssetTurnover[Y0] > AssetTurnover[Y-1]"),
+                ("── Result ──",                 ""),
+                ("Score",                        "See Health tab for computed value"),
+            ],
+            "result": "See Health tab"}
 
     return UNKNOWN
 
