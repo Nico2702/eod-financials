@@ -958,6 +958,123 @@ with tab1:
             with col:
                 metric_card(label, fmt_num(rv, prefix="$") if k == "TargetPrice" else str(rv))
 
+    # ── Charts Dashboard ───────────────────────────────────────────────
+    st.markdown('<div class="section-header">Charts</div>', unsafe_allow_html=True)
+
+    chart_period = st.radio("Zeitraum", ["Annual", "Quarterly"], horizontal=True, key="chart_period_tab1")
+    currency = g.get("CurrencyCode", "")
+    st.caption(f"Währung: {currency} / Werte in Mio.")
+
+    df_is_chart = parse_financials(data, "Income_Statement", chart_period)
+    df_cf_chart = parse_financials(data, "Cash_Flow",        chart_period)
+    df_bs_chart = parse_financials(data, "Balance_Sheet",    chart_period)
+
+    CHART_BG   = "#1e2535"
+    CHART_GRID = "#2d3748"
+    CHART_FONT = "#e2e8f0"
+    COLORS = ["#4da6ff", "#48bb78", "#fc8181", "#f6ad55", "#b794f4", "#76e4f7"]
+
+    def base_layout(title):
+        return dict(
+            title=dict(text=title, font=dict(color=CHART_FONT, size=13)),
+            paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG,
+            font=dict(color=CHART_FONT, size=11),
+            height=280, margin=dict(l=10, r=10, t=40, b=30),
+            xaxis=dict(gridcolor=CHART_GRID, showgrid=False),
+            yaxis=dict(gridcolor=CHART_GRID),
+            legend=dict(bgcolor=CHART_BG, borderwidth=0, orientation="h",
+                        yanchor="bottom", y=1.02, xanchor="right", x=1),
+            bargap=0.15,
+        )
+
+    def make_bar(df, col, color, name=None, div=1e6):
+        if df.empty or col not in df.columns:
+            return None
+        s = df[col].dropna()
+        return go.Bar(
+            x=s.index[::-1], y=(s / div)[::-1],
+            name=name or col, marker_color=color,
+            marker_line_width=0,
+        )
+
+    def make_chart(traces, title):
+        fig = go.Figure()
+        for t in traces:
+            if t is not None:
+                fig.add_trace(t)
+        fig.update_layout(**base_layout(title))
+        return fig
+
+    row1_c1, row1_c2, row1_c3 = st.columns(3)
+    row2_c1, row2_c2, row2_c3 = st.columns(3)
+
+    with row1_c1:
+        fig = make_chart(
+            [make_bar(df_is_chart, "totalRevenue", COLORS[0], "Revenue")],
+            f"Revenue ({currency} mln)"
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    with row1_c2:
+        fig = make_chart(
+            [make_bar(df_is_chart, "netIncome", COLORS[1], "Net Income")],
+            f"Net Income ({currency} mln)"
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    with row1_c3:
+        cfo_col = "totalCashFromOperatingActivities"
+        fcf_col = "freeCashFlow"
+        fig = make_chart([
+            make_bar(df_cf_chart, cfo_col, COLORS[2], "Operating Cash Flow"),
+            make_bar(df_cf_chart, fcf_col, COLORS[0], "Free Cash Flow"),
+        ], f"Cash Flow ({currency} mln)")
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    with row2_c1:
+        # Shares outstanding — from general or highlights
+        shares_val = hl.get("SharesOutstanding") or hl.get("SharesFloat")
+        if not df_bs_chart.empty and "commonStock" in df_bs_chart.columns:
+            fig = make_chart(
+                [make_bar(df_bs_chart, "commonStock", COLORS[4], "Shares Outstanding", div=1e6)],
+                "Shares Outstanding (mln)"
+            )
+        else:
+            fig = go.Figure()
+            fig.update_layout(**base_layout("Shares Outstanding (mln)"))
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    with row2_c2:
+        # Total cash = cash + shortTermInvestments, Total debt = shortLongTermDebt + longTermDebt
+        if not df_bs_chart.empty:
+            cash_s = df_bs_chart.get("cash", pd.Series(dtype=float))
+            sti_s  = df_bs_chart.get("shortTermInvestments", pd.Series(dtype=float))
+            ltd_s  = df_bs_chart.get("longTermDebt", pd.Series(dtype=float))
+            std_s  = df_bs_chart.get("shortLongTermDebt", pd.Series(dtype=float))
+
+            total_cash = cash_s.add(sti_s, fill_value=0)
+            total_debt = ltd_s.add(std_s, fill_value=0)
+
+            fig = go.Figure()
+            idx = total_cash.dropna().index[::-1]
+            fig.add_trace(go.Bar(x=idx, y=(total_cash.reindex(idx) / 1e6), name="Total Cash",  marker_color=COLORS[1], marker_line_width=0))
+            fig.add_trace(go.Bar(x=idx, y=(total_debt.reindex(idx) / 1e6), name="Total Debt",  marker_color="#fc8181", marker_line_width=0))
+            fig.update_layout(**base_layout(f"Cash & Debt ({currency} mln)"))
+            fig.update_layout(barmode="group")
+        else:
+            fig = go.Figure()
+            fig.update_layout(**base_layout(f"Cash & Debt ({currency} mln)"))
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    with row2_c3:
+        fig = make_chart([
+            make_bar(df_is_chart, "researchDevelopment",        COLORS[0], "R&D"),
+            make_bar(df_is_chart, "sellingGeneralAdministrative", COLORS[5], "SG&A"),
+        ], f"Operating Expenses ({currency} mln)")
+        fig.update_layout(barmode="stack")
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
 # ═══════════════════════════════════════════════════════════════════
 # TAB 2 · Financials  (TTM + Historical)
 # ═══════════════════════════════════════════════════════════════════
