@@ -793,7 +793,18 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             # try direct FCF sum
             fcf_vals = [v for _, v in fcf_qs if v is not None]
             if len(fcf_vals) == 4:
-                return sum(fcf_vals), sum(v for _,v in cfo_qs if v is not None), \
+                fcf_direct_sum = sum(fcf_vals)
+                # Plausibility check: compare sign/magnitude with CFO-|CapEx| fallback
+                cfo_vals = [v for _, v in cfo_qs if v is not None]
+                cx_vals  = [v for _, v in cx_qs  if v is not None]
+                if len(cfo_vals) == 4 and len(cx_vals) == 4:
+                    fallback_sum = sum(c - abs(cx) for c, cx in zip(
+                        [v for _, v in cfo_qs], [v for _, v in cx_qs]))
+                    # If signs differ, EODHD freeCashFlow likely has sign issue → use fallback
+                    if (fcf_direct_sum > 0) != (fallback_sum > 0) and abs(fallback_sum) > 1e6:
+                        return fallback_sum, sum(v for _,v in cfo_qs if v is not None), \
+                               sum(v for _,v in cx_qs if v is not None), False, qs
+                return fcf_direct_sum, sum(v for _,v in cfo_qs if v is not None), \
                        sum(v for _,v in cx_qs if v is not None), True, qs
             # fallback: CFO - |CapEx|
             fallback = []
@@ -812,6 +823,11 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             cfo = fv(cf.get("totalCashFromOperatingActivities"))
             cx  = fv(cf.get("capitalExpenditures"))
             if fcf is not None:
+                # Plausibility check: if CFO and CapEx available, verify sign consistency
+                if cfo is not None and cx is not None:
+                    fallback = cfo - abs(cx)
+                    if (fcf > 0) != (fallback > 0) and abs(fallback) > 1e6:
+                        return fallback, cfo, cx, False, [y]
                 return fcf, cfo, cx, True, [y]
             if cfo is not None and cx is not None:
                 return cfo - abs(cx), cfo, cx, False, [y]
@@ -1568,76 +1584,133 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         stmt_a  = a_cf if use_cf else a_stmt
         api_key = cf_key if use_cf else field_key
         stmt_lbl= "Cash_Flow" if use_cf else "Income_Statement"
+        is_fcf  = use_cf and cf_key == "freeCashFlow"
+
+        def get_fcf_q(q_key):
+            """For FCF: try freeCashFlow, fallback CFO − |CapEx|. Returns (value, source_label)."""
+            f = fv(stmt_q[q_key].get("freeCashFlow"))
+            if f is not None:
+                return f, "freeCashFlow"
+            cfo   = fv(stmt_q[q_key].get("totalCashFromOperatingActivities"))
+            capex = fv(stmt_q[q_key].get("capitalExpenditures"))
+            if cfo is not None and capex is not None:
+                return cfo - abs(capex), "CFO−|CapEx|"
+            return None, "—"
+
+        def get_fcf_a(y_key):
+            """For FCF annual: try freeCashFlow, fallback CFO − |CapEx|."""
+            d = stmt_a.get(y_key, {})
+            f = fv(d.get("freeCashFlow"))
+            if f is not None:
+                return f, "freeCashFlow"
+            cfo   = fv(d.get("totalCashFromOperatingActivities"))
+            capex = fv(d.get("capitalExpenditures"))
+            if cfo is not None and capex is not None:
+                return cfo - abs(capex), "CFO−|CapEx|"
+            return None, "—"
 
         if "TTM" in L:
             qs = sorted(stmt_q.keys(), reverse=True)
             def get_ttm_with_qs(start):
-                vals = [(qs[i], fv(stmt_q[qs[i]].get(api_key))) for i in range(start, start+4)]
-                total = sum(v for _, v in vals if v is not None)
-                return total if sum(1 for _, v in vals if v is not None)==4 else None, vals
+                rows = []
+                for i in range(start, start+4):
+                    q = qs[i]
+                    if is_fcf:
+                        v, src = get_fcf_q(q)
+                        rows.append((q, v, src))
+                    else:
+                        v = fv(stmt_q[q].get(api_key))
+                        rows.append((q, v, api_key))
+                total = sum(v for _, v, _ in rows if v is not None)
+                return (total if sum(1 for _, v, _ in rows if v is not None) == 4 else None), rows
             t0, t0_qs = get_ttm_with_qs(0)
             t4, t4_qs = get_ttm_with_qs(4)
-            gr = safe(t0, t4) - 1 if t0 and t4 else None
+            # Guard: base must be positive for meaningful growth rate
+            gr = (t0 / t4 - 1) * 100 if t0 is not None and t4 and t4 > 0 else None
+            gr_note = "N/A — base period FCF negative" if (t4 is not None and t4 <= 0) else None
             comps = [
                 (f"TTM now  ({qs[0][:7]}–{qs[3][:7]})", ""),
             ]
-            for q, v in t0_qs: comps.append((f"  {stmt_lbl}.{api_key}  [{q}]", bn(v)))
-            comps.append((f"  → TTM Sum (now)", bn(t0)))
+            for q, v, src in t0_qs:
+                lbl = f"  {stmt_lbl}.freeCashFlow [{q}]" if src == "freeCashFlow" else \
+                      f"  CFO−|CapEx| fallback  [{q}]" if src == "CFO−|CapEx|" else \
+                      f"  {stmt_lbl}.{api_key}  [{q}]"
+                comps.append((lbl, raw(v)))
+            comps.append((f"  → TTM Sum (now)", raw(t0)))
             comps.append((f"TTM 1Y ago  ({qs[4][:7]}–{qs[7][:7]})" if len(qs)>7 else "TTM 1Y ago", ""))
-            for q, v in t4_qs: comps.append((f"  {stmt_lbl}.{api_key}  [{q}]", bn(v)))
-            comps.append((f"  → TTM Sum (1Y ago)", bn(t4)))
+            for q, v, src in t4_qs:
+                lbl = f"  {stmt_lbl}.freeCashFlow [{q}]" if src == "freeCashFlow" else \
+                      f"  CFO−|CapEx| fallback  [{q}]" if src == "CFO−|CapEx|" else \
+                      f"  {stmt_lbl}.{api_key}  [{q}]"
+                comps.append((lbl, raw(v)))
+            comps.append((f"  → TTM Sum (1Y ago)", raw(t4)))
             comps += [
                 ("── Calculation ──",                              ""),
-                (f"(TTM now ÷ TTM 1Y ago) − 1",                  f"({bn(t0)} ÷ {bn(t4)}) − 1"),
+                (f"(TTM now ÷ TTM 1Y ago) − 1",                  f"({raw(t0)} ÷ {raw(t4)}) − 1"),
                 ("× 100",                                          ""),
                 ("── Result ──",                                   ""),
-                (f"{field_label} Growth (TTM)",                   pct(gr)),
+                (f"{field_label} Growth (TTM)",                   pct(gr) if gr is not None else (gr_note or "—")),
             ]
-            return {"formula": "(TTM[now] ÷ TTM[1Y ago] − 1) × 100  |  4-quarter rolling sums",
+            fcf_note = "\n⚠ FCF = freeCashFlow; fallback CFO−|CapEx| if null\n⚠ N/A when base period ≤ 0" if is_fcf else ""
+            return {"formula": f"(TTM[now] ÷ TTM[1Y ago] − 1) × 100  |  4-quarter rolling sums{fcf_note}",
                     "fields": [f"{stmt_lbl}.{api_key} — quarterly, windows [Q0:Q3] and [Q4:Q7]"],
-                    "unit": "%", "components": comps, "result": pct(gr)}
+                    "unit": "%", "components": comps, "result": pct(gr) if gr is not None else (gr_note or "—")}
 
         elif "YoY" in L:
             qs = sorted(stmt_q.keys(), reverse=True)
-            v0 = fv(stmt_q[qs[0]].get(api_key)) if qs else None
-            v4 = fv(stmt_q[qs[4]].get(api_key)) if len(qs)>4 else None
-            gr = safe(v0, v4) - 1 if v0 and v4 else None
+            if is_fcf:
+                v0, s0 = get_fcf_q(qs[0]) if qs else (None, "—")
+                v4, s4 = get_fcf_q(qs[4]) if len(qs)>4 else (None, "—")
+            else:
+                v0 = fv(stmt_q[qs[0]].get(api_key)) if qs else None
+                v4 = fv(stmt_q[qs[4]].get(api_key)) if len(qs)>4 else None
+                s0 = s4 = api_key
+            gr = (v0 / v4 - 1) * 100 if v0 is not None and v4 and v4 > 0 else None
+            gr_note = "N/A — base period negative" if (v4 is not None and v4 <= 0) else None
             q0 = qs[0] if qs else "—"; q4 = qs[4] if len(qs)>4 else "—"
             return {
-                "formula": "(Q[latest] ÷ Q[same quarter -1Y] − 1) × 100",
+                "formula": "(Q[latest] ÷ Q[same quarter -1Y] − 1) × 100\n⚠ N/A when base ≤ 0" if is_fcf else
+                           "(Q[latest] ÷ Q[same quarter -1Y] − 1) × 100",
                 "fields":  [f"{stmt_lbl}.{api_key} — quarterly"],
                 "unit": "%",
                 "components": [
-                    (f"{stmt_lbl}.{api_key}  [{q0}]", bn(v0)),
-                    (f"{stmt_lbl}.{api_key}  [{q4}]", bn(v4)),
+                    (f"{stmt_lbl}.{api_key}  [{q0}]  (source: {s0})" if is_fcf else f"{stmt_lbl}.{api_key}  [{q0}]", raw(v0)),
+                    (f"{stmt_lbl}.{api_key}  [{q4}]  (source: {s4})" if is_fcf else f"{stmt_lbl}.{api_key}  [{q4}]", raw(v4)),
                     ("── Calculation ──",               ""),
-                    (f"({bn(v0)} ÷ {bn(v4)}) − 1",    ""),
+                    (f"({raw(v0)} ÷ {raw(v4)}) − 1",  ""),
                     ("× 100",                           ""),
                     ("── Result ──",                    ""),
-                    (f"{field_label} Growth (YoY)",    pct(gr)),
+                    (f"{field_label} Growth (YoY)",    pct(gr) if gr is not None else (gr_note or "—")),
                 ],
-                "result": pct(gr)}
+                "result": pct(gr) if gr is not None else (gr_note or "—")}
 
         elif "Year" in L:
             ys = sorted(stmt_a.keys(), reverse=True)
-            v0 = fv(stmt_a[ys[0]].get(api_key)) if ys else None
-            v1 = fv(stmt_a[ys[1]].get(api_key)) if len(ys)>1 else None
+            if is_fcf:
+                v0, s0 = get_fcf_a(ys[0]) if ys else (None, "—")
+                v1, s1 = get_fcf_a(ys[1]) if len(ys)>1 else (None, "—")
+            else:
+                v0 = fv(stmt_a[ys[0]].get(api_key)) if ys else None
+                v1 = fv(stmt_a[ys[1]].get(api_key)) if len(ys)>1 else None
+                s0 = s1 = api_key
             y0 = ys[0] if ys else "—"; y1 = ys[1] if len(ys)>1 else "—"
-            gr = safe(v0, v1) - 1 if v0 and v1 else None
+            gr = (v0 / v1 - 1) * 100 if v0 is not None and v1 and v1 > 0 else None
+            gr_note = "N/A — base period negative" if (v1 is not None and v1 <= 0) else None
             return {
-                "formula": "(Year[0] ÷ Year[-1] − 1) × 100",
+                "formula": "(Year[0] ÷ Year[-1] − 1) × 100\n⚠ N/A when base ≤ 0" if is_fcf else
+                           "(Year[0] ÷ Year[-1] − 1) × 100",
                 "fields":  [f"{stmt_lbl}.{api_key} — annual"],
                 "unit": "%",
                 "components": [
-                    (f"{stmt_lbl}.{api_key}  [{y0}]",          bn(v0)),
-                    (f"{stmt_lbl}.{api_key}  [{y1}]",          bn(v1)),
-                    ("── Calculation ──",                        ""),
-                    (f"({bn(v0)} ÷ {bn(v1)}) − 1",            ""),
-                    ("× 100",                                    ""),
-                    ("── Result ──",                             ""),
-                    (f"{field_label} Growth (Year)",            pct(gr)),
+                    (f"{stmt_lbl}.{api_key}  [{y0}]  (source: {s0})" if is_fcf else f"{stmt_lbl}.{api_key}  [{y0}]", raw(v0)),
+                    (f"{stmt_lbl}.{api_key}  [{y1}]  (source: {s1})" if is_fcf else f"{stmt_lbl}.{api_key}  [{y1}]", raw(v1)),
+                    ("── Calculation ──",                              ""),
+                    (f"({raw(v0)} ÷ {raw(v1)}) − 1",                 ""),
+                    ("× 100",                                          ""),
+                    ("── Result ──",                                   ""),
+                    (f"{field_label} Growth (Year)",                  pct(gr) if gr is not None else (gr_note or "—")),
                 ],
-                "result": pct(gr)}
+                "result": pct(gr) if gr is not None else (gr_note or "—")}
 
         elif "Fwd" in L:
             trends   = data.get("Earnings", {}).get("Trend", {})
