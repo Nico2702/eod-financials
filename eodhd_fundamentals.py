@@ -1123,18 +1123,36 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         dt     = f"TTM ({qcf_s[0][:7]}…{qcf_s[3][:7]})" if is_ttm else cfA_dt
         r      = safe(fcf, mcap)
         comps  = []
-        if direct:
-            comps.append((f"FCF  [Cash_Flow.freeCashFlow {dt}]", bn(fcf)))
+        if is_ttm:
+            qs_used = sorted(q_cf.keys(), reverse=True)[:4]
+            if direct:
+                comps.append((f"── FCF quarters (freeCashFlow) ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.freeCashFlow  [{q}]", raw(fv(q_cf[q].get("freeCashFlow")))))
+                comps.append(("  → FCF TTM Sum", raw(fcf)))
+            else:
+                comps.append(("── CFO quarters (freeCashFlow null → fallback) ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.totalCashFromOperatingActivities  [{q}]", raw(fv(q_cf[q].get("totalCashFromOperatingActivities")))))
+                comps.append(("  → CFO TTM Sum", raw(cfo)))
+                comps.append(("── CapEx quarters ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.capitalExpenditures  [{q}]", raw(fv(q_cf[q].get("capitalExpenditures")))))
+                comps.append(("  → CapEx TTM Sum", raw(cx)))
+                comps.append((f"  FCF = CFO − |CapEx| = {raw(cfo)} − |{raw(cx)}|", raw(fcf)))
         else:
-            comps += [
-                (f"CFO  [Cash_Flow.totalCashFromOperatingActivities {dt}]", bn(cfo)),
-                (f"CapEx  [Cash_Flow.capitalExpenditures {dt}]",            bn(cx)),
-                ("FCF = CFO − |CapEx| (fallback)",                          bn(fcf)),
-            ]
+            if direct:
+                comps.append((f"Cash_Flow.freeCashFlow  [{cfA_dt}]", raw(fcf)))
+            else:
+                comps += [
+                    (f"Cash_Flow.totalCashFromOperatingActivities  [{cfA_dt}]", raw(cfo)),
+                    (f"Cash_Flow.capitalExpenditures  [{cfA_dt}]",              raw(cx)),
+                    (f"FCF = CFO − |CapEx| (fallback)",                         raw(fcf)),
+                ]
         comps += [
-            ("Market Cap  [Highlights.MarketCapitalization]",               bn(mcap)),
+            ("Market Cap  [Highlights.MarketCapitalization]",               raw(mcap)),
             ("── Calculation ──",                                            ""),
-            ("FCF ÷ Market Cap × 100",                                      f"{bn(fcf)} ÷ {bn(mcap)}"),
+            ("FCF ÷ Market Cap × 100",                                      f"{raw(fcf)} ÷ {raw(mcap)}"),
             ("── Result ──",                                                 ""),
             ("FCF Yield",                                                    pct(r)),
         ]
@@ -1327,16 +1345,18 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                         "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
             "unit": "%",
             "components": [
-                (f"Net Income  [{dt_ni}]",               bn(ni)),
-                (f"Equity  [{dt_bs}]",                   bn(eq)),
-                (f"Long-Term Debt  [{dt_bs}]",           bn(ltd)),
-                (f"Short-Term Debt  [{dt_bs}]",          bn(std)),
-                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
-                (f"Equity + Debt = {bn(eq)} + {bn(debt)}", bn(ic)),
-                ("── Calculation ──",                    ""),
-                (f"NI ÷ (Eq + Debt) × 100",             f"{bn(ni)} ÷ {bn(ic)}"),
-                ("── Result ──",                         ""),
-                ("ROC",                                  pct(r)),
+                (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──", ""),
+                *(ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else
+                  [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]),
+                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",  raw(eq)),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",    raw(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt_bs}]", raw(std)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)}",                    raw(debt)),
+                (f"Invested Capital = {raw(eq)} + {raw(debt)}",              raw(ic)),
+                ("── Calculation ──",                                         ""),
+                (f"NI ÷ (Eq + Debt) × 100",                                 f"{raw(ni)} ÷ {raw(ic)}"),
+                ("── Result ──",                                              ""),
+                ("ROC",                                                        pct(r)),
             ],
             "result": pct(r)}
 
@@ -1375,12 +1395,16 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "fields":  ["Income_Statement.operatingIncome", "Income_Statement.totalRevenue"],
             "unit": "%",
             "components": [
-                (f"Operating Income  [Income_Statement.operatingIncome {dt}]", bn(oi)),
-                (f"Revenue  [{dt}]",                                           bn(rev)),
-                ("── Calculation ──",                                           ""),
-                ("Operating Income ÷ Revenue × 100",                          f"{bn(oi)} ÷ {bn(rev)}"),
-                ("── Result ──",                                                ""),
-                ("Operating Margin",                                            pct(r)),
+                (f"── Operating Income {'TTM quarters' if is_ttm else dt} ──", ""),
+                *(ttm_rows(q_is, "operatingIncome", "Income_Statement.operatingIncome") if is_ttm else
+                  [(f"Income_Statement.operatingIncome  [{isA_dt}]", raw(oi))]),
+                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──",          ""),
+                *(ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else
+                  [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]),
+                ("── Calculation ──",                                            ""),
+                ("Operating Income ÷ Revenue × 100",                           f"{raw(oi)} ÷ {raw(rev)}"),
+                ("── Result ──",                                                 ""),
+                ("Operating Margin",                                             pct(r)),
             ],
             "result": pct(r)}
 
@@ -1395,12 +1419,16 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "fields":  ["Income_Statement.ebit", "Income_Statement.totalRevenue"],
             "unit": "%",
             "components": [
-                (f"EBIT  [Income_Statement.ebit {dt}]",        bn(ebit)),
-                (f"Revenue  [Income_Statement.totalRevenue {dt}]", bn(rev)),
-                ("── Calculation ──",                            ""),
-                ("EBIT ÷ Revenue × 100",                       f"{bn(ebit)} ÷ {bn(rev)}"),
-                ("── Result ──",                                ""),
-                ("EBIT Margin",                                 pct(r)),
+                (f"── EBIT {'TTM quarters' if is_ttm else dt} ──", ""),
+                *(ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm else
+                  [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]),
+                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──", ""),
+                *(ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else
+                  [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]),
+                ("── Calculation ──",                                ""),
+                ("EBIT ÷ Revenue × 100",                           f"{raw(ebit)} ÷ {raw(rev)}"),
+                ("── Result ──",                                    ""),
+                ("EBIT Margin",                                      pct(r)),
             ],
             "result": pct(r)}
 
@@ -1415,12 +1443,16 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "fields":  ["Income_Statement.ebitda", "Income_Statement.totalRevenue"],
             "unit": "%",
             "components": [
-                (f"EBITDA  [Income_Statement.ebitda {dt}]",        bn(ebitda)),
-                (f"Revenue  [Income_Statement.totalRevenue {dt}]", bn(rev)),
-                ("── Calculation ──",                               ""),
-                ("EBITDA ÷ Revenue × 100",                        f"{bn(ebitda)} ÷ {bn(rev)}"),
+                (f"── EBITDA {'TTM quarters' if is_ttm else dt} ──", ""),
+                *(ttm_rows(q_is, "ebitda", "Income_Statement.ebitda") if is_ttm else
+                  [(f"Income_Statement.ebitda  [{isA_dt}]", raw(ebitda))]),
+                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──", ""),
+                *(ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else
+                  [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]),
+                ("── Calculation ──",                                ""),
+                ("EBITDA ÷ Revenue × 100",                         f"{raw(ebitda)} ÷ {raw(rev)}"),
                 ("── Result ──",                                    ""),
-                ("EBITDA Margin",                                   pct(r)),
+                ("EBITDA Margin",                                    pct(r)),
             ],
             "result": pct(r)}
 
@@ -1671,13 +1703,15 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                         "Cash_Flow.freeCashFlow (TTM)"],
             "unit": "%",
             "components": [
-                (f"Revenue TTM",                                               bn(rev_ttm)),
-                (f"Revenue Y-1  [Income_Statement.totalRevenue {y1}]",       bn(rev1_a)),
-                (f"Revenue Growth = ({bn(rev_ttm)} ÷ {bn(rev1_a)}) − 1",    pct(rev_gr)),
-                ("",                                                            ""),
-                (f"FCF {'TTM' if is_ttm else 'Annual'}",                      bn(fcf)),
-                (f"Revenue {'TTM' if is_ttm else 'Annual'}",                  bn(rev)),
-                (f"FCF Margin = {bn(fcf)} ÷ {bn(rev)}",                      pct(fcfm)),
+                ("── Revenue TTM quarters ──",                                ""),
+                *ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue"),
+                (f"Revenue Y-1  [Income_Statement.totalRevenue {y1}]",       raw(rev1_a)),
+                (f"Revenue Growth = ({raw(rev_ttm)} ÷ {raw(rev1_a)}) − 1",  pct(rev_gr)),
+                ("── FCF TTM quarters ──",                                    ""),
+                *(ttm_rows(q_cf, "freeCashFlow", "Cash_Flow.freeCashFlow") if is_ttm else
+                  [(f"Cash_Flow.freeCashFlow  [{cfA_dt}]", raw(fcf))]),
+                (f"Revenue {'TTM' if is_ttm else 'Annual'}",                  raw(rev)),
+                (f"FCF Margin = {raw(fcf)} ÷ {raw(rev)}",                    pct(fcfm)),
                 ("── Calculation ──",                                           ""),
                 (f"Rev Growth % + FCF Margin %",
                  f"{pct(rev_gr)} + {pct(fcfm)}"),
@@ -1752,22 +1786,40 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         cx     = fcf_ttm_cx  if is_q else fcf_a_cx
         r      = safe(fcf, debt)
         comps  = []
-        if direct:
-            comps.append((f"FCF  [Cash_Flow.freeCashFlow {'TTM' if is_q else cfA_dt}]", bn(fcf)))
+        if is_q:
+            qs_used = sorted(q_cf.keys(), reverse=True)[:4]
+            if direct:
+                comps.append(("── FCF quarters (freeCashFlow) ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.freeCashFlow  [{q}]", raw(fv(q_cf[q].get("freeCashFlow")))))
+                comps.append(("  → FCF TTM Sum", raw(fcf)))
+            else:
+                comps.append(("── CFO quarters (freeCashFlow null → fallback) ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.totalCashFromOperatingActivities  [{q}]", raw(fv(q_cf[q].get("totalCashFromOperatingActivities")))))
+                comps.append(("  → CFO TTM Sum", raw(cfo)))
+                comps.append(("── CapEx quarters ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.capitalExpenditures  [{q}]", raw(fv(q_cf[q].get("capitalExpenditures")))))
+                comps.append(("  → CapEx TTM Sum", raw(cx)))
+                comps.append((f"  FCF = CFO − |CapEx| = {raw(cfo)} − |{raw(cx)}|", raw(fcf)))
         else:
-            comps += [
-                (f"CFO  [totalCashFromOperatingActivities {'TTM' if is_q else cfA_dt}]", bn(cfo)),
-                (f"CapEx  [capitalExpenditures {'TTM' if is_q else cfA_dt}]",             bn(cx)),
-                (f"FCF = CFO − |CapEx| (fallback)",                                       bn(fcf)),
-            ]
+            if direct:
+                comps.append((f"Cash_Flow.freeCashFlow  [{cfA_dt}]", raw(fcf)))
+            else:
+                comps += [
+                    (f"Cash_Flow.totalCashFromOperatingActivities  [{cfA_dt}]", raw(cfo)),
+                    (f"Cash_Flow.capitalExpenditures  [{cfA_dt}]",              raw(cx)),
+                    (f"FCF = CFO − |CapEx| (fallback)",                         raw(fcf)),
+                ]
         comps += [
-            (f"Long-Term Debt  [{dt}]",          bn(ltd)),
-            (f"Short-Term Debt  [{dt}]",         bn(std)),
-            (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
-            ("── Calculation ──",                 ""),
-            (f"FCF ÷ Total Debt",               f"{bn(fcf)} ÷ {bn(debt)}"),
-            ("── Result ──",                      ""),
-            ("FCF/Debt",                          num(r, 4) + " x"),
+            (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",          raw(ltd)),
+            (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",    raw(std)),
+            (f"Total Debt = {raw(ltd)} + {raw(std)}",                       raw(debt)),
+            ("── Calculation ──",                                             ""),
+            (f"FCF ÷ Total Debt  =  {raw(fcf)} ÷ {raw(debt)}",              ""),
+            ("── Result ──",                                                  ""),
+            ("FCF/Debt",                                                      num(r, 4) + " x"),
         ]
         return {"formula": "Free Cash Flow ÷ Total Debt",
                 "fields": ["Cash_Flow.freeCashFlow", "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
@@ -1931,21 +1983,22 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ltd, std, debt, dt = health_debt_comps(is_q)
         is_ttm2 = "TTM" in L
         ebit    = ebit_ttm if is_ttm2 else ebit_a
-        dt_e    = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm2 else isA_dt
         r       = safe(debt, ebit)
+        ebit_comps = ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm2 else                      [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]
         return {
             "formula": "Total Debt ÷ EBIT",
             "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Income_Statement.ebit"],
             "unit": "x",
             "components": [
-                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
-                (f"Short-Term Debt  [{dt}]",          bn(std)),
-                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
-                (f"EBIT  [Income_Statement.ebit {dt_e}]", bn(ebit)),
-                ("── Calculation ──",                  ""),
-                (f"Debt ÷ EBIT",                     f"{bn(debt)} ÷ {bn(ebit)}"),
-                ("── Result ──",                       ""),
-                ("Debt/EBIT",                          num(r, 4) + " x"),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
+                (f"── EBIT {'TTM quarters' if is_ttm2 else isA_dt} ──",      ""),
+                *ebit_comps,
+                ("── Calculation ──",                                          ""),
+                (f"Debt ÷ EBIT  =  {raw(debt)} ÷ {raw(ebit)}",               ""),
+                ("── Result ──",                                               ""),
+                ("Debt/EBIT",                                                  num(r, 4) + " x"),
             ],
             "result": num(r, 2)}
 
@@ -1955,24 +2008,25 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         nd      = debt - (cash or 0)
         is_ttm2 = "TTM" in L
         ebit    = ebit_ttm if is_ttm2 else ebit_a
-        dt_e    = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm2 else isA_dt
         r       = safe(nd, ebit)
+        ebit_comps = ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm2 else                      [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]
         return {
             "formula": "Net Debt ÷ EBIT\nNet Debt = Total Debt − Cash",
             "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
                         "Balance_Sheet.cashAndEquivalents", "Income_Statement.ebit"],
             "unit": "x",
             "components": [
-                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
-                (f"Short-Term Debt  [{dt}]",          bn(std)),
-                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
-                (f"Cash  [{dt}]",                     bn(cash)),
-                (f"Net Debt = Debt − Cash",           bn(nd)),
-                (f"EBIT  [{dt_e}]",                   bn(ebit)),
-                ("── Calculation ──",                  ""),
-                (f"Net Debt ÷ EBIT",                 f"{bn(nd)} ÷ {bn(ebit)}"),
-                ("── Result ──",                       ""),
-                ("NetDebt/EBIT",                       num(r, 4) + " x"),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
+                (f"Cash  [Balance_Sheet.cashAndEquivalents {dt}]",            raw(cash)),
+                (f"Net Debt = {raw(debt)} − {raw(cash)}",                    raw(nd)),
+                (f"── EBIT {'TTM quarters' if is_ttm2 else isA_dt} ──",      ""),
+                *ebit_comps,
+                ("── Calculation ──",                                          ""),
+                (f"Net Debt ÷ EBIT  =  {raw(nd)} ÷ {raw(ebit)}",             ""),
+                ("── Result ──",                                               ""),
+                ("NetDebt/EBIT",                                               num(r, 4) + " x"),
             ],
             "result": num(r, 2)}
 
@@ -1980,21 +2034,22 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ltd, std, debt, dt = health_debt_comps(is_q)
         is_ttm2 = "TTM" in L
         ebitda  = ebitda_ttm if is_ttm2 else ebitda_a
-        dt_e    = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm2 else isA_dt
         r       = safe(debt, ebitda)
+        ebitda_comps = ttm_rows(q_is, "ebitda", "Income_Statement.ebitda") if is_ttm2 else                        [(f"Income_Statement.ebitda  [{isA_dt}]", raw(ebitda))]
         return {
             "formula": "Total Debt ÷ EBITDA",
             "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Income_Statement.ebitda"],
             "unit": "x",
             "components": [
-                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
-                (f"Short-Term Debt  [{dt}]",          bn(std)),
-                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
-                (f"EBITDA  [{dt_e}]",                 bn(ebitda)),
-                ("── Calculation ──",                  ""),
-                (f"Debt ÷ EBITDA",                   f"{bn(debt)} ÷ {bn(ebitda)}"),
-                ("── Result ──",                       ""),
-                ("Debt/EBITDA",                        num(r, 4) + " x"),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
+                (f"── EBITDA {'TTM quarters' if is_ttm2 else isA_dt} ──",    ""),
+                *ebitda_comps,
+                ("── Calculation ──",                                          ""),
+                (f"Debt ÷ EBITDA  =  {raw(debt)} ÷ {raw(ebitda)}",           ""),
+                ("── Result ──",                                               ""),
+                ("Debt/EBITDA",                                                num(r, 4) + " x"),
             ],
             "result": num(r, 2)}
 
@@ -2004,24 +2059,25 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         nd      = debt - (cash or 0)
         is_ttm2 = "TTM" in L
         ebitda  = ebitda_ttm if is_ttm2 else ebitda_a
-        dt_e    = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm2 else isA_dt
         r       = safe(nd, ebitda)
+        ebitda_comps = ttm_rows(q_is, "ebitda", "Income_Statement.ebitda") if is_ttm2 else                        [(f"Income_Statement.ebitda  [{isA_dt}]", raw(ebitda))]
         return {
             "formula": "Net Debt ÷ EBITDA\nNet Debt = Total Debt − Cash",
             "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
                         "Balance_Sheet.cashAndEquivalents", "Income_Statement.ebitda"],
             "unit": "x",
             "components": [
-                (f"Long-Term Debt  [{dt}]",           bn(ltd)),
-                (f"Short-Term Debt  [{dt}]",          bn(std)),
-                (f"Total Debt = {bn(ltd)} + {bn(std)}", bn(debt)),
-                (f"Cash  [{dt}]",                     bn(cash)),
-                (f"Net Debt = Debt − Cash",           bn(nd)),
-                (f"EBITDA  [{dt_e}]",                 bn(ebitda)),
-                ("── Calculation ──",                  ""),
-                (f"Net Debt ÷ EBITDA",               f"{bn(nd)} ÷ {bn(ebitda)}"),
-                ("── Result ──",                       ""),
-                ("NetDebt/EBITDA",                     num(r, 4) + " x"),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
+                (f"Cash  [Balance_Sheet.cashAndEquivalents {dt}]",            raw(cash)),
+                (f"Net Debt = {raw(debt)} − {raw(cash)}",                    raw(nd)),
+                (f"── EBITDA {'TTM quarters' if is_ttm2 else isA_dt} ──",    ""),
+                *ebitda_comps,
+                ("── Calculation ──",                                          ""),
+                (f"Net Debt ÷ EBITDA  =  {raw(nd)} ÷ {raw(ebitda)}",         ""),
+                ("── Result ──",                                               ""),
+                ("NetDebt/EBITDA",                                             num(r, 4) + " x"),
             ],
             "result": num(r, 2)}
 
