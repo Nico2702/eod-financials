@@ -735,7 +735,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         except: return None
     def pct(v):  return f"{v*100:.4f} %" if v is not None else "—"
     def num(v, d=4): return f"{v:.{d}f}" if v is not None else "—"
-    def bn(v):   return f"{v/1e9:.4f} B" if v is not None else "—"
+    def raw(v):
+        """Show exact API value — integer if whole number, otherwise full float."""
+        if v is None: return "—"
+        if v == int(v): return f"{int(v):,}"
+        return f"{v:,.2f}"
+    def bn(v):   return raw(v)   # all component values now show raw API numbers
     def safe(a, b): return a/b if (a is not None and b is not None and b != 0) else None
     def div_str(a, b, unit=""):
         r = safe(a, b)
