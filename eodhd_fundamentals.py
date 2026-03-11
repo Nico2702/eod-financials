@@ -768,6 +768,14 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         total = sum(v for _, v in vals if v is not None)
         return total if sum(1 for _, v in vals if v is not None) == 4 else None, vals
 
+    def ttm_rows(stmt, key, api_field, label="TTM"):
+        """Returns component rows showing each quarter + sum for TTM values."""
+        qs = sorted(stmt.keys(), reverse=True)[:4]
+        rows = [(f"  {api_field}  [{q}]", raw(fv(stmt[q].get(key)))) for q in qs]
+        total = sum(fv(stmt[q].get(key)) or 0 for q in qs)
+        rows.append((f"  → {label} Sum  (Q1+Q2+Q3+Q4)", raw(total)))
+        return rows
+
     def ttm(stmt, key):
         v, _ = ttm_quarters(stmt, key)
         return v
@@ -909,16 +917,19 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ni  = ni_ttm if is_ttm else ni_a
         dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         pe  = safe(mcap, ni)
+        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
+                   [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         return {
             "formula": "Market Cap ÷ Net Income",
             "fields":  ["Highlights.MarketCapitalization",
                         "Income_Statement.netIncome (quarterly TTM sum)" if is_ttm else "Income_Statement.netIncome (annual)"],
             "unit": "x",
             "components": [
-                ("Market Cap  [Highlights.MarketCapitalization]", bn(mcap)),
-                (f"Net Income  [{dt}]",                          bn(ni)),
+                ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
+                (f"── Net Income {'TTM quarters' if is_ttm else dt} ──", ""),
+                *ni_comps,
                 ("── Calculation ──",                             ""),
-                (f"Market Cap ÷ Net Income",                      f"{bn(mcap)} ÷ {bn(ni)}"),
+                (f"Market Cap ÷ Net Income",                      f"{raw(mcap)} ÷ {raw(ni)}"),
                 ("── Result ──",                                  ""),
                 ("P/E",                                           num(pe, 4) + " x"),
             ],
@@ -929,16 +940,18 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         rev = rev_ttm if is_ttm else rev_a
         dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         ps  = safe(mcap, rev)
+        rev_comps = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else                     [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]
         return {
             "formula": "Market Cap ÷ Revenue",
             "fields":  ["Highlights.MarketCapitalization",
                         "Income_Statement.totalRevenue"],
             "unit": "x",
             "components": [
-                ("Market Cap  [Highlights.MarketCapitalization]", bn(mcap)),
-                (f"Revenue  [{dt}]",                              bn(rev)),
+                ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
+                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──", ""),
+                *rev_comps,
                 ("── Calculation ──",                             ""),
-                ("Market Cap ÷ Revenue",                          f"{bn(mcap)} ÷ {bn(rev)}"),
+                ("Market Cap ÷ Revenue",                          f"{raw(mcap)} ÷ {raw(rev)}"),
                 ("── Result ──",                                  ""),
                 ("P/S",                                           num(ps, 4) + " x"),
             ],
@@ -972,22 +985,36 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         direct = fcf_ttm_direct if is_ttm else fcf_a_direct
         dt     = f"TTM ({qcf_s[0][:7]}…{qcf_s[3][:7]})" if is_ttm else cfA_dt
         pf     = safe(mcap, fcf)
-        comps  = [("Market Cap  [Highlights.MarketCapitalization]", bn(mcap))]
-        if direct:
-            comps += [
-                (f"FCF (direct)  [Cash_Flow.freeCashFlow {dt}]",   bn(fcf)),
-                ("── No fallback needed ──",                         "freeCashFlow used directly"),
-            ]
+        comps  = [("Market Cap  [Highlights.MarketCapitalization]", raw(mcap))]
+        if is_ttm:
+            qs_used = sorted(q_cf.keys(), reverse=True)[:4]
+            if direct:
+                comps.append((f"── FCF quarters (freeCashFlow) ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.freeCashFlow  [{q}]", raw(fv(q_cf[q].get("freeCashFlow")))))
+                comps.append((f"  → FCF TTM Sum", raw(fcf)))
+            else:
+                comps.append((f"── CFO quarters (freeCashFlow was null → fallback) ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.totalCashFromOperatingActivities  [{q}]", raw(fv(q_cf[q].get("totalCashFromOperatingActivities")))))
+                comps.append((f"  → CFO TTM Sum", raw(cfo)))
+                comps.append((f"── CapEx quarters ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.capitalExpenditures  [{q}]", raw(fv(q_cf[q].get("capitalExpenditures")))))
+                comps.append((f"  → CapEx TTM Sum", raw(cx)))
+                comps.append((f"  FCF = CFO − |CapEx| = {raw(cfo)} − |{raw(cx)}|", raw(fcf)))
         else:
-            comps += [
-                (f"CFO  [Cash_Flow.totalCashFromOperatingActivities {dt}]", bn(cfo)),
-                (f"CapEx  [Cash_Flow.capitalExpenditures {dt}]",            bn(cx)),
-                ("── FCF fallback: CFO − |CapEx| ──",               "freeCashFlow was null"),
-                (f"FCF = {bn(cfo)} − |{bn(cx)}|",                   bn(fcf)),
-            ]
+            if direct:
+                comps += [(f"Cash_Flow.freeCashFlow  [{cfA_dt}]", raw(fcf))]
+            else:
+                comps += [
+                    (f"Cash_Flow.totalCashFromOperatingActivities  [{cfA_dt}]", raw(cfo)),
+                    (f"Cash_Flow.capitalExpenditures  [{cfA_dt}]",              raw(cx)),
+                    (f"FCF = CFO − |CapEx| (fallback)",                         raw(fcf)),
+                ]
         comps += [
             ("── Calculation ──",                                    ""),
-            ("Market Cap ÷ FCF",                                     f"{bn(mcap)} ÷ {bn(fcf)}"),
+            ("Market Cap ÷ FCF",                                     f"{raw(mcap)} ÷ {raw(fcf)}"),
             ("── Result ──",                                         ""),
             ("P/FCF",                                                num(pf, 4) + " x"),
         ]
@@ -1008,17 +1035,19 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         # EV breakdown
         ev_raw = fv(val.get("EnterpriseValue"))
         r      = safe(ev, rev)
+        rev_comps = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else                     [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]
         return {
             "formula": "Enterprise Value ÷ Revenue\n(EV = Valuation.EnterpriseValue; if null → MCap + Debt − Cash)",
             "fields":  ["Valuation.EnterpriseValue", "Income_Statement.totalRevenue"],
             "unit": "x",
             "components": [
-                ("EV  [Valuation.EnterpriseValue]",         bn(ev_raw)),
-                (f"Revenue  [{dt}]",                        bn(rev)),
-                ("── Calculation ──",                        ""),
-                ("EV ÷ Revenue",                            f"{bn(ev)} ÷ {bn(rev)}"),
-                ("── Result ──",                             ""),
-                ("EV/Revenue",                              num(r, 4) + " x"),
+                ("EV  [Valuation.EnterpriseValue]",                 raw(ev_raw)),
+                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──", ""),
+                *rev_comps,
+                ("── Calculation ──",                                ""),
+                ("EV ÷ Revenue",                                    f"{raw(ev)} ÷ {raw(rev)}"),
+                ("── Result ──",                                     ""),
+                ("EV/Revenue",                                      num(r, 4) + " x"),
             ],
             "result": num(r, 2)}
 
@@ -1027,17 +1056,19 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ebit   = ebit_ttm if is_ttm else ebit_a
         dt     = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         r      = safe(ev, ebit)
+        ebit_comps = ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm else                      [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]
         return {
             "formula": "Enterprise Value ÷ EBIT",
             "fields":  ["Valuation.EnterpriseValue", "Income_Statement.ebit"],
             "unit": "x",
             "components": [
-                ("EV  [Valuation.EnterpriseValue]",   bn(ev)),
-                (f"EBIT  [Income_Statement.ebit {dt}]", bn(ebit)),
-                ("── Calculation ──",                   ""),
-                ("EV ÷ EBIT",                          f"{bn(ev)} ÷ {bn(ebit)}"),
-                ("── Result ──",                        ""),
-                ("EV/EBIT",                            num(r, 4) + " x"),
+                ("EV  [Valuation.EnterpriseValue]",                  raw(ev)),
+                (f"── EBIT {'TTM quarters' if is_ttm else dt} ──",  ""),
+                *ebit_comps,
+                ("── Calculation ──",                                 ""),
+                ("EV ÷ EBIT",                                       f"{raw(ev)} ÷ {raw(ebit)}"),
+                ("── Result ──",                                      ""),
+                ("EV/EBIT",                                         num(r, 4) + " x"),
             ],
             "result": num(r, 2)}
 
@@ -1046,17 +1077,19 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ebitda = ebitda_ttm if is_ttm else ebitda_a
         dt     = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         r      = safe(ev, ebitda)
+        ebitda_comps = ttm_rows(q_is, "ebitda", "Income_Statement.ebitda") if is_ttm else                        [(f"Income_Statement.ebitda  [{isA_dt}]", raw(ebitda))]
         return {
             "formula": "Enterprise Value ÷ EBITDA",
             "fields":  ["Valuation.EnterpriseValue", "Income_Statement.ebitda"],
             "unit": "x",
             "components": [
-                ("EV  [Valuation.EnterpriseValue]",        bn(ev)),
-                (f"EBITDA  [Income_Statement.ebitda {dt}]", bn(ebitda)),
-                ("── Calculation ──",                        ""),
-                ("EV ÷ EBITDA",                            f"{bn(ev)} ÷ {bn(ebitda)}"),
-                ("── Result ──",                             ""),
-                ("EV/EBITDA",                              num(r, 4) + " x"),
+                ("EV  [Valuation.EnterpriseValue]",                    raw(ev)),
+                (f"── EBITDA {'TTM quarters' if is_ttm else dt} ──",  ""),
+                *ebitda_comps,
+                ("── Calculation ──",                                   ""),
+                ("EV ÷ EBITDA",                                       f"{raw(ev)} ÷ {raw(ebitda)}"),
+                ("── Result ──",                                        ""),
+                ("EV/EBITDA",                                         num(r, 4) + " x"),
             ],
             "result": num(r, 2)}
 
@@ -1065,18 +1098,19 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ni  = ni_ttm if is_ttm else ni_a
         dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         r   = safe(ni, mcap)
+        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         return {
             "formula": "Net Income ÷ Market Cap × 100  (inverse of P/E)",
             "fields":  ["Income_Statement.netIncome", "Highlights.MarketCapitalization"],
             "unit": "%",
             "components": [
-                (f"Net Income  [Income_Statement.netIncome {dt}]",  bn(ni)),
-                ("Market Cap  [Highlights.MarketCapitalization]",   bn(mcap)),
-                ("── Calculation ──",                                ""),
-                ("Net Income ÷ Market Cap",                         f"{bn(ni)} ÷ {bn(mcap)}"),
-                ("× 100",                                           ""),
-                ("── Result ──",                                     ""),
-                ("Earnings Yield",                                  pct(r)),
+                (f"── Net Income {'TTM quarters' if is_ttm else dt} ──", ""),
+                *ni_comps,
+                ("Market Cap  [Highlights.MarketCapitalization]",        raw(mcap)),
+                ("── Calculation ──",                                     ""),
+                ("Net Income ÷ Market Cap × 100",                       f"{raw(ni)} ÷ {raw(mcap)}"),
+                ("── Result ──",                                          ""),
+                ("Earnings Yield",                                        pct(r)),
             ],
             "result": pct(r)}
 
@@ -1150,18 +1184,20 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ta     = ta_q   if is_ttm else ta_avg
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         r      = safe(ni, ta)
+        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         comps  = [
-            (f"Net Income  [Income_Statement.netIncome {dt_ni}]",      bn(ni)),
-            (f"Total Assets  [Balance_Sheet.totalAssets {bsQ_dt if is_ttm else bsA_dt}]", bn(ta)),
+            (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──", ""),
+            *ni_comps,
+            (f"Total Assets  [Balance_Sheet.totalAssets {bsQ_dt if is_ttm else bsA_dt}]", raw(ta)),
         ]
-        if not is_ttm and eq_a and eq_a1:
+        if not is_ttm and ta_a and ta_a1:
             comps += [
-                (f"Total Assets Y-1  [{bsA1_dt}]",                    bn(ta_a1)),
-                (f"Avg Assets = ({bn(ta_a)} + {bn(ta_a1)}) ÷ 2",     bn(ta_avg)),
+                (f"Total Assets Y-1  [{bsA1_dt}]",                    raw(ta_a1)),
+                (f"Avg Assets = ({raw(ta_a)} + {raw(ta_a1)}) ÷ 2",   raw(ta_avg)),
             ]
         comps += [
             ("── Calculation ──", ""),
-            (f"Net Income ÷ Assets × 100", f"{bn(ni)} ÷ {bn(ta)}"),
+            (f"Net Income ÷ Assets × 100", f"{raw(ni)} ÷ {raw(ta)}"),
             ("── Result ──", ""),
             ("ROA", pct(r)),
         ]
@@ -1175,18 +1211,20 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         eq     = eq_q   if is_ttm else eq_avg
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         r      = safe(ni, eq)
+        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         comps  = [
-            (f"Net Income  [Income_Statement.netIncome {dt_ni}]",       bn(ni)),
-            (f"Equity  [Balance_Sheet.totalStockholderEquity {bsQ_dt if is_ttm else bsA_dt}]", bn(eq)),
+            (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──", ""),
+            *ni_comps,
+            (f"Equity  [Balance_Sheet.totalStockholderEquity {bsQ_dt if is_ttm else bsA_dt}]", raw(eq)),
         ]
         if not is_ttm and eq_a and eq_a1:
             comps += [
-                (f"Equity Y-1  [{bsA1_dt}]",                           bn(eq_a1)),
-                (f"Avg Equity = ({bn(eq_a)} + {bn(eq_a1)}) ÷ 2",      bn(eq_avg)),
+                (f"Equity Y-1  [{bsA1_dt}]",                          raw(eq_a1)),
+                (f"Avg Equity = ({raw(eq_a)} + {raw(eq_a1)}) ÷ 2",   raw(eq_avg)),
             ]
         comps += [
             ("── Calculation ──", ""),
-            (f"Net Income ÷ Equity × 100", f"{bn(ni)} ÷ {bn(eq)}"),
+            (f"Net Income ÷ Equity × 100", f"{raw(ni)} ÷ {raw(eq)}"),
             ("── Result ──", ""),
             ("ROE", pct(r)),
         ]
@@ -1208,12 +1246,14 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "fields":  ["Income_Statement.ebit", "Balance_Sheet.totalAssets", "Balance_Sheet.totalCurrentLiabilities"],
             "unit": "%",
             "components": [
-                (f"EBIT  [Income_Statement.ebit {dt_e}]",                             bn(ebit)),
-                (f"Total Assets  [Balance_Sheet.totalAssets {dt_bs}]",               bn(ta)),
-                (f"Current Liabilities  [Balance_Sheet.totalCurrentLiabilities {dt_bs}]", bn(cl)),
-                (f"Capital Employed = {bn(ta)} − {bn(cl)}",                          bn(ce)),
+                (f"── EBIT {'TTM quarters' if is_ttm else dt_e} ──",                  ""),
+                *(ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm else
+                  [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]),
+                (f"Total Assets  [Balance_Sheet.totalAssets {dt_bs}]",               raw(ta)),
+                (f"Current Liabilities  [Balance_Sheet.totalCurrentLiabilities {dt_bs}]", raw(cl)),
+                (f"Capital Employed = {raw(ta)} − {raw(cl)}",                        raw(ce)),
                 ("── Calculation ──",                                                  ""),
-                (f"EBIT ÷ Capital Employed × 100",                                    f"{bn(ebit)} ÷ {bn(ce)}"),
+                (f"EBIT ÷ Capital Employed × 100",                                    f"{raw(ebit)} ÷ {raw(ce)}"),
                 ("── Result ──",                                                       ""),
                 ("ROCE",                                                               pct(r)),
             ],
@@ -1236,14 +1276,16 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                         "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
             "unit": "%",
             "components": [
-                (f"Net Income  [Income_Statement.netIncome {dt_ni}]",                  bn(ni)),
-                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",            bn(eq)),
-                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",              bn(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt_bs}]",        bn(std)),
-                (f"Total Debt = {bn(ltd)} + {bn(std)}",                               bn(debt)),
-                (f"Invested Capital = {bn(eq)} + {bn(debt)}",                         bn(ic)),
+                (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──",             ""),
+                *(ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else
+                  [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]),
+                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",            raw(eq)),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",              raw(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt_bs}]",        raw(std)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)}",                             raw(debt)),
+                (f"Invested Capital = {raw(eq)} + {raw(debt)}",                       raw(ic)),
                 ("── Calculation ──",                                                   ""),
-                (f"NI ÷ Invested Capital × 100",                                       f"{bn(ni)} ÷ {bn(ic)}"),
+                (f"NI ÷ Invested Capital × 100",                                       f"{raw(ni)} ÷ {raw(ic)}"),
                 ("── Result ──",                                                        ""),
                 ("ROIC",                                                                pct(r)),
             ],
@@ -1290,12 +1332,16 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "fields":  ["Income_Statement.grossProfit", "Income_Statement.totalRevenue"],
             "unit": "%",
             "components": [
-                (f"Gross Profit  [Income_Statement.grossProfit {dt}]", bn(gp)),
-                (f"Revenue  [Income_Statement.totalRevenue {dt}]",     bn(rev)),
-                ("── Calculation ──",                                    ""),
-                ("Gross Profit ÷ Revenue × 100",                       f"{bn(gp)} ÷ {bn(rev)}"),
-                ("── Result ──",                                         ""),
-                ("Gross Margin",                                         pct(r)),
+                (f"── Gross Profit {'TTM quarters' if is_ttm else dt} ──", ""),
+                *(ttm_rows(q_is, "grossProfit", "Income_Statement.grossProfit") if is_ttm else
+                  [(f"Income_Statement.grossProfit  [{isA_dt}]", raw(gp))]),
+                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──",   ""),
+                *(ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else
+                  [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]),
+                ("── Calculation ──",                                     ""),
+                ("Gross Profit ÷ Revenue × 100",                        f"{raw(gp)} ÷ {raw(rev)}"),
+                ("── Result ──",                                          ""),
+                ("Gross Margin",                                          pct(r)),
             ],
             "result": pct(r)}
 
@@ -1370,12 +1416,16 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "fields":  ["Income_Statement.netIncome", "Income_Statement.totalRevenue"],
             "unit": "%",
             "components": [
-                (f"Net Income  [Income_Statement.netIncome {dt}]",  bn(ni)),
-                (f"Revenue  [Income_Statement.totalRevenue {dt}]",  bn(rev)),
-                ("── Calculation ──",                                ""),
-                ("Net Income ÷ Revenue × 100",                     f"{bn(ni)} ÷ {bn(rev)}"),
-                ("── Result ──",                                     ""),
-                ("Net Margin",                                       pct(r)),
+                (f"── Net Income {'TTM quarters' if is_ttm else dt} ──", ""),
+                *(ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else
+                  [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]),
+                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──",   ""),
+                *(ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else
+                  [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]),
+                ("── Calculation ──",                                     ""),
+                ("Net Income ÷ Revenue × 100",                          f"{raw(ni)} ÷ {raw(rev)}"),
+                ("── Result ──",                                          ""),
+                ("Net Margin",                                            pct(r)),
             ],
             "result": pct(r)}
 
@@ -1389,18 +1439,38 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         dt     = f"TTM ({qcf_s[0][:7]}…{qcf_s[3][:7]})" if is_ttm else cfA_dt
         r      = safe(fcf, rev)
         comps  = []
-        if direct:
-            comps.append((f"FCF  [Cash_Flow.freeCashFlow {dt}]", bn(fcf)))
+        if is_ttm:
+            qs_used = sorted(q_cf.keys(), reverse=True)[:4]
+            if direct:
+                comps.append((f"── FCF quarters (freeCashFlow) ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.freeCashFlow  [{q}]", raw(fv(q_cf[q].get("freeCashFlow")))))
+                comps.append(("  → FCF TTM Sum", raw(fcf)))
+            else:
+                comps.append((f"── CFO quarters (freeCashFlow null → fallback) ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.totalCashFromOperatingActivities  [{q}]", raw(fv(q_cf[q].get("totalCashFromOperatingActivities")))))
+                comps.append(("  → CFO TTM Sum", raw(cfo)))
+                comps.append((f"── CapEx quarters ──", ""))
+                for q in qs_used:
+                    comps.append((f"  Cash_Flow.capitalExpenditures  [{q}]", raw(fv(q_cf[q].get("capitalExpenditures")))))
+                comps.append(("  → CapEx TTM Sum", raw(cx)))
+                comps.append((f"  FCF = CFO − |CapEx| = {raw(cfo)} − |{raw(cx)}|", raw(fcf)))
+            rev_comps = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue")
+            comps += [(f"── Revenue TTM quarters ──", ""), *rev_comps]
         else:
-            comps += [
-                (f"CFO  [Cash_Flow.totalCashFromOperatingActivities {dt}]", bn(cfo)),
-                (f"CapEx  [Cash_Flow.capitalExpenditures {dt}]",            bn(cx)),
-                ("FCF = CFO − |CapEx| (fallback, freeCashFlow was null)",   bn(fcf)),
-            ]
+            if direct:
+                comps.append((f"Cash_Flow.freeCashFlow  [{cfA_dt}]", raw(fcf)))
+            else:
+                comps += [
+                    (f"Cash_Flow.totalCashFromOperatingActivities  [{cfA_dt}]", raw(cfo)),
+                    (f"Cash_Flow.capitalExpenditures  [{cfA_dt}]",              raw(cx)),
+                    (f"FCF = CFO − |CapEx| (fallback)",                         raw(fcf)),
+                ]
+            comps.append((f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev)))
         comps += [
-            (f"Revenue  [Income_Statement.totalRevenue {dt}]",              bn(rev)),
             ("── Calculation ──",                                            ""),
-            ("FCF ÷ Revenue × 100",                                        f"{bn(fcf)} ÷ {bn(rev)}"),
+            ("FCF ÷ Revenue × 100",                                        f"{raw(fcf)} ÷ {raw(rev)}"),
             ("── Result ──",                                                 ""),
             ("FCF Margin",                                                   pct(r)),
         ]
@@ -1417,18 +1487,20 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         dt_rev = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         dt_bs  = bsQ_dt if is_ttm else bsA_dt
         r      = safe(rev, ta)
+        rev_comps = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else                     [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]
         comps  = [
-            (f"Revenue  [Income_Statement.totalRevenue {dt_rev}]",        bn(rev)),
-            (f"Total Assets  [Balance_Sheet.totalAssets {dt_bs}]",        bn(ta)),
+            (f"── Revenue {'TTM quarters' if is_ttm else dt_rev} ──",  ""),
+            *rev_comps,
+            (f"Total Assets  [Balance_Sheet.totalAssets {dt_bs}]",     raw(ta)),
         ]
         if not is_ttm and ta_a and ta_a1:
             comps += [
-                (f"Total Assets Y-1  [{bsA1_dt}]",                        bn(ta_a1)),
-                (f"Avg Assets = ({bn(ta_a)} + {bn(ta_a1)}) ÷ 2",        bn(ta_avg)),
+                (f"Total Assets Y-1  [{bsA1_dt}]",                     raw(ta_a1)),
+                (f"Avg Assets = ({raw(ta_a)} + {raw(ta_a1)}) ÷ 2",   raw(ta_avg)),
             ]
         comps += [
             ("── Calculation ──",    ""),
-            ("Revenue ÷ Avg Assets", f"{bn(rev)} ÷ {bn(ta)}"),
+            ("Revenue ÷ Avg Assets", f"{raw(rev)} ÷ {raw(ta)}"),
             ("── Result ──",         ""),
             ("Asset Turnover",        num(r, 4) + " x"),
         ]
@@ -1693,11 +1765,15 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "fields":  ["Income_Statement.ebit", "Income_Statement.interestExpense"],
             "unit": "x",
             "components": [
-                (f"EBIT  [Income_Statement.ebit {dt}]",                bn(ebit)),
-                (f"Interest Expense  [raw {dt}]",                      bn(intr)),
-                (f"Interest Expense  [|abs| used]",                    bn(abs(intr) if intr else None)),
+                (f"── EBIT {'TTM quarters' if is_ttm2 else dt} ──",    ""),
+                *(ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm2 else
+                  [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]),
+                (f"── Interest Expense {'TTM quarters' if is_ttm2 else dt} ──", ""),
+                *(ttm_rows(q_is, "interestExpense", "Income_Statement.interestExpense") if is_ttm2 else
+                  [(f"Income_Statement.interestExpense  [{isA_dt}]", raw(intr))]),
+                (f"Interest Expense  [|abs| used]",                    raw(abs(intr) if intr else None)),
                 ("── Calculation ──",                                   ""),
-                (f"EBIT ÷ |Interest|",                                f"{bn(ebit)} ÷ {bn(abs(intr) if intr else None)}"),
+                (f"EBIT ÷ |Interest|",                                f"{raw(ebit)} ÷ {raw(abs(intr) if intr else None)}"),
                 ("── Result ──",                                        ""),
                 ("Interest Coverage",                                   num(r, 4) + " x"),
             ],
