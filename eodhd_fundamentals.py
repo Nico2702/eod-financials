@@ -1145,35 +1145,48 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "unit": "%", "components": comps, "result": pct(r)}
 
     if "PEG" in L:
-        fwd_pe_raw  = fv(val.get("ForwardPE"))
-        fwd_pe_calc = safe(mcap, ni_a)
-        fwd_pe      = fwd_pe_raw or fwd_pe_calc
-        trends      = data.get("Earnings", {}).get("Trend", {})
-        p1y         = next((v for v in trends.values() if v.get("period") == "+1y"), {})
-        p1y_date    = next((k for k, v in trends.items() if v.get("period") == "+1y"), "—")
-        eg          = fv(p1y.get("earningsEstimateGrowth"))
-        eg_n        = p1y.get("earningsEstimateNumberOfAnalysts", "—")
-        peg         = safe(fwd_pe, (eg * 100) if eg else None)
+        # ── Growth rate: historical YoY NI growth (same as compute_value_score) ──
+        ni_cur_yr  = fv(a_is.get(years[0], {}).get("netIncome")) if years else None
+        ni_prev_yr = fv(a_is.get(years[1], {}).get("netIncome")) if len(years) > 1 else None
+        y0         = years[0] if years else "—"
+        y1         = years[1] if len(years) > 1 else "—"
+        eps_gr_pct = ((ni_cur_yr / ni_prev_yr - 1) * 100) if ni_cur_yr and ni_prev_yr and ni_prev_yr > 0 else None
+
+        # ── P/E numerator depends on variant ──
+        if "Fwd" in L:
+            pe_used     = fv(val.get("ForwardPE"))
+            pe_label    = "Valuation.ForwardPE  (API direct)"
+            pe_src      = "ForwardPE"
+        elif "Cur" in L:
+            pe_used     = fv(val.get("TrailingPE")) or fv(hl.get("PERatio"))
+            pe_label    = "Valuation.TrailingPE  (fallback: Highlights.PERatio)"
+            pe_src      = "TrailingPE / PERatio"
+        else:  # Year
+            pe_used     = safe(mcap, ni_cur_yr)
+            pe_label    = f"P/E (Year) = MCap ÷ NI({y0})"
+            pe_src      = "Highlights.MarketCapitalization ÷ Income_Statement.netIncome (annual)"
+
+        peg = safe(pe_used, eps_gr_pct) if eps_gr_pct and eps_gr_pct > 0 else None
+
         return {
-            "formula": "Forward P/E ÷ EPS Growth Rate (%)",
-            "fields":  ["Valuation.ForwardPE",
-                        "Earnings.Trend[+1y].earningsEstimateGrowth",
-                        "Earnings.Trend[+1y].earningsEstimateNumberOfAnalysts"],
+            "formula": "P/E ÷ EPS Growth Rate (%)\n(Growth = YoY NI change, annual — same denominator for all 3 variants)",
+            "fields":  ["Valuation.ForwardPE / TrailingPE / Highlights.PERatio",
+                        "Income_Statement.netIncome (annual Y0 and Y-1)"],
             "unit": "x",
             "components": [
-                ("Valuation.ForwardPE  (API direct)",         num(fwd_pe_raw, 4) if fwd_pe_raw else "null → fallback"),
-                ("Forward P/E fallback: MCap ÷ NI(annual)",   num(fwd_pe_calc, 4) if not fwd_pe_raw else "—  (not used)"),
-                ("Forward P/E  (used)",                        num(fwd_pe, 4)),
-                ("Earnings.Trend date key",                    p1y_date),
-                ("earningsEstimateGrowth  (raw, decimal)",    num(eg, 6) if eg else "—"),
-                ("EPS Growth  (×100 → %)",                    pct(eg)),
-                ("# Analysts",                                 str(eg_n)),
-                ("── Calculation ──",                          ""),
-                (f"PEG = {num(fwd_pe,4)} ÷ {pct(eg)}",        ""),
-                ("── Result ──",                               ""),
-                ("PEG Ratio",                                  num(peg, 4) + " x"),
+                ("── P/E Numerator ──",                                          ""),
+                (pe_label,                                                        num(pe_used, 4) if pe_used else "—"),
+                ("── EPS Growth Denominator ──",                                 ""),
+                (f"Income_Statement.netIncome  [{y0}]",                         raw(ni_cur_yr)),
+                (f"Income_Statement.netIncome  [{y1}]",                         raw(ni_prev_yr)),
+                (f"eps_gr_yr = ({raw(ni_cur_yr)} ÷ {raw(ni_prev_yr)} − 1) × 100", ""),
+                ("EPS Growth (historical YoY, %)",                               f"{eps_gr_pct:.4f} %" if eps_gr_pct else "—"),
+                ("── Calculation ──",                                             ""),
+                (f"P/E ÷ EPS Growth %  =  {num(pe_used,4)} ÷ {f'{eps_gr_pct:.4f}' if eps_gr_pct else '—'}", ""),
+                ("── Result ──",                                                  ""),
+                ("PEG Ratio",                                                     num(peg, 4) + " x" if peg else "—"),
             ],
-            "result": num(peg, 2)}
+            "result": num(peg, 2) if peg else "—"}
 
     # ═══════════════════════════════════════════════════════════════════
     # PROFITABILITY
@@ -1181,27 +1194,30 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     if "Return on Assets" in L:
         is_ttm = "TTM" in L
         ni     = ni_ttm if is_ttm else ni_a
-        ta     = ta_q   if is_ttm else ta_avg
+        ta     = ta_q   if is_ttm else ta_avg   # avg Y0/Y-1 for annual, latest Q for TTM
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         r      = safe(ni, ta)
-        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
+        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
+                   [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         comps  = [
             (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──", ""),
             *ni_comps,
-            (f"Total Assets  [Balance_Sheet.totalAssets {bsQ_dt if is_ttm else bsA_dt}]", raw(ta)),
         ]
-        if not is_ttm and ta_a and ta_a1:
+        if is_ttm:
+            comps.append((f"Total Assets  [Balance_Sheet.totalAssets {bsQ_dt}]  (latest Q, no avg)", raw(ta_q)))
+        else:
             comps += [
-                (f"Total Assets Y-1  [{bsA1_dt}]",                    raw(ta_a1)),
-                (f"Avg Assets = ({raw(ta_a)} + {raw(ta_a1)}) ÷ 2",   raw(ta_avg)),
+                (f"Total Assets Y0  [Balance_Sheet.totalAssets {bsA_dt}]",       raw(ta_a)),
+                (f"Total Assets Y-1  [Balance_Sheet.totalAssets {bsA1_dt}]",     raw(ta_a1) if ta_a1 else "— (not available)"),
+                (f"Avg Assets = ({raw(ta_a)} + {raw(ta_a1 or 0)}) ÷ 2  (used)", raw(ta_avg)),
             ]
         comps += [
-            ("── Calculation ──", ""),
-            (f"Net Income ÷ Assets × 100", f"{raw(ni)} ÷ {raw(ta)}"),
-            ("── Result ──", ""),
-            ("ROA", pct(r)),
+            ("── Calculation ──",           ""),
+            (f"NI ÷ Avg Assets × 100",      f"{raw(ni)} ÷ {raw(ta)}"),
+            ("── Result ──",                ""),
+            ("ROA",                          pct(r)),
         ]
-        return {"formula": "Net Income ÷ Total Assets × 100",
+        return {"formula": "Net Income ÷ Total Assets × 100\n(Annual: avg of Y0 and Y-1 assets; TTM: latest quarter assets)",
                 "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalAssets"],
                 "unit": "%", "components": comps, "result": pct(r)}
 
@@ -1211,24 +1227,27 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         eq     = eq_q   if is_ttm else eq_avg
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         r      = safe(ni, eq)
-        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
+        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
+                   [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         comps  = [
             (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──", ""),
             *ni_comps,
-            (f"Equity  [Balance_Sheet.totalStockholderEquity {bsQ_dt if is_ttm else bsA_dt}]", raw(eq)),
         ]
-        if not is_ttm and eq_a and eq_a1:
+        if is_ttm:
+            comps.append((f"Equity  [Balance_Sheet.totalStockholderEquity {bsQ_dt}]  (latest Q)", raw(eq_q)))
+        else:
             comps += [
-                (f"Equity Y-1  [{bsA1_dt}]",                          raw(eq_a1)),
-                (f"Avg Equity = ({raw(eq_a)} + {raw(eq_a1)}) ÷ 2",   raw(eq_avg)),
+                (f"Equity Y0  [Balance_Sheet.totalStockholderEquity {bsA_dt}]",       raw(eq_a)),
+                (f"Equity Y-1  [Balance_Sheet.totalStockholderEquity {bsA1_dt}]",     raw(eq_a1) if eq_a1 else "— (not available)"),
+                (f"Avg Equity = ({raw(eq_a)} + {raw(eq_a1 or 0)}) ÷ 2  (used)",      raw(eq_avg)),
             ]
         comps += [
-            ("── Calculation ──", ""),
-            (f"Net Income ÷ Equity × 100", f"{raw(ni)} ÷ {raw(eq)}"),
-            ("── Result ──", ""),
-            ("ROE", pct(r)),
+            ("── Calculation ──",       ""),
+            ("NI ÷ Avg Equity × 100",   f"{raw(ni)} ÷ {raw(eq)}"),
+            ("── Result ──",            ""),
+            ("ROE",                      pct(r)),
         ]
-        return {"formula": "Net Income ÷ Stockholder Equity × 100",
+        return {"formula": "Net Income ÷ Stockholder Equity × 100\n(Annual: avg of Y0 and Y-1 equity; TTM: latest quarter equity)",
                 "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity"],
                 "unit": "%", "components": comps, "result": pct(r)}
 
