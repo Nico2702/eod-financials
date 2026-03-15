@@ -11,6 +11,8 @@ st.set_page_config(
     layout="wide",
 )
 
+require_login()  # ← GitHub OAuth gate — muss vor allem anderen stehen
+
 # ── Styling ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
@@ -6120,5 +6122,3 @@ with tab5:
             for o in officers.values()
         ]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-require_login()  # ← GitHub OAuth gate
