@@ -1898,10 +1898,10 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 return cfo - abs(capex), "CFO−|CapEx|"
             return None, "—"
 
-        if "YoY" in L:
+        if "Ann" in L:
             ys = sorted(stmt_a.keys(), reverse=True)
             if len(ys) < 2:
-                return {"formula": "V[y0] ÷ V[y1] − 1 × 100  (latest vs prior annual year)",
+                return {"formula": "V[y0] ÷ V[y1] − 1 × 100  (latest vs prior fiscal year)",
                         "fields": [f"{stmt_lbl}.{api_key} — annual"],
                         "unit": "%", "components": [("N/A", "Requires at least 2 years of data")], "result": "—"}
             y0 = ys[0]; y1 = ys[1]
@@ -1918,7 +1918,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 gr = (v0 / v1 - 1) * 100; gr_note = None
             fcf_note = "\n⚠ FCF = freeCashFlow; fallback CFO−|CapEx| if null" if is_fcf else ""
             return {
-                "formula": f"(V[{y0}] ÷ V[{y1}]) − 1 × 100\n= Year-over-Year growth (latest annual vs prior){fcf_note}\n⚠ N/A when prior year ≤ 0",
+                "formula": f"(V[{y0}] ÷ V[{y1}]) − 1 × 100\n= Annual growth (latest fiscal year vs prior){fcf_note}\n⚠ N/A when prior year ≤ 0",
                 "fields":  [f"{stmt_lbl}.{api_key} — annual"],
                 "unit": "%",
                 "components": [
@@ -1928,7 +1928,41 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                     (f"({raw(v0)} ÷ {raw(v1)}) − 1",                      f"{(gr/100):.6f}" if gr is not None else (gr_note or "—")),
                     ("× 100",                                               ""),
                     ("── Result ──",                                        ""),
-                    (f"{field_label} Growth (YoY)",                        f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
+                    (f"{field_label} Growth (Ann)",                        f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
+                ],
+                "result": f"{gr:.4f} %" if gr is not None else (gr_note or "—")}
+
+        if "QoQ" in L:
+            qs = sorted(stmt_q.keys(), reverse=True)
+            if len(qs) < 2:
+                return {"formula": "V[Q0] ÷ V[Q1] − 1 × 100  (latest vs prior quarter)",
+                        "fields": [f"{stmt_lbl}.{api_key} — quarterly"],
+                        "unit": "%", "components": [("N/A", "Requires at least 2 quarters of data")], "result": "—"}
+            q0 = qs[0]; q1 = qs[1]
+            if is_fcf:
+                v0, s0 = get_fcf_q(q0); v1, s1 = get_fcf_q(q1)
+            else:
+                v0 = fv(stmt_q[q0].get(api_key)); s0 = api_key
+                v1 = fv(stmt_q[q1].get(api_key)); s1 = api_key
+            if v0 is None or v1 is None:
+                gr = None; gr_note = "N/A — data missing"
+            elif v1 <= 0:
+                gr = None; gr_note = "N/A — prior quarter value ≤ 0"
+            else:
+                gr = (v0 / v1 - 1) * 100; gr_note = None
+            fcf_note = "\n⚠ FCF = freeCashFlow; fallback CFO−|CapEx| if null" if is_fcf else ""
+            return {
+                "formula": f"(V[{q0}] ÷ V[{q1}]) − 1 × 100\n= Quarter-over-Quarter growth{fcf_note}\n⚠ N/A when prior quarter ≤ 0",
+                "fields":  [f"{stmt_lbl}.{api_key} — quarterly"],
+                "unit": "%",
+                "components": [
+                    (f"{stmt_lbl}.{api_key}  [{q0}]  (Q0)" + (f"  source: {s0}" if is_fcf else ""), raw(v0)),
+                    (f"{stmt_lbl}.{api_key}  [{q1}]  (Q1)" + (f"  source: {s1}" if is_fcf else ""), raw(v1)),
+                    ("── Calculation ──",                                  ""),
+                    (f"({raw(v0)} ÷ {raw(v1)}) − 1",                      f"{(gr/100):.6f}" if gr is not None else (gr_note or "—")),
+                    ("× 100",                                               ""),
+                    ("── Result ──",                                        ""),
+                    (f"{field_label} Growth (QoQ)",                        f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
                 ],
                 "result": f"{gr:.4f} %" if gr is not None else (gr_note or "—")}
 
@@ -2167,11 +2201,11 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             m = _re.search(r"(\d+)Y CAGR", L)
             n = int(m.group(1)) if m else None
             if n: return dd_eps_cagr(n)
-        elif "YoY" in L:
-            # EPS YoY: (EPS_y0 / EPS_y1) - 1
+        elif "Ann" in L:
+            # EPS Ann: (EPS_y0 / EPS_y1) - 1
             ys = sorted(a_is.keys(), reverse=True)
             if len(ys) < 2:
-                return {"formula": "EPS YoY = (EPS[y0] / EPS[y1]) - 1 x 100", "fields": [], "unit": "%",
+                return {"formula": "EPS Ann = (EPS[y0] / EPS[y1]) - 1 x 100", "fields": [], "unit": "%",
                         "components": [("N/A", "Requires at least 2 years of data")], "result": "—"}
             y0 = ys[0]; y1 = ys[1]
             ni0 = fv(a_is[y0].get("netIncomeApplicableToCommonShares")) or fv(a_is[y0].get("netIncome"))
@@ -2187,7 +2221,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             else:
                 gr = (eps0 / eps1 - 1) * 100; gr_note = None
             return {
-                "formula": f"(EPS[{y0}] / EPS[{y1}]) - 1 x 100\nEPS = NI / commonStockSharesOutstanding",
+                "formula": f"(EPS[{y0}] / EPS[{y1}]) - 1 x 100\nEPS = NI / commonStockSharesOutstanding\n= Annual growth (latest fiscal year vs prior)",
                 "fields": ["Income_Statement.netIncomeApplicableToCommonShares (fallback: netIncome)",
                            "Balance_Sheet.commonStockSharesOutstanding"],
                 "unit": "%",
@@ -2204,7 +2238,49 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                     (f"({eps0:.6f} / {eps1:.6f}) - 1" if eps0 and eps1 else "N/A", f"{(gr/100):.6f}" if gr is not None else (gr_note or "—")),
                     ("x 100",                                                   ""),
                     ("-- Result --",                                            ""),
-                    ("EPS Growth (YoY)",                                        f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
+                    ("EPS Growth (Ann)",                                        f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
+                ],
+                "result": f"{gr:.4f} %" if gr is not None else (gr_note or "—")}
+        elif "QoQ" in L:
+            # EPS QoQ: (EPS_Q0 / EPS_Q1) - 1
+            qs_is = sorted(q_is.keys(), reverse=True)
+            qs_bs = sorted(q_bs.keys(), reverse=True)
+            if len(qs_is) < 2 or len(qs_bs) < 2:
+                return {"formula": "EPS QoQ = (EPS[Q0] / EPS[Q1]) - 1 x 100", "fields": [], "unit": "%",
+                        "components": [("N/A", "Requires at least 2 quarters")], "result": "—"}
+            q0i = qs_is[0]; q1i = qs_is[1]
+            q0b = qs_bs[0]; q1b = qs_bs[1]
+            ni0 = fv(q_is[q0i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q0i].get("netIncome"))
+            ni1 = fv(q_is[q1i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q1i].get("netIncome"))
+            shs0 = fv(q_bs[q0b].get("commonStockSharesOutstanding"))
+            shs1 = fv(q_bs[q1b].get("commonStockSharesOutstanding"))
+            eps0 = (ni0 / shs0) if ni0 and shs0 and shs0 > 0 else None
+            eps1 = (ni1 / shs1) if ni1 and shs1 and shs1 > 0 else None
+            if eps1 is not None and eps1 <= 0:
+                gr = None; gr_note = "N/A — prior quarter EPS <= 0"
+            elif eps0 is None or eps1 is None:
+                gr = None; gr_note = "N/A — data missing"
+            else:
+                gr = (eps0 / eps1 - 1) * 100; gr_note = None
+            return {
+                "formula": f"(EPS[{q0i}] / EPS[{q1i}]) - 1 x 100\nEPS = NI / commonStockSharesOutstanding\n= Quarter-over-Quarter growth",
+                "fields": ["Income_Statement.netIncomeApplicableToCommonShares (fallback: netIncome)",
+                           "Balance_Sheet.commonStockSharesOutstanding"],
+                "unit": "%",
+                "components": [
+                    (f"-- EPS {q0i} (Q0) --",                                 ""),
+                    (f"  NI  [Income_Statement {q0i}]",                       raw(ni0)),
+                    (f"  Shares  [Balance_Sheet {q0b}]",                     raw(shs0)),
+                    (f"  -> EPS {q0i}  =  {raw(ni0)} / {raw(shs0)}",         f"{eps0:.6f}" if eps0 else "—"),
+                    (f"-- EPS {q1i} (Q1) --",                                 ""),
+                    (f"  NI  [Income_Statement {q1i}]",                       raw(ni1)),
+                    (f"  Shares  [Balance_Sheet {q1b}]",                     raw(shs1)),
+                    (f"  -> EPS {q1i}  =  {raw(ni1)} / {raw(shs1)}",         f"{eps1:.6f}" if eps1 else "—"),
+                    ("-- Calculation --",                                       ""),
+                    (f"({eps0:.6f} / {eps1:.6f}) - 1" if eps0 and eps1 else "N/A", f"{(gr/100):.6f}" if gr is not None else (gr_note or "—")),
+                    ("x 100",                                                   ""),
+                    ("-- Result --",                                            ""),
+                    ("EPS Growth (QoQ)",                                        f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
                 ],
                 "result": f"{gr:.4f} %" if gr is not None else (gr_note or "—")}
         elif "TTM" in L:
@@ -3489,21 +3565,63 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     ebitda_gr_ttm = ttm_gr(q_is, "ebitda")
     fcf_gr_ttm_v  = fcf_gr_ttm()
 
-    # ── YoY values (y0 vs y1 annual) ────────────────────────────────
-    rev_gr_yoy    = yr_gr(a_is, "totalRevenue")
-    ni_gr_yoy     = yr_gr(a_is, "netIncome")
-    ebit_gr_yoy   = yr_gr(a_is, "ebit")
-    ebitda_gr_yoy = yr_gr(a_is, "ebitda")
-    fcf_gr_yoy    = fcf_cagr(1)   # CAGR n=1 == simple YoY on annual FCF
+    # ── Ann values (Y0 vs Y1 — full fiscal year) ────────────────────
+    rev_gr_ann    = yr_gr(a_is, "totalRevenue")
+    ni_gr_ann     = yr_gr(a_is, "netIncome")
+    ebit_gr_ann   = yr_gr(a_is, "ebit")
+    ebitda_gr_ann = yr_gr(a_is, "ebitda")
+    fcf_gr_ann    = fcf_cagr(1)   # n=1 CAGR == simple annual YoY
 
-    def eps_yoy():
+    def eps_ann():
         ys = sorted(a_is.keys(), reverse=True)
         if len(ys) < 2: return None
         eps0 = get_eps_annual(ys[0])
         eps1 = get_eps_annual(ys[1])
         if eps0 is None or not eps1 or eps1 <= 0: return None
         return (eps0 / eps1 - 1) * 100
-    eps_gr_yoy = eps_yoy()
+    eps_gr_ann = eps_ann()
+
+    # ── QoQ values (Q0 vs Q1 — latest vs prior quarter) ──────────────
+    def qoq_gr(stmt, key):
+        qs = sorted(stmt.keys(), reverse=True)
+        if len(qs) < 2: return None
+        v0 = fv(stmt[qs[0]].get(key))
+        v1 = fv(stmt[qs[1]].get(key))
+        if v0 is None or not v1 or v1 <= 0: return None
+        return (v0 / v1 - 1) * 100
+
+    rev_gr_qoq    = qoq_gr(q_is, "totalRevenue")
+    ni_gr_qoq     = qoq_gr(q_is, "netIncome")
+    ebit_gr_qoq   = qoq_gr(q_is, "ebit")
+    ebitda_gr_qoq = qoq_gr(q_is, "ebitda")
+
+    def fcf_qoq():
+        qs = sorted(q_cf.keys(), reverse=True)
+        if len(qs) < 2: return None
+        def get_fcf_q(q):
+            f = fv(q_cf[q].get("freeCashFlow"))
+            if f is None:
+                cfo   = fv(q_cf[q].get("totalCashFromOperatingActivities"))
+                capex = fv(q_cf[q].get("capitalExpenditures"))
+                f = cfo - abs(capex) if cfo and capex else None
+            return f
+        v0 = get_fcf_q(qs[0]); v1 = get_fcf_q(qs[1])
+        if v0 is None or not v1 or v1 <= 0: return None
+        return (v0 / v1 - 1) * 100
+    fcf_gr_qoq = fcf_qoq()
+
+    def eps_qoq():
+        qs_is = sorted(q_is.keys(), reverse=True)
+        qs_bs = sorted(q_bs.keys(), reverse=True)
+        if len(qs_is) < 2 or len(qs_bs) < 2: return None
+        def get_eps_q(qi, bi):
+            ni  = fv(q_is[qs_is[qi]].get("netIncomeApplicableToCommonShares")) or fv(q_is[qs_is[qi]].get("netIncome"))
+            shs = fv(q_bs[qs_bs[bi]].get("commonStockSharesOutstanding"))
+            return (ni / shs) if ni and shs and shs > 0 else None
+        eps0 = get_eps_q(0, 0); eps1 = get_eps_q(1, 1)
+        if eps0 is None or not eps1 or eps1 <= 0: return None
+        return (eps0 / eps1 - 1) * 100
+    eps_gr_qoq = eps_qoq()
 
     # ── CAGR values ───────────────────────────────────────────────────
     rev_3y  = cagr(a_is, "totalRevenue", 3);   rev_5y  = cagr(a_is, "totalRevenue", 5);   rev_10y  = cagr(a_is, "totalRevenue", 10)
@@ -3573,43 +3691,49 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         # Revenue
         row("Revenue Growth (Fwd)",         rev_gr_fwd,    rev_3y,    rev_5y,    rev_10y,    REV_T),
         row("Revenue Growth (TTM)",          rev_gr_ttm,    rev_3y,    rev_5y,    rev_10y,    REV_T),
-        row("Revenue Growth (YoY)",          rev_gr_yoy,    rev_3y,    rev_5y,    rev_10y,    REV_T),
+        row("Revenue Growth (Ann)",          rev_gr_ann,    rev_3y,    rev_5y,    rev_10y,    REV_T),
+        row("Revenue Growth (QoQ)",          rev_gr_qoq,    rev_3y,    rev_5y,    rev_10y,    REV_T),
         row("Revenue Growth (3Y CAGR)",      rev_3y,        None,      None,      None,       REV_CAGR_T),
         row("Revenue Growth (5Y CAGR)",      rev_5y,        None,      None,      None,       REV_CAGR_T),
         row("Revenue Growth (10Y CAGR)",     rev_10y,       None,      None,      None,       REV_CAGR_T),
         # Net Income
         row("Net Income Growth (Fwd)",       ni_gr_fwd,     ni_3y,     ni_5y,     ni_10y,     NI_T),
         row("Net Income Growth (TTM)",       ni_gr_ttm,     ni_3y,     ni_5y,     ni_10y,     NI_T),
-        row("Net Income Growth (YoY)",       ni_gr_yoy,     ni_3y,     ni_5y,     ni_10y,     NI_T),
+        row("Net Income Growth (Ann)",       ni_gr_ann,     ni_3y,     ni_5y,     ni_10y,     NI_T),
+        row("Net Income Growth (QoQ)",       ni_gr_qoq,     ni_3y,     ni_5y,     ni_10y,     NI_T),
         row("Net Income Growth (3Y CAGR)",   ni_3y,         None,      None,      None,       NI_CAGR_T),
         row("Net Income Growth (5Y CAGR)",   ni_5y,         None,      None,      None,       NI_CAGR_T),
         row("Net Income Growth (10Y CAGR)",  ni_10y,        None,      None,      None,       NI_CAGR_T),
         # EPS
         row("EPS Growth (Fwd)",              eps_gr_fwd,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
         row("EPS Growth (TTM)",              eps_gr_ttm,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
-        row("EPS Growth (YoY)",              eps_gr_yoy,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
+        row("EPS Growth (Ann)",              eps_gr_ann,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
+        row("EPS Growth (QoQ)",              eps_gr_qoq,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
         row("EPS Growth (3Y CAGR)",          eps_3y,        None,      None,      None,       EPS_CAGR_T),
         row("EPS Growth (5Y CAGR)",          eps_5y,        None,      None,      None,       EPS_CAGR_T),
         row("EPS Growth (10Y CAGR)",         eps_10y,       None,      None,      None,       EPS_CAGR_T),
         # EBIT
         row("EBIT Growth (TTM)",             ebit_gr_ttm,   ebit_3y,   ebit_5y,   ebit_10y,   EBIT_T),
-        row("EBIT Growth (YoY)",             ebit_gr_yoy,   ebit_3y,   ebit_5y,   ebit_10y,   EBIT_T),
+        row("EBIT Growth (Ann)",             ebit_gr_ann,   ebit_3y,   ebit_5y,   ebit_10y,   EBIT_T),
+        row("EBIT Growth (QoQ)",             ebit_gr_qoq,   ebit_3y,   ebit_5y,   ebit_10y,   EBIT_T),
         row("EBIT Growth (3Y CAGR)",         ebit_3y,       None,      None,      None,       EBIT_CAGR_T),
         row("EBIT Growth (5Y CAGR)",         ebit_5y,       None,      None,      None,       EBIT_CAGR_T),
         row("EBIT Growth (10Y CAGR)",        ebit_10y,      None,      None,      None,       EBIT_CAGR_T),
         # EBITDA
         row("EBITDA Growth (TTM)",           ebitda_gr_ttm, ebitda_3y, ebitda_5y, ebitda_10y, EBITDA_T),
-        row("EBITDA Growth (YoY)",           ebitda_gr_yoy, ebitda_3y, ebitda_5y, ebitda_10y, EBITDA_T),
+        row("EBITDA Growth (Ann)",           ebitda_gr_ann, ebitda_3y, ebitda_5y, ebitda_10y, EBITDA_T),
+        row("EBITDA Growth (QoQ)",           ebitda_gr_qoq, ebitda_3y, ebitda_5y, ebitda_10y, EBITDA_T),
         row("EBITDA Growth (3Y CAGR)",       ebitda_3y,     None,      None,      None,       EBITDA_CAGR_T),
         row("EBITDA Growth (5Y CAGR)",       ebitda_5y,     None,      None,      None,       EBITDA_CAGR_T),
         row("EBITDA Growth (10Y CAGR)",      ebitda_10y,    None,      None,      None,       EBITDA_CAGR_T),
         # FCF
         row("FCF Growth (TTM)",              fcf_gr_ttm_v,  fcf_3y,    fcf_5y,    fcf_10y,    FCF_T),
-        row("FCF Growth (YoY)",              fcf_gr_yoy,    fcf_3y,    fcf_5y,    fcf_10y,    FCF_T),
+        row("FCF Growth (Ann)",              fcf_gr_ann,    fcf_3y,    fcf_5y,    fcf_10y,    FCF_T),
+        row("FCF Growth (QoQ)",              fcf_gr_qoq,    fcf_3y,    fcf_5y,    fcf_10y,    FCF_T),
         row("FCF Growth (3Y CAGR)",          fcf_3y,        None,      None,      None,       FCF_CAGR_T),
         row("FCF Growth (5Y CAGR)",          fcf_5y,        None,      None,      None,       FCF_CAGR_T),
         row("FCF Growth (10Y CAGR)",         fcf_10y,       None,      None,      None,       FCF_CAGR_T),
-        # Rule of 40 (unchanged — uses YoY rev growth by convention)
+        # Rule of 40
         row("Rule of 40 (TTM)",              ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
         row("Rule of 40 (Year)",             ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
     ]
