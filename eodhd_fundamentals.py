@@ -144,6 +144,28 @@ def get_grade(value, thresholds):
 def grade_badge(css_class, label):
     return f'<span class="grade {css_class}">{label}</span>'
 
+def score_rows_to_excel(rows: list, sheet_name: str = "Score") -> bytes:
+    """Convert score tab rows to Excel bytes for download."""
+    import io
+    import pandas as pd
+    df = pd.DataFrame([{
+        "Metric":   r["label"],
+        "Value":    r["fmt"],
+        "Grade":    r.get("lbl", "—"),
+        "3Y Avg":   r.get("avg3", "—"),
+        "5Y Avg":   r.get("avg5", "—"),
+        "10Y Avg":  r.get("avg10", "—"),
+    } for r in rows])
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        ws = writer.sheets[sheet_name]
+        ws.column_dimensions["A"].width = 36
+        for col in ["B","C","D","E","F"]:
+            ws.column_dimensions[col].width = 14
+    return buf.getvalue()
+
+
 def compute_kennzahlen(data, hl, val, tech):
     """Compute all kennzahlen from available data. Returns dict of {key: (value, formatted, grade_css, grade_label)}"""
     ttm_is  = calculate_ttm_history(data, "Income_Statement")
@@ -5258,6 +5280,14 @@ with tab2b:
 
             hdr_html += "</tbody></table>"
             st.markdown(hdr_html, unsafe_allow_html=True)
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            st.download_button(
+                label="⬇ Excel Download",
+                data=score_rows_to_excel(rows_show, "Value_Score"),
+                file_name=f"{ticker.replace('.', '_')}_Value_Score.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_value_score",
+            )
 
         with col_chart:
             chart_df = pd.DataFrame(vs["chart_data"])
@@ -5333,6 +5363,38 @@ with tab2b:
                 </tr>'''
             tbl += "</tbody></table>"
             st.markdown(tbl, unsafe_allow_html=True)
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            st.download_button(
+                label="⬇ Excel Download",
+                data=score_rows_to_excel(rows_all, "Quality_Score"),
+                file_name=f"{ticker.replace('.', '_')}_Quality_Score.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_quality_score",
+            )
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            st.download_button(
+                label="⬇ Excel Download",
+                data=score_rows_to_excel(rows_show, "Health_Score"),
+                file_name=f"{ticker.replace('.', '_')}_Health_Score.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_health_score",
+            )
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            st.download_button(
+                label="⬇ Excel Download",
+                data=score_rows_to_excel(rows_show, "Growth_Score"),
+                file_name=f"{ticker.replace('.', '_')}_Growth_Score.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_growth_score",
+            )
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            st.download_button(
+                label="⬇ Excel Download",
+                data=score_rows_to_excel(rows_show, "Profitability_Score"),
+                file_name=f"{ticker.replace('.', '_')}_Profitability_Score.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_profit_score",
+            )
 
         with col_chart:
             chart_df = pd.DataFrame(ps["chart_data"])
@@ -5733,6 +5795,14 @@ with tab2b:
                     },
                 )
                 # Resolve selected row
+                dl_rows = all_rows if not rows_filtered else rows_filtered
+                st.download_button(
+                    label="⬇ Excel Download",
+                    data=score_rows_to_excel(dl_rows, "All_Score"),
+                    file_name=f"{ticker.replace('.', '_')}_All_Score.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_all_score",
+                )
                 sel_rows = sel_event.selection.rows if sel_event and sel_event.selection else []
                 if sel_rows:
                     st.session_state["all_selected_metric"] = rows_filtered[sel_rows[0]]["label"]
