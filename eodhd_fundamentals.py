@@ -259,32 +259,40 @@ def compute_kennzahlen(data, hl, val, tech):
     # Growth helpers
     def ttm_growth(df, col):
         """TTM: TTM[0] vs TTM[4] (same quarter last year), fallback TTM[1]"""
+        import math
         try:
             s = df[col].dropna()
             if len(s) >= 5 and s.iloc[4] != 0:
-                return (s.iloc[0] / s.iloc[4] - 1) * 100
+                r = (s.iloc[0] / s.iloc[4] - 1) * 100
+                return None if (math.isnan(r) or math.isinf(r)) else r
             elif len(s) >= 2 and s.iloc[1] != 0:
-                return (s.iloc[0] / s.iloc[1] - 1) * 100
+                r = (s.iloc[0] / s.iloc[1] - 1) * 100
+                return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
         return None
 
     def qoq_growth(df, col):
         """QoQ: Q[0] vs Q[1] — raw quarterly data"""
+        import math
         try:
             s = df[col].dropna()
             if len(s) >= 2 and s.iloc[1] != 0:
-                return (s.iloc[0] / s.iloc[1] - 1) * 100
+                r = (s.iloc[0] / s.iloc[1] - 1) * 100
+                return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
         return None
 
     def yoy_growth(df, col):
         """YoY: Q[0] vs Q[4] if available, fallback to Q[1]"""
+        import math
         try:
             s = df[col].dropna()
             if len(s) >= 5 and s.iloc[4] != 0:
-                return (s.iloc[0] / s.iloc[4] - 1) * 100
+                r = (s.iloc[0] / s.iloc[4] - 1) * 100
+                return None if (math.isnan(r) or math.isinf(r)) else r
             elif len(s) >= 2 and s.iloc[1] != 0:
-                return (s.iloc[0] / s.iloc[1] - 1) * 100
+                r = (s.iloc[0] / s.iloc[1] - 1) * 100
+                return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
         return None
 
@@ -579,7 +587,6 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     pe_cur   = fv(val.get("TrailingPE")) or fv(hl.get("PERatio")) or _pe_self
     pe_yr    = (mcap / ni_yr)     if mcap and ni_yr  and ni_yr  > 0 else None
     ps_fwd   = None  # EODHD doesn't provide forward P/S
-    _ps_self = (mcap / _ni_ttm_pe) if mcap and _ni_ttm_pe and _ni_ttm_pe > 0 else None  # reuse TTM NI sum as proxy
     # P/Sales (Cur): PriceSalesTTM → self-calculated mcap/rev_ttm
     _q_is_ps   = data["Financials"]["Income_Statement"].get("quarterly", {})
     _qs_ps     = sorted(_q_is_ps.keys(), reverse=True)
@@ -3711,6 +3718,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         return sum(vals) if len(vals) == 4 else None
 
     def fcf_gr_ttm():
+        import math
         qs = sorted(q_cf.keys(), reverse=True)
         rows = []
         for i in range(len(qs) - 3):
@@ -3725,7 +3733,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
                 if f is not None: vals.append(f)
             if len(vals) == 4: rows.append(sum(vals))
         if len(rows) >= 5 and rows[4] and rows[4] > 0:
-            return (rows[0] / rows[4] - 1) * 100
+            r = (rows[0] / rows[4] - 1) * 100
+            return None if (math.isnan(r) or math.isinf(r)) else r
         return None
 
     def fcf_cagr(n):
