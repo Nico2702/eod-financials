@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.graph_objects as go
+from auth import require_login
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -6119,3 +6120,5 @@ with tab5:
             for o in officers.values()
         ]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+require_login()  # ← GitHub OAuth gate
