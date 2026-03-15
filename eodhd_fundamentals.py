@@ -149,10 +149,12 @@ def score_rows_to_excel(rows: list, sheet_name: str = "Score") -> bytes:
     import io
     import pandas as pd
     def clean(v):
-        """Normalise display values for CSV: replace N/A and HTML entities with dash."""
-        if v is None: return "—"
+        """Normalise display values for CSV — replace special chars with ASCII-safe equivalents."""
+        if v is None: return "-"
         s = str(v)
-        if s in ("N/A", "None", "", "nan", "inf", "-inf"): return "—"
+        if s in ("N/A", "None", "", "nan", "inf", "-inf", "—", "–"): return "-"
+        # Replace em/en dash with hyphen for Excel compatibility
+        s = s.replace("—", "-").replace("–", "-")
         return s
     df = pd.DataFrame([{
         "Metric":   r["label"],
@@ -162,7 +164,8 @@ def score_rows_to_excel(rows: list, sheet_name: str = "Score") -> bytes:
         "5Y Avg":   clean(r.get("avg5")),
         "10Y Avg":  clean(r.get("avg10")),
     } for r in rows])
-    return df.to_csv(index=False).encode("utf-8")
+    # UTF-8 BOM so Excel opens the file with correct encoding
+    return b"\xef\xbb\xbf" + df.to_csv(index=False).encode("utf-8")
 
 
 def compute_kennzahlen(data, hl, val, tech):
