@@ -5277,7 +5277,7 @@ with tab2b:
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_show, "Value_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Value_Score.csv",
+                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Value_Score.csv",
                 mime="text/csv",
                 key="dl_value_score",
             )
@@ -5360,7 +5360,7 @@ with tab2b:
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_all, "Quality_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Quality_Score.csv",
+                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Quality_Score.csv",
                 mime="text/csv",
                 key="dl_quality_score",
             )
@@ -5368,7 +5368,7 @@ with tab2b:
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_show, "Health_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Health_Score.csv",
+                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Health_Score.csv",
                 mime="text/csv",
                 key="dl_health_score",
             )
@@ -5376,7 +5376,7 @@ with tab2b:
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_show, "Growth_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Growth_Score.csv",
+                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Growth_Score.csv",
                 mime="text/csv",
                 key="dl_growth_score",
             )
@@ -5384,7 +5384,7 @@ with tab2b:
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_show, "Profitability_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Profitability_Score.csv",
+                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Profitability_Score.csv",
                 mime="text/csv",
                 key="dl_profit_score",
             )
@@ -5792,7 +5792,7 @@ with tab2b:
                 st.download_button(
                     label="⬇ Excel Download",
                     data=score_rows_to_excel(dl_rows, "All_Score"),
-                    file_name=f"{ticker.replace('.', '_')}_All_Score.csv",
+                    file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_All_Score.csv",
                     mime="text/csv",
                     key="dl_all_score",
                 )
