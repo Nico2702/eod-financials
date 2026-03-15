@@ -5358,37 +5358,12 @@ with tab2b:
             st.markdown(tbl, unsafe_allow_html=True)
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             st.download_button(
-                label="⬇ Excel Download",
-                data=score_rows_to_excel(rows_all, "Quality_Score"),
-                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Quality_Score.csv",
-                mime="text/csv",
-                key="dl_quality_score",
-            )
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            st.download_button(
-                label="⬇ Excel Download",
-                data=score_rows_to_excel(rows_show, "Health_Score"),
-                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Health_Score.csv",
-                mime="text/csv",
-                key="dl_health_score",
-            )
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            st.download_button(
-                label="⬇ Excel Download",
-                data=score_rows_to_excel(rows_show, "Growth_Score"),
-                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Growth_Score.csv",
-                mime="text/csv",
-                key="dl_growth_score",
-            )
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-            st.download_button(
-                label="⬇ Excel Download",
+                label="⬇ CSV Download",
                 data=score_rows_to_excel(rows_show, "Profitability_Score"),
                 file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Profitability_Score.csv",
                 mime="text/csv",
                 key="dl_profit_score",
             )
-
         with col_chart:
             chart_df = pd.DataFrame(ps["chart_data"])
             if not chart_df.empty:
@@ -5463,6 +5438,14 @@ with tab2b:
                 </tr>'''
             tbl += "</tbody></table>"
             st.markdown(tbl, unsafe_allow_html=True)
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            st.download_button(
+                label="⬇ CSV Download",
+                data=score_rows_to_excel(rows_show, "Growth_Score"),
+                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Growth_Score.csv",
+                mime="text/csv",
+                key="dl_growth_score",
+            )
 
         with col_chart:
             chart_df = pd.DataFrame(gs["chart_data"])
@@ -5539,6 +5522,14 @@ with tab2b:
                 </tr>'''
             tbl += "</tbody></table>"
             st.markdown(tbl, unsafe_allow_html=True)
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            st.download_button(
+                label="⬇ CSV Download",
+                data=score_rows_to_excel(rows_show, "Health_Score"),
+                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Health_Score.csv",
+                mime="text/csv",
+                key="dl_health_score",
+            )
 
         with col_chart:
             chart_df = pd.DataFrame(hs["chart_data"])
@@ -5615,6 +5606,14 @@ with tab2b:
                 </tr>'''
             tbl += "</tbody></table>"
             st.markdown(tbl, unsafe_allow_html=True)
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+            st.download_button(
+                label="⬇ CSV Download",
+                data=score_rows_to_excel(rows_all, "Quality_Score"),
+                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_Quality_Score.csv",
+                mime="text/csv",
+                key="dl_quality_score",
+            )
 
         with col_charts:
             # Chart 1: ROIC | Gross Margin | FCF Margin
