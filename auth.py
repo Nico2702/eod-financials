@@ -241,7 +241,7 @@ def _render_user_badge():
         with cols[0]:
             if avatar:
                 st.markdown(
-                    f'<img src="{avatar}" width="40" style="border-radius:50%;">',
+                    f'<img src="{avatar}" width="40" style="border-radius:20px;">',
                     unsafe_allow_html=True
                 )
         with cols[1]:
