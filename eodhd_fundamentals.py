@@ -145,7 +145,7 @@ def grade_badge(css_class, label):
     return f'<span class="grade {css_class}">{label}</span>'
 
 def score_rows_to_excel(rows: list, sheet_name: str = "Score") -> bytes:
-    """Convert score tab rows to Excel bytes for download."""
+    """Convert score tab rows to CSV bytes for download."""
     import io
     import pandas as pd
     df = pd.DataFrame([{
@@ -156,14 +156,7 @@ def score_rows_to_excel(rows: list, sheet_name: str = "Score") -> bytes:
         "5Y Avg":   r.get("avg5", "—"),
         "10Y Avg":  r.get("avg10", "—"),
     } for r in rows])
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name=sheet_name)
-        ws = writer.sheets[sheet_name]
-        ws.column_dimensions["A"].width = 36
-        for col in ["B","C","D","E","F"]:
-            ws.column_dimensions[col].width = 14
-    return buf.getvalue()
+    return df.to_csv(index=False).encode("utf-8")
 
 
 def compute_kennzahlen(data, hl, val, tech):
@@ -5284,8 +5277,8 @@ with tab2b:
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_show, "Value_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Value_Score.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_name=f"{ticker.replace('.', '_')}_Value_Score.csv",
+                mime="text/csv",
                 key="dl_value_score",
             )
 
@@ -5367,32 +5360,32 @@ with tab2b:
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_all, "Quality_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Quality_Score.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_name=f"{ticker.replace('.', '_')}_Quality_Score.csv",
+                mime="text/csv",
                 key="dl_quality_score",
             )
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_show, "Health_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Health_Score.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_name=f"{ticker.replace('.', '_')}_Health_Score.csv",
+                mime="text/csv",
                 key="dl_health_score",
             )
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_show, "Growth_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Growth_Score.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_name=f"{ticker.replace('.', '_')}_Growth_Score.csv",
+                mime="text/csv",
                 key="dl_growth_score",
             )
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_show, "Profitability_Score"),
-                file_name=f"{ticker.replace('.', '_')}_Profitability_Score.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_name=f"{ticker.replace('.', '_')}_Profitability_Score.csv",
+                mime="text/csv",
                 key="dl_profit_score",
             )
 
@@ -5799,8 +5792,8 @@ with tab2b:
                 st.download_button(
                     label="⬇ Excel Download",
                     data=score_rows_to_excel(dl_rows, "All_Score"),
-                    file_name=f"{ticker.replace('.', '_')}_All_Score.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    file_name=f"{ticker.replace('.', '_')}_All_Score.csv",
+                    mime="text/csv",
                     key="dl_all_score",
                 )
                 sel_rows = sel_event.selection.rows if sel_event and sel_event.selection else []
