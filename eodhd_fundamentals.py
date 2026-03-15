@@ -148,13 +148,19 @@ def score_rows_to_excel(rows: list, sheet_name: str = "Score") -> bytes:
     """Convert score tab rows to CSV bytes for download."""
     import io
     import pandas as pd
+    def clean(v):
+        """Normalise display values for CSV: replace N/A and HTML entities with dash."""
+        if v is None: return "—"
+        s = str(v)
+        if s in ("N/A", "None", "", "nan", "inf", "-inf"): return "—"
+        return s
     df = pd.DataFrame([{
         "Metric":   r["label"],
-        "Value":    r["fmt"],
-        "Grade":    r.get("lbl", "—"),
-        "3Y Avg":   r.get("avg3", "—"),
-        "5Y Avg":   r.get("avg5", "—"),
-        "10Y Avg":  r.get("avg10", "—"),
+        "Value":    clean(r.get("fmt")),
+        "Grade":    clean(r.get("lbl")),
+        "3Y Avg":   clean(r.get("avg3")),
+        "5Y Avg":   clean(r.get("avg5")),
+        "10Y Avg":  clean(r.get("avg10")),
     } for r in rows])
     return df.to_csv(index=False).encode("utf-8")
 
