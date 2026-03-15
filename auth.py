@@ -112,6 +112,14 @@ def require_login():
     """
     # ── Handle OAuth callback code in query params ────────────────────────
     params = st.query_params
+    # Also handle error param from GitHub (e.g. access_denied)
+    if "error" in params:
+        err = params.get("error", "")
+        err_desc = params.get("error_description", "")
+        st.query_params.clear()
+        _show_error(f"GitHub Fehler: {err} — {err_desc}")
+        st.stop()
+
     if "code" in params and not is_authenticated():
         code = params["code"]
         # Clear the code from URL immediately
@@ -132,7 +140,13 @@ def require_login():
                     _show_error("GitHub Nutzerdaten konnten nicht abgerufen werden.")
                     st.stop()
             else:
-                _show_error("OAuth Token-Austausch fehlgeschlagen.")
+                _show_error(
+                    "OAuth Token-Austausch fehlgeschlagen.\n\n"
+                    "Mögliche Ursachen:\n"
+                    "- Client ID / Secret falsch\n"
+                    "- Redirect URI in GitHub OAuth App stimmt nicht überein\n"
+                    f"- Erwartet: `{_redirect_uri()}`"
+                )
                 st.stop()
 
     # ── Already authenticated ─────────────────────────────────────────────
