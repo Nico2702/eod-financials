@@ -292,6 +292,47 @@ def compute_kennzahlen(data, hl, val, tech):
     fcf_gr_yoy    = (yoy_growth(q_cf, "freeCashFlow")
                      or yoy_growth(q_cf, "freeCashFlowCalc"))
 
+    # Annual growth — Y0 vs Y1 (last fiscal year vs prior fiscal year)
+    def ann_growth(stmt, key):
+        """Annual YoY: latest fiscal year vs prior fiscal year."""
+        ys = sorted(stmt.keys(), reverse=True)
+        if len(ys) < 2: return None
+        v0 = fv(stmt[ys[0]].get(key))
+        v1 = fv(stmt[ys[1]].get(key))
+        if v0 is None or not v1 or v1 <= 0: return None
+        return (v0 / v1 - 1) * 100
+
+    _a_is_hl = data["Financials"]["Income_Statement"].get("yearly", {})
+    _a_cf_hl = data["Financials"]["Cash_Flow"].get("yearly", {})
+    rev_gr_ann    = ann_growth(_a_is_hl, "totalRevenue")
+    earn_gr_ann   = ann_growth(_a_is_hl, "netIncome")
+    ebit_gr_ann   = ann_growth(_a_is_hl, "ebit")
+    ebitda_gr_ann = ann_growth(_a_is_hl, "ebitda")
+    # EPS annual: NI/shares Y0 vs Y1
+    _a_bs_hl = data["Financials"]["Balance_Sheet"].get("yearly", {})
+    _ys_hl   = sorted(_a_is_hl.keys(), reverse=True)
+    def _eps_ann_hl(idx):
+        if idx >= len(_ys_hl): return None
+        y   = _ys_hl[idx]
+        ni  = fv(_a_is_hl[y].get("netIncomeApplicableToCommonShares")) or fv(_a_is_hl[y].get("netIncome"))
+        shs = fv(_a_bs_hl.get(y, {}).get("commonStockSharesOutstanding"))
+        return (ni / shs) if ni and shs and shs > 0 else None
+    _ea0 = _eps_ann_hl(0); _ea1 = _eps_ann_hl(1)
+    eps_gr_ann = ((_ea0 / _ea1 - 1) * 100) if _ea0 and _ea1 and _ea1 > 0 else None
+    # FCF annual: freeCashFlow Y0 vs Y1, fallback CFO-CapEx
+    def _fcf_ann_hl(y):
+        d = _a_cf_hl.get(y, {})
+        f = fv(d.get("freeCashFlow"))
+        if f is None:
+            cfo   = fv(d.get("totalCashFromOperatingActivities"))
+            capex = fv(d.get("capitalExpenditures"))
+            f = cfo - abs(capex) if cfo and capex else None
+        return f
+    _ys_cf_hl = sorted(_a_cf_hl.keys(), reverse=True)
+    _fcf0 = _fcf_ann_hl(_ys_cf_hl[0]) if len(_ys_cf_hl) > 0 else None
+    _fcf1 = _fcf_ann_hl(_ys_cf_hl[1]) if len(_ys_cf_hl) > 1 else None
+    fcf_gr_ann = ((_fcf0 / _fcf1 - 1) * 100) if _fcf0 and _fcf1 and _fcf1 > 0 else None
+
     # aliases for Key Facts
     ebit_gr    = ebit_gr_yoy
     ebitda_gr  = ebitda_gr_yoy
@@ -348,6 +389,13 @@ def compute_kennzahlen(data, hl, val, tech):
         "fcf_gr_ttm":    (fcf_gr_ttm,    fmt_p(fcf_gr_ttm),    [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "fcf_gr_qoq":    (fcf_gr_qoq,    fmt_p(fcf_gr_qoq),    [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "fcf_gr_yoy":    (fcf_gr_yoy,    fmt_p(fcf_gr_yoy),    [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        # Annual growth (Y0 vs Y1 — full fiscal year)
+        "rev_gr_ann":    (rev_gr_ann,    fmt_p(rev_gr_ann),    [(30,"ap"),(20,"a"),(15,"am"),(10,"bp"),(5,"b"),(0,"bm"),(-5,"cp")],  True),
+        "earn_gr_ann":   (earn_gr_ann,   fmt_p(earn_gr_ann),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "eps_gr_ann":    (eps_gr_ann,    fmt_p(eps_gr_ann),    [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "ebit_gr_ann":   (ebit_gr_ann,   fmt_p(ebit_gr_ann),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "ebitda_gr_ann": (ebitda_gr_ann, fmt_p(ebitda_gr_ann), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "fcf_gr_ann":    (fcf_gr_ann,    fmt_p(fcf_gr_ann),    [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         # aliases for Key Facts
         "ebit_gr":       (ebit_gr_yoy,   fmt_p(ebit_gr_yoy),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "ebitda_gr":     (ebitda_gr_yoy, fmt_p(ebitda_gr_yoy), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
@@ -4544,14 +4592,20 @@ with tab1:
         ("FCF Margin",               "fcf_mar"),
     ]
     GROWTH_ROWS = [
+        ("Revenue Growth Ann",  "rev_gr_ann"),
         ("Revenue Growth TTM",  "rev_gr_ttm"),
         ("Revenue Growth YoY",  "rev_gr_yoy"),
+        ("Earnings Growth Ann", "earn_gr_ann"),
         ("Earnings Growth TTM", "earn_gr_ttm"),
         ("Earnings Growth YoY", "earn_gr_yoy"),
+        ("EPS Growth Ann",      "eps_gr_ann"),
         ("EPS Growth TTM",      "eps_gr_ttm"),
         ("EPS Growth YoY",      "eps_gr_yoy"),
+        ("EBIT Growth Ann",     "ebit_gr_ann"),
         ("EBIT Growth",         "ebit_gr_yoy"),
+        ("EBITDA Growth Ann",   "ebitda_gr_ann"),
         ("EBITDA Growth",       "ebitda_gr_yoy"),
+        ("FCF Growth Ann",      "fcf_gr_ann"),
         ("FCF Growth",          "fcf_gr_yoy"),
     ]
     HEALTH_ROWS = [
