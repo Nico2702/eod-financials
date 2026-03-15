@@ -117,14 +117,14 @@ def require_login():
         err = params.get("error", "")
         err_desc = params.get("error_description", "")
         st.query_params.clear()
-        _show_error(f"GitHub Fehler: {err} — {err_desc}")
+        _show_error(f"GitHub error: {err} — {err_desc}")
         st.stop()
 
     if "code" in params and not is_authenticated():
         code = params["code"]
         # Clear the code from URL immediately
         st.query_params.clear()
-        with st.spinner("Authentifizierung läuft…"):
+        with st.spinner("Authenticating…"):
             token = _exchange_code(code)
             if token:
                 user = _get_github_user(token)
@@ -137,14 +137,14 @@ def require_login():
                         _show_denied(username)
                         st.stop()
                 else:
-                    _show_error("GitHub Nutzerdaten konnten nicht abgerufen werden.")
+                    _show_error("Could not retrieve GitHub user data.")
                     st.stop()
             else:
                 _show_error(
-                    "OAuth Token-Austausch fehlgeschlagen.\n\n"
-                    "Mögliche Ursachen:\n"
+                    "OAuth token exchange failed.\n\n"
+                    "Possible causes:\n"
                     "- Client ID / Secret falsch\n"
-                    "- Redirect URI in GitHub OAuth App stimmt nicht überein\n"
+                    "- Redirect URI in GitHub OAuth App does not match\n"
                     f"- Erwartet: `{_redirect_uri()}`"
                 )
                 st.stop()
@@ -209,7 +209,7 @@ def _render_login_page():
     st.markdown(f"""
     <div class="login-container">
         <div class="login-title">EOD Fundamentals Viewer</div>
-        <div class="login-sub">Bitte melde dich mit deinem GitHub Account an.</div>
+        <div class="login-sub">Please sign in with your GitHub account.</div>
         <a class="login-btn" href="{_auth_url()}">
             <svg width="20" height="20" viewBox="0 0 16 16" fill="white">
                 <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
@@ -221,9 +221,9 @@ def _render_login_page():
                 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01
                 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
             </svg>
-            Mit GitHub anmelden
+            Sign in with GitHub
         </a>
-        <div class="login-note">Nur freigeschaltete Accounts haben Zugang.</div>
+        <div class="login-note">Only approved accounts have access.</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -250,7 +250,7 @@ def _render_user_badge():
                 f'<div style="font-size:11px;color:#64748b;">@{login}</div>',
                 unsafe_allow_html=True
             )
-        if st.button("Abmelden", key="gh_logout", use_container_width=True):
+        if st.button("Sign out", key="gh_logout", use_container_width=True):
             _clear_user()
             st.rerun()
         st.markdown("---")
@@ -259,9 +259,9 @@ def _render_user_badge():
 def _show_denied(username: str):
     st.error(
         f"**Zugang verweigert** — GitHub Account `@{username}` ist nicht freigeschaltet.\n\n"
-        "Bitte wende dich an den Administrator."
+        "Please contact the administrator."
     )
 
 
 def _show_error(msg: str):
-    st.error(f"**Fehler bei der Anmeldung:** {msg}")
+    st.error(f"**Authentication error:** {msg}")
