@@ -241,9 +241,9 @@ def _render_user_badge():
         with cols[0]:
             if avatar:
                 st.markdown(
-                    f'<style>img.gh-avatar {{ border-radius: 20px !important; }}</style>'
+                    f'<style>img.gh-avatar {{ border-radius: 10px !important; }}</style>'
                     f'<img class="gh-avatar" src="{avatar}" width="48" '
-                    f'style="border-radius:20px !important; display:block;">',
+                    f'style="border-radius:10px !important; display:block;">',
                     unsafe_allow_html=True
                 )
         with cols[1]:
