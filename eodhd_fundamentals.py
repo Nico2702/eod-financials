@@ -4017,6 +4017,26 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     at_ttm    = safe_div(rev_ttm,    assets_ttm)
     at_yr     = safe_div(rev_yr,     assets_avg)
 
+    # ── Quarterly (Q0) margins ────────────────────────────────────────
+    def _q0is(key): return fv(q_is[q_sorted[0]].get(key)) if q_sorted else None
+    def _q0cf(key): return fv(q_cf[qcf_sorted[0]].get(key)) if qcf_sorted else None
+    rev_q0    = _q0is("totalRevenue")
+    gp_q0     = _q0is("grossProfit")
+    oi_q0     = _q0is("operatingIncome")
+    ni_q0     = _q0is("netIncome")
+    ebit_q0   = _q0is("ebit")
+    ebitda_q0 = _q0is("ebitda")
+    _fcf_q0_raw = _q0cf("freeCashFlow")
+    _cfo_q0     = _q0cf("totalCashFromOperatingActivities")
+    _capex_q0   = _q0cf("capitalExpenditures")
+    fcf_q0    = _fcf_q0_raw if _fcf_q0_raw is not None else (_cfo_q0 - abs(_capex_q0) if _cfo_q0 and _capex_q0 else None)
+    gm_q      = safe_div(gp_q0,     rev_q0)
+    om_q      = safe_div(oi_q0,     rev_q0)
+    nm_q      = safe_div(ni_q0,     rev_q0)
+    ebitm_q   = safe_div(ebit_q0,   rev_q0)
+    ebitdam_q = safe_div(ebitda_q0, rev_q0)
+    fcfm_q    = safe_div(fcf_q0,    rev_q0)
+
     # ── Historical averages ───────────────────────────────────────────
     def margin_hist(is_key_num, is_key_den, n, cf=False):
         ys = sorted(a_is.keys(), reverse=True)
@@ -4173,16 +4193,22 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         row("Return on Cap. Empl. (Year)",       roce_yr,     roce_3y,    roce_5y,    roce_10y,    ROCE_T),
         row("Return on Inv. Capital (TTM)",      roic_ttm,    roic_3y,    roic_5y,    roic_10y,    ROIC_T),
         row("Return on Inv. Capital (Year)",     roic_yr,     roic_3y,    roic_5y,    roic_10y,    ROIC_T),
+        row("Gross Margin (Quarterly)",          gm_q,        gm_3y,      gm_5y,      gm_10y,      GM_T),
         row("Gross Margin (TTM)",                gm_ttm,      gm_3y,      gm_5y,      gm_10y,      GM_T),
         row("Gross Margin (Year)",               gm_yr,       gm_3y,      gm_5y,      gm_10y,      GM_T),
+        row("Operating Margin (Quarterly)",      om_q,        om_3y,      om_5y,      om_10y,      OM_T),
         row("Operating Margin (TTM)",            om_ttm,      om_3y,      om_5y,      om_10y,      OM_T),
         row("Operating Margin (Year)",           om_yr,       om_3y,      om_5y,      om_10y,      OM_T),
+        row("Net Margin (Quarterly)",            nm_q,        nm_3y,      nm_5y,      nm_10y,      NM_T),
         row("Net Margin (TTM)",                  nm_ttm,      nm_3y,      nm_5y,      nm_10y,      NM_T),
         row("Net Margin (Year)",                 nm_yr,       nm_3y,      nm_5y,      nm_10y,      NM_T),
+        row("EBIT Margin (Quarterly)",           ebitm_q,     ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T),
         row("EBIT Margin (TTM)",                 ebitm_ttm,   ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T),
         row("EBIT Margin (Year)",                ebitm_yr,    ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T),
+        row("EBITDA Margin (Quarterly)",         ebitdam_q,   ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T),
         row("EBITDA Margin (TTM)",               ebitdam_ttm, ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T),
         row("EBITDA Margin (Year)",              ebitdam_yr,  ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T),
+        row("FCF Margin (Quarterly)",            fcfm_q,      fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
         row("FCF Margin (TTM)",                  fcfm_ttm,    fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
         row("FCF Margin (Year)",                 fcfm_yr,     fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
         row("Asset Turnover (TTM)",              at_ttm,      at_3y,      at_5y,      at_10y,      AT_T, pct=False),
