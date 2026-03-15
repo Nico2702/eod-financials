@@ -287,8 +287,8 @@ def compute_kennzahlen(data, hl, val, tech):
     earn_gr_yoy   = yoy_growth(q_is, "netIncome")
     eps_gr_yoy    = (yoy_growth(q_is, "netIncomeApplicableToCommonShares")
                      or yoy_growth(q_is, "netIncome"))
-    ebit_gr_yoy   = ttm_growth(ttm_is, "ebit")
-    ebitda_gr_yoy = ttm_growth(ttm_is, "ebitda")
+    ebit_gr_yoy   = yoy_growth(q_is, "ebit")
+    ebitda_gr_yoy = yoy_growth(q_is, "ebitda")
     fcf_gr_yoy    = (yoy_growth(q_cf, "freeCashFlow")
                      or yoy_growth(q_cf, "freeCashFlowCalc"))
 
@@ -1738,54 +1738,83 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "result": pct(r)}
 
     if "EBITDA Margin" in L:
+        is_q   = "Quarterly" in L
         is_ttm = "TTM" in L
-        ebitda = ebitda_ttm if is_ttm else ebitda_a
-        rev    = rev_ttm    if is_ttm else rev_a
-        dt     = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        q0     = qis_s[0] if qis_s else "—"
+        ebitda = fv(q_is[q0].get("ebitda"))       if is_q else (ebitda_ttm if is_ttm else ebitda_a)
+        rev    = fv(q_is[q0].get("totalRevenue")) if is_q else (rev_ttm    if is_ttm else rev_a)
+        dt     = f"Q0 ({q0})" if is_q else (f"TTM ({qis_s[0][:7]}\u2026{qis_s[3][:7]})" if is_ttm else isA_dt)
         r      = safe(ebitda, rev)
         return {
-            "formula": "EBITDA ÷ Revenue × 100",
+            "formula": "EBITDA \u00f7 Revenue \u00d7 100",
             "fields":  ["Income_Statement.ebitda", "Income_Statement.totalRevenue"],
             "unit": "%",
             "components": [
-                (f"── EBITDA {'TTM quarters' if is_ttm else dt} ──", ""),
+                (f"\u2500\u2500 EBITDA {dt} \u2500\u2500", ""),
                 *(ttm_rows(q_is, "ebitda", "Income_Statement.ebitda") if is_ttm else
-                  [(f"Income_Statement.ebitda  [{isA_dt}]", raw(ebitda))]),
-                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──", ""),
+                  [(f"Income_Statement.ebitda  [{dt}]", raw(ebitda))]),
+                (f"\u2500\u2500 Revenue {dt} \u2500\u2500", ""),
                 *(ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else
-                  [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]),
-                ("── Calculation ──",                                ""),
-                ("EBITDA ÷ Revenue × 100",                         f"{raw(ebitda)} ÷ {raw(rev)}"),
-                ("── Result ──",                                    ""),
-                ("EBITDA Margin",                                    pct(r)),
+                  [(f"Income_Statement.totalRevenue  [{dt}]", raw(rev))]),
+                ("\u2500\u2500 Calculation \u2500\u2500",        ""),
+                ("EBITDA \u00f7 Revenue \u00d7 100",  f"{raw(ebitda)} \u00f7 {raw(rev)}"),
+                ("\u2500\u2500 Result \u2500\u2500",             ""),
+                ("EBITDA Margin",            pct(r)),
             ],
             "result": pct(r)}
 
     if "Net Margin" in L:
+        is_q   = "Quarterly" in L
         is_ttm = "TTM" in L
-        ni  = ni_ttm if is_ttm else ni_a
-        rev = rev_ttm if is_ttm else rev_a
-        dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
+        q0     = qis_s[0] if qis_s else "—"
+        ni  = fv(q_is[q0].get("netIncome"))     if is_q else (ni_ttm  if is_ttm else ni_a)
+        rev = fv(q_is[q0].get("totalRevenue"))  if is_q else (rev_ttm if is_ttm else rev_a)
+        dt  = f"Q0 ({q0})" if is_q else (f"TTM ({qis_s[0][:7]}\u2026{qis_s[3][:7]})" if is_ttm else isA_dt)
         r   = safe(ni, rev)
         return {
-            "formula": "Net Income ÷ Revenue × 100",
+            "formula": "Net Income \u00f7 Revenue \u00d7 100",
             "fields":  ["Income_Statement.netIncome", "Income_Statement.totalRevenue"],
             "unit": "%",
             "components": [
-                (f"── Net Income {'TTM quarters' if is_ttm else dt} ──", ""),
+                (f"\u2500\u2500 Net Income {dt} \u2500\u2500", ""),
                 *(ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else
-                  [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]),
-                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──",   ""),
+                  [(f"Income_Statement.netIncome  [{dt}]", raw(ni))]),
+                (f"\u2500\u2500 Revenue {dt} \u2500\u2500", ""),
                 *(ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else
-                  [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]),
-                ("── Calculation ──",                                     ""),
-                ("Net Income ÷ Revenue × 100",                          f"{raw(ni)} ÷ {raw(rev)}"),
-                ("── Result ──",                                          ""),
-                ("Net Margin",                                            pct(r)),
+                  [(f"Income_Statement.totalRevenue  [{dt}]", raw(rev))]),
+                ("\u2500\u2500 Calculation \u2500\u2500",           ""),
+                ("Net Income \u00f7 Revenue \u00d7 100", f"{raw(ni)} \u00f7 {raw(rev)}"),
+                ("\u2500\u2500 Result \u2500\u2500",                ""),
+                ("Net Margin",                  pct(r)),
             ],
             "result": pct(r)}
 
     if "FCF Margin" in L:
+        is_q   = "Quarterly" in L
+        is_ttm = "TTM" in L and not is_q
+        if is_q:
+            q0cf = qcf_s[0] if qcf_s else None
+            _fcf_q = fv(q_cf[q0cf].get("freeCashFlow")) if q0cf else None
+            if _fcf_q is None and q0cf:
+                _cfo   = fv(q_cf[q0cf].get("totalCashFromOperatingActivities"))
+                _capex = fv(q_cf[q0cf].get("capitalExpenditures"))
+                _fcf_q = _cfo - abs(_capex) if _cfo and _capex else None
+            _rev_q = fv(q_is[qis_s[0]].get("totalRevenue")) if qis_s else None
+            _r_q   = safe(_fcf_q, _rev_q)
+            return {
+                "formula": "FCF \u00f7 Revenue \u00d7 100  (single quarter Q0)\n(FCF = freeCashFlow; fallback: CFO \u2212 |CapEx|)",
+                "fields":  ["Cash_Flow.freeCashFlow", "Income_Statement.totalRevenue"],
+                "unit": "%",
+                "components": [
+                    (f"Cash_Flow.freeCashFlow  [{q0cf}]", raw(_fcf_q)),
+                    (f"Income_Statement.totalRevenue  [{qis_s[0] if qis_s else '\u2014'}]", raw(_rev_q)),
+                    ("\u2500\u2500 Calculation \u2500\u2500",       ""),
+                    ("FCF \u00f7 Revenue \u00d7 100",    f"{raw(_fcf_q)} \u00f7 {raw(_rev_q)}"),
+                    ("\u2500\u2500 Result \u2500\u2500",            ""),
+                    ("FCF Margin (Quarterly)", pct(_r_q)),
+                ],
+                "result": pct(_r_q)}
+        fcf    = fcf_ttm if is_ttm else fcf_a
         is_ttm = "TTM" in L
         fcf    = fcf_ttm if is_ttm else fcf_a
         cfo    = fcf_ttm_cfo if is_ttm else fcf_a_cfo
@@ -2926,13 +2955,19 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
                 result.append(r)
         return result
 
-    # Growth rows (keep Fwd / TTM / CAGR for Rev, NI, FCF)
+    # Growth rows (Fwd / TTM / Ann / QoQ / YoY / CAGR for Rev, NI, EPS, FCF)
     q_growth = pick(gs["rows"],
-        "Revenue Growth (Fwd)",      "Revenue Growth (TTM)",
+        "Revenue Growth (Fwd)",      "Revenue Growth (TTM)",      "Revenue Growth (Ann)",
+        "Revenue Growth (QoQ)",      "Revenue Growth (YoY)",
         "Revenue Growth (3Y CAGR)",  "Revenue Growth (5Y CAGR)",  "Revenue Growth (10Y CAGR)",
-        "Net Income Growth (Fwd)",   "Net Income Growth (TTM)",
+        "Net Income Growth (Fwd)",   "Net Income Growth (TTM)",   "Net Income Growth (Ann)",
+        "Net Income Growth (QoQ)",   "Net Income Growth (YoY)",
         "Net Income Growth (3Y CAGR)","Net Income Growth (5Y CAGR)","Net Income Growth (10Y CAGR)",
-        "FCF Growth (TTM)",
+        "EPS Growth (Fwd)",          "EPS Growth (TTM)",          "EPS Growth (Ann)",
+        "EPS Growth (QoQ)",          "EPS Growth (YoY)",
+        "EPS Growth (3Y CAGR)",      "EPS Growth (5Y CAGR)",      "EPS Growth (10Y CAGR)",
+        "FCF Growth (TTM)",          "FCF Growth (Ann)",          "FCF Growth (QoQ)",
+        "FCF Growth (YoY)",
         "FCF Growth (3Y CAGR)",      "FCF Growth (5Y CAGR)",      "FCF Growth (10Y CAGR)",
     )
     # Rename: strip parentheses for cleaner look in Quality tab
@@ -2951,9 +2986,11 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
         "Return on Equity (TTM)",          "Return on Equity (Year)",
         "Return on Cap. Empl. (TTM)",      "Return on Cap. Empl. (Year)",
         "Return on Inv. Capital (TTM)",    "Return on Inv. Capital (Year)",
-        "Gross Margin (TTM)",              "Gross Margin (Year)",
-        "Net Margin (TTM)",                "Net Margin (Year)",
-        "FCF Margin (TTM)",                "FCF Margin (Year)",
+        "Gross Margin (Quarterly)",        "Gross Margin (TTM)",        "Gross Margin (Year)",
+        "Net Margin (Quarterly)",          "Net Margin (TTM)",          "Net Margin (Year)",
+        "EBIT Margin (Quarterly)",         "EBIT Margin (TTM)",         "EBIT Margin (Year)",
+        "EBITDA Margin (Quarterly)",       "EBITDA Margin (TTM)",       "EBITDA Margin (Year)",
+        "FCF Margin (Quarterly)",          "FCF Margin (TTM)",          "FCF Margin (Year)",
     )
 
     # Health rows selected for Quality (drop "(Quarterly)" label noise)
@@ -5602,16 +5639,16 @@ with tab2b:
             (52,"cp"),(44,"c"),(36,"cm"),(0,"d")
         ])
 
-        hcol1, hcol2, hcol3, hcol4, hcol5 = st.columns([3, 1, 1, 1, 1])
+        hcol1, hcol2, hcol3, hcol4, hcol5, hcol6 = st.columns([3, 1, 1, 1, 1, 1])
         with hcol1:
             st.markdown(
                 f'<div style="font-size:20px;font-weight:700;color:#e2e8f0;">'
                 f'All Metrics &nbsp;{grade_badge(overall_all_css, overall_all_lbl)}'
                 f' <span style="font-size:14px;color:#64748b;font-weight:400;">'
                 f'Avg {avg_all:.1f}</span></div>', unsafe_allow_html=True)
-        for col, key, sc in zip([hcol2, hcol3, hcol4, hcol5],
-                                 ["💎 Value","📈 Profit","🚀 Growth","🏥 Health"],
-                                 [vs, ps, gs, hs]):
+        for col, key, sc in zip([hcol2, hcol3, hcol4, hcol5, hcol6],
+                                 ["💎 Value","📈 Profit","🚀 Growth","🏥 Health","⭐ Quality"],
+                                 [vs, ps, gs, hs, qs_all]):
             with col:
                 st.markdown(
                     f'<div style="font-size:12px;color:#64748b;">{key}</div>'
@@ -5624,7 +5661,7 @@ with tab2b:
         # ── Filters ───────────────────────────────────────────────────
         fcol1, fcol2, fcol3 = st.columns([2, 2, 2])
         with fcol1:
-            tab_filter = st.selectbox("Kategorie", ["All","💎 Value","📈 Profit","🚀 Growth","🏥 Health"],
+            tab_filter = st.selectbox("Kategorie", ["All","💎 Value","📈 Profit","🚀 Growth","🏥 Health","⭐ Quality"],
                                       key="all_tab_filter", label_visibility="collapsed")
         with fcol2:
             grade_filter = st.selectbox("Grade", ["All Grades","A+","A","A-","B+","B","B-","C+","C","C-","D"],
