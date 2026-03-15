@@ -343,12 +343,14 @@ def compute_kennzahlen(data, hl, val, tech):
     # Annual growth — Y0 vs Y1 (last fiscal year vs prior fiscal year)
     def ann_growth(stmt, key):
         """Annual YoY: latest fiscal year vs prior fiscal year."""
+        import math
         ys = sorted(stmt.keys(), reverse=True)
         if len(ys) < 2: return None
         v0 = fv(stmt[ys[0]].get(key))
         v1 = fv(stmt[ys[1]].get(key))
         if v0 is None or not v1 or v1 <= 0: return None
-        return (v0 / v1 - 1) * 100
+        r = (v0 / v1 - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
 
     _a_is_hl = data["Financials"]["Income_Statement"].get("yearly", {})
     _a_cf_hl = data["Financials"]["Cash_Flow"].get("yearly", {})
@@ -3642,12 +3644,14 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
 
     # ── Annual YoY: year[0] vs year[1] (kept for Rule of 40 only) ────
     def yr_gr(stmt, key):
+        import math
         ys = sorted(stmt.keys(), reverse=True)
         if len(ys) < 2: return None
         v0 = fv(stmt[ys[0]].get(key))
         v1 = fv(stmt[ys[1]].get(key))
         if v0 is None or not v1 or v1 <= 0: return None
-        return (v0 / v1 - 1) * 100
+        r = (v0 / v1 - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
 
     # ── CAGR: (V0 / Vn)^(1/n) − 1 ───────────────────────────────────
     def cagr(stmt, key, n):
@@ -3783,12 +3787,14 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
 
     # ── QoQ values (Q0 vs Q1 — latest vs prior quarter) ──────────────
     def qoq_gr(stmt, key):
+        import math
         qs = sorted(stmt.keys(), reverse=True)
         if len(qs) < 2: return None
         v0 = fv(stmt[qs[0]].get(key))
         v1 = fv(stmt[qs[1]].get(key))
         if v0 is None or not v1 or v1 <= 0: return None
-        return (v0 / v1 - 1) * 100
+        r = (v0 / v1 - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
 
     rev_gr_qoq    = qoq_gr(q_is, "totalRevenue")
     ni_gr_qoq     = qoq_gr(q_is, "netIncome")
@@ -3807,7 +3813,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             return f
         v0 = get_fcf_q(qs[0]); v1 = get_fcf_q(qs[1])
         if v0 is None or not v1 or v1 <= 0: return None
-        return (v0 / v1 - 1) * 100
+        import math; r = (v0 / v1 - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
     fcf_gr_qoq = fcf_qoq()
 
     def eps_qoq():
@@ -3820,17 +3827,20 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             return (ni / shs) if ni and shs and shs > 0 else None
         eps0 = get_eps_q(0, 0); eps1 = get_eps_q(1, 1)
         if eps0 is None or not eps1 or eps1 <= 0: return None
-        return (eps0 / eps1 - 1) * 100
+        import math; r = (eps0 / eps1 - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
     eps_gr_qoq = eps_qoq()
 
     # ── YoY quarterly values (Q0 vs Q4 — same quarter prior year) ──────
     def yoq_gr(stmt, key):
+        import math
         qs = sorted(stmt.keys(), reverse=True)
         if len(qs) < 5: return None
         v0 = fv(stmt[qs[0]].get(key))
         v4 = fv(stmt[qs[4]].get(key))
-        if v0 is None or not v4 or v4 <= 0: return None
-        return (v0 / v4 - 1) * 100
+        if v0 is None or v4 is None or v4 <= 0: return None
+        r = (v0 / v4 - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
 
     rev_gr_yoq    = yoq_gr(q_is, "totalRevenue")
     ni_gr_yoq     = yoq_gr(q_is, "netIncome")
@@ -3849,7 +3859,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             return f
         v0 = get_fcf_q(qs[0]); v4 = get_fcf_q(qs[4])
         if v0 is None or not v4 or v4 <= 0: return None
-        return (v0 / v4 - 1) * 100
+        import math; r = (v0 / v4 - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
     fcf_gr_yoq = fcf_yoq()
 
     def eps_yoq():
@@ -3862,7 +3873,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             return (ni / shs) if ni and shs and shs > 0 else None
         eps0 = get_eps_q(0, 0); eps4 = get_eps_q(4, 4)
         if eps0 is None or not eps4 or eps4 <= 0: return None
-        return (eps0 / eps4 - 1) * 100
+        import math; r = (eps0 / eps4 - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
     eps_gr_yoq = eps_yoq()
 
     # ── CAGR values ───────────────────────────────────────────────────
@@ -3893,7 +3905,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             r1 = fv(a_is[ys[i+1]].get("totalRevenue"))
             rg = (r0/r1 - 1)*100 if r0 and r1 and r1 > 0 else None
             fc = fcf_yr(ys[i])
-            fm = fc/r0*100 if fc is not None and r0 and r0 != 0 else None
+            fm = fc/r0*100 if fc is not None and r0 and r0 > 0 else None
             if rg is not None and fm is not None: vals.append(rg + fm)
         return sum(vals)/len(vals) if vals else None
 
