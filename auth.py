@@ -194,7 +194,7 @@ def _render_login_page():
 
     st.markdown(f"""
     <div class="login-container">
-        <div class="login-title">NaroIX Fundamentals Viewer</div>
+        <div class="login-title">EOD Fundamentals Viewer</div>
         <div class="login-sub">Bitte melde dich mit deinem GitHub Account an.</div>
         <a class="login-btn" href="{_auth_url()}">
             <svg width="20" height="20" viewBox="0 0 16 16" fill="white">
