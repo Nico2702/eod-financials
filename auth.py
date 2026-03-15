@@ -252,6 +252,7 @@ def _render_user_badge():
                 f'<div style="font-size:11px;color:#64748b;">@{login}</div>',
                 unsafe_allow_html=True
             )
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
         if st.button("Sign out", key="gh_logout", use_container_width=True):
             _clear_user()
             st.rerun()
