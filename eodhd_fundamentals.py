@@ -1135,7 +1135,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 "formula": "Primary: Valuation.TrailingPE\nFallback 1: Highlights.PERatio\nFallback 2: MarketCap / NI_TTM (self-calculated)",
                 "fields":  ["Valuation.TrailingPE", "Highlights.PERatio",
                             "Highlights.MarketCapitalization",
-                            "Income_Statement.netIncome (quarterly TTM - fallback only)"],
+                            "Income_Statement.netIncome (quarterly TTM - fallback only)",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
                 "unit": "x",
                 "components": [
                     ("Valuation.TrailingPE",          num(trailing, 4) if trailing else "- (not available)"),
@@ -1156,7 +1157,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {
             "formula": "Market Cap ÷ Net Income",
             "fields":  ["Highlights.MarketCapitalization",
-                        "Income_Statement.netIncome (quarterly TTM sum)" if is_ttm else "Income_Statement.netIncome (annual)"],
+                        "Income_Statement.netIncome (quarterly TTM sum)" if is_ttm else "Income_Statement.netIncome (annual)",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
             "unit": "x",
             "components": [
                 ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
@@ -1188,7 +1190,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             return {
                 "formula": "Primary: Valuation.PriceSalesTTM\nFallback: MarketCap / Revenue TTM (self-calculated)",
                 "fields":  ["Valuation.PriceSalesTTM", "Highlights.MarketCapitalization",
-                            "Income_Statement.totalRevenue (TTM)"],
+                            "Income_Statement.totalRevenue (TTM)",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
                 "unit": "x",
                 "components": [
                     ("Valuation.PriceSalesTTM",                   num(ps_api, 4) if ps_api else "- (not available)"),
@@ -1206,7 +1209,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {
             "formula": "Market Cap / Revenue",
             "fields":  ["Highlights.MarketCapitalization",
-                        "Income_Statement.totalRevenue"],
+                        "Income_Statement.totalRevenue",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
             "unit": "x",
             "components": [
                 ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
@@ -1238,7 +1242,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 "formula": "Primary: Valuation.PriceBookMRQ\nFallback: MarketCap / totalStockholderEquity (latest quarter)",
                 "fields":  ["Valuation.PriceBookMRQ",
                             "Highlights.MarketCapitalization",
-                            "Balance_Sheet.totalStockholderEquity"],
+                            "Balance_Sheet.totalStockholderEquity",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
                 "unit": "x",
                 "components": [
                     ("Valuation.PriceBookMRQ",                         num(price_book_mrq, 4) if price_book_mrq else "- (not available)"),
@@ -1257,7 +1262,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {
             "formula": "Market Cap / Stockholder Equity  (annual)",
             "fields":  ["Highlights.MarketCapitalization",
-                        "Balance_Sheet.totalStockholderEquity"],
+                        "Balance_Sheet.totalStockholderEquity",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
             "unit": "x",
             "components": [
                 ("Market Cap  [Highlights.MarketCapitalization]",      bn(mcap)),
@@ -1315,7 +1321,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "fields":  ["Highlights.MarketCapitalization",
                         "Cash_Flow.freeCashFlow",
                         "Cash_Flow.totalCashFromOperatingActivities (fallback numerator)",
-                        "Cash_Flow.capitalExpenditures (fallback subtractor)"],
+                        "Cash_Flow.capitalExpenditures (fallback subtractor)",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
             "unit": "x",
             "components": comps,
             "result": num(pf, 2)}
@@ -1330,7 +1337,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         rev_comps = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else                     [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]
         return {
             "formula": "Enterprise Value ÷ Revenue\n(EV = Valuation.EnterpriseValue; if null → MCap + Debt − Cash)",
-            "fields":  ["Valuation.EnterpriseValue", "Income_Statement.totalRevenue"],
+            "fields":  ["Valuation.EnterpriseValue", "Income_Statement.totalRevenue",
+                            "ℹ Enterprise Value uses MCap from Finqube DB"],
             "unit": "x",
             "components": [
                 ("EV  [Valuation.EnterpriseValue]",                 raw(ev_raw)),
@@ -1351,7 +1359,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ebit_comps = ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm else                      [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]
         return {
             "formula": "Enterprise Value ÷ EBIT",
-            "fields":  ["Valuation.EnterpriseValue", "Income_Statement.ebit"],
+            "fields":  ["Valuation.EnterpriseValue", "Income_Statement.ebit",
+                            "ℹ Enterprise Value uses MCap from Finqube DB"],
             "unit": "x",
             "components": [
                 ("EV  [Valuation.EnterpriseValue]",                  raw(ev)),
@@ -1372,7 +1381,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ebitda_comps = ttm_rows(q_is, "ebitda", "Income_Statement.ebitda") if is_ttm else                        [(f"Income_Statement.ebitda  [{isA_dt}]", raw(ebitda))]
         return {
             "formula": "Enterprise Value ÷ EBITDA",
-            "fields":  ["Valuation.EnterpriseValue", "Income_Statement.ebitda"],
+            "fields":  ["Valuation.EnterpriseValue", "Income_Statement.ebitda",
+                            "ℹ Enterprise Value uses MCap from Finqube DB"],
             "unit": "x",
             "components": [
                 ("EV  [Valuation.EnterpriseValue]",                    raw(ev)),
@@ -1393,7 +1403,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         return {
             "formula": "Net Income ÷ Market Cap × 100  (inverse of P/E)",
-            "fields":  ["Income_Statement.netIncome", "Highlights.MarketCapitalization"],
+            "fields":  ["Income_Statement.netIncome", "Highlights.MarketCapitalization",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
             "unit": "%",
             "components": [
                 (f"── Net Income {'TTM quarters' if is_ttm else dt} ──", ""),
@@ -1451,7 +1462,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {
             "formula": "Free Cash Flow ÷ Market Cap × 100",
             "fields":  ["Cash_Flow.freeCashFlow (fallback: CFO − |CapEx|)",
-                        "Highlights.MarketCapitalization"],
+                        "Highlights.MarketCapitalization",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
             "unit": "%", "components": comps, "result": pct(r)}
 
     if "PEG" in L:
@@ -5942,16 +5954,25 @@ with tab2b:
                         'text-transform:uppercase;letter-spacing:.05em;">Data Fields</div>'
                     )
                     for f_name in fields:
-                        parts = f_name.split(".", 1)
-                        stmt  = parts[0] if len(parts) == 2 else ""
-                        field = parts[1] if len(parts) == 2 else f_name
-                        card += (
-                            f'<div style="display:flex;align-items:baseline;gap:6px;'
-                            f'margin-bottom:3px;font-family:monospace;font-size:12px;">'
-                            f'<span style="color:#6366f1;white-space:nowrap;">{stmt}.</span>'
-                            f'<span style="color:#a5b4fc;">{field}</span>'
-                            f'</div>'
-                        )
+                        if f_name.startswith("ℹ"):
+                            # Special info note — rendered as amber notice
+                            card += (
+                                f'<div style="display:flex;align-items:center;gap:6px;'
+                                f'margin-bottom:3px;margin-top:4px;font-size:11px;'
+                                f'color:#f59e0b;font-style:italic;">'
+                                f'{f_name}</div>'
+                            )
+                        else:
+                            parts = f_name.split(".", 1)
+                            stmt  = parts[0] if len(parts) == 2 else ""
+                            field = parts[1] if len(parts) == 2 else f_name
+                            card += (
+                                f'<div style="display:flex;align-items:baseline;gap:6px;'
+                                f'margin-bottom:3px;font-family:monospace;font-size:12px;">'
+                                f'<span style="color:#6366f1;white-space:nowrap;">{stmt}.</span>'
+                                f'<span style="color:#a5b4fc;">{field}</span>'
+                                f'</div>'
+                            )
                     card += '</div>'
                 # Components
                 if dd["components"]:
