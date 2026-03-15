@@ -5625,15 +5625,18 @@ with tab2b:
         gs = compute_growth_score(data, hl)
         hs = compute_health_score(data, hl, price_data)
 
+        qs_all = compute_quality_score(data, hl, price_data)
         all_rows = []
         for tag, sub_rows in [("💎 Value", vs["rows"]), ("📈 Profit", ps["rows"]),
-                               ("🚀 Growth", gs["rows"]), ("🏥 Health",  hs["rows"])]:
+                               ("🚀 Growth", gs["rows"]), ("🏥 Health",  hs["rows"]),
+                               ("⭐ Quality", qs_all["rows"])]:
             for r in sub_rows:
                 all_rows.append({**r, "tab": tag})
 
         # ── Score header ──────────────────────────────────────────────
         avg_all = sum([vs["overall_score"], ps["overall_score"],
-                       gs["overall_score"], hs["overall_score"]]) / 4
+                       gs["overall_score"], hs["overall_score"],
+                       qs_all["overall_score"]]) / 5
         overall_all_css, overall_all_lbl = get_grade(avg_all, [
             (96,"ap"),(92,"a"),(84,"am"),(76,"bp"),(68,"b"),(60,"bm"),
             (52,"cp"),(44,"c"),(36,"cm"),(0,"d")
