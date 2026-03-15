@@ -6,7 +6,7 @@ from auth import require_login
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Fundamentals Viewer",
+    page_title="EOD Fundamentals Viewer",
     page_icon="📊",
     layout="wide",
 )
@@ -4852,7 +4852,7 @@ def render_key_facts(name, facts):
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 📊 Fundamentals Viewer")
+    st.markdown("## 📊 EOD Fundamentals Viewer")
     st.markdown("---")
     ticker_input = st.text_input("Ticker (Exchange)", value="AAPL.US", placeholder="z.B. AAPL.US, SAP.XETRA")
     api_token    = st.text_input("API Token", value="demo", type="password")
@@ -4877,7 +4877,7 @@ if not fetch_btn and "fund_data" not in st.session_state:
     <div style="text-align:center; padding: 80px 0; color: #8892a4;">
         <div style="font-size: 48px;">📊</div>
         <div style="font-size: 22px; color: #e2e8f0; font-weight: 700; margin: 16px 0 8px;">
-            Fundamentals Viewer
+            EOD Fundamentals Viewer
         </div>
         <div>Ticker eingeben und API Token hinterlegen, dann <strong>Laden</strong> klicken.</div>
         <div style="margin-top:8px; font-size:13px;">
