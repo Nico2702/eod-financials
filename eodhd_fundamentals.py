@@ -291,7 +291,23 @@ def compute_kennzahlen(data, hl, val, tech):
     # TTM growth — from TTM history
     rev_gr_ttm    = ttm_growth(ttm_is, "totalRevenue")
     earn_gr_ttm   = ttm_growth(ttm_is, "netIncome")
-    eps_gr_ttm    = ttm_growth(ttm_is, "epsCalc")
+    # EPS TTM growth: self-calculated NI/shares (consistent with Score Tab)
+    _q_is_eg = data["Financials"]["Income_Statement"].get("quarterly", {})
+    _q_bs_eg = data["Financials"]["Balance_Sheet"].get("quarterly", {})
+    _qs_eg   = sorted(_q_is_eg.keys(), reverse=True)
+    _qbs_eg  = sorted(_q_bs_eg.keys(), reverse=True)
+    def _ni_ttm_eg(start):
+        if len(_qs_eg) < start + 4: return None
+        vals = [fv(_q_is_eg[_qs_eg[i]].get("netIncomeApplicableToCommonShares")) or
+                fv(_q_is_eg[_qs_eg[i]].get("netIncome")) for i in range(start, start+4)]
+        return sum(vals) if all(v is not None for v in vals) else None
+    _ni_now_eg  = _ni_ttm_eg(0)
+    _ni_ago_eg  = _ni_ttm_eg(4)
+    _sh_now_eg  = fv(_q_bs_eg[_qbs_eg[0]].get("commonStockSharesOutstanding")) if _qbs_eg else None
+    _sh_ago_eg  = fv(_q_bs_eg[_qbs_eg[4]].get("commonStockSharesOutstanding")) if len(_qbs_eg) > 4 else _sh_now_eg
+    _eps_now_eg = (_ni_now_eg / _sh_now_eg) if _ni_now_eg and _sh_now_eg and _sh_now_eg > 0 else None
+    _eps_ago_eg = (_ni_ago_eg / _sh_ago_eg) if _ni_ago_eg and _sh_ago_eg and _sh_ago_eg > 0 else None
+    eps_gr_ttm  = ((_eps_now_eg / _eps_ago_eg - 1) * 100) if _eps_now_eg and _eps_ago_eg and _eps_ago_eg > 0 else None
     ebit_gr_ttm   = ttm_growth(ttm_is, "ebit")
     ebitda_gr_ttm = ttm_growth(ttm_is, "ebitda")
     fcf_gr_ttm    = ttm_growth(ttm_cf, "freeCashFlowCalc")
@@ -420,6 +436,7 @@ def compute_kennzahlen(data, hl, val, tech):
         "ebit_gr_ann":   (ebit_gr_ann,   fmt_p(ebit_gr_ann),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "ebitda_gr_ann": (ebitda_gr_ann, fmt_p(ebitda_gr_ann), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "fcf_gr_ann":    (fcf_gr_ann,    fmt_p(fcf_gr_ann),    [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "ni_gr_ann":     (earn_gr_ann,   fmt_p(earn_gr_ann),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         # aliases for Key Facts
         "ebit_gr":       (ebit_gr_yoy,   fmt_p(ebit_gr_yoy),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "ebitda_gr":     (ebitda_gr_yoy, fmt_p(ebitda_gr_yoy), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
@@ -562,8 +579,17 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     pe_cur   = fv(val.get("TrailingPE")) or fv(hl.get("PERatio")) or _pe_self
     pe_yr    = (mcap / ni_yr)     if mcap and ni_yr  and ni_yr  > 0 else None
     ps_fwd   = None  # EODHD doesn't provide forward P/S
-    ps_cur   = fv(val.get("PriceSalesTTM"))
-    ps_yr    = (mcap / rev_yr)    if mcap and rev_yr and rev_yr > 0 else None
+    _ps_self = (mcap / _ni_ttm_pe) if mcap and _ni_ttm_pe and _ni_ttm_pe > 0 else None  # reuse TTM NI sum as proxy
+    # P/Sales (Cur): PriceSalesTTM → self-calculated mcap/rev_ttm
+    _q_is_ps   = data["Financials"]["Income_Statement"].get("quarterly", {})
+    _qs_ps     = sorted(_q_is_ps.keys(), reverse=True)
+    _rev_ttm_ps_vals = [
+        fv(_q_is_ps[q].get("totalRevenue")) for q in _qs_ps[:4]
+    ]
+    _rev_ttm_ps = sum(_rev_ttm_ps_vals) if len(_rev_ttm_ps_vals) == 4 and all(v is not None for v in _rev_ttm_ps_vals) else None
+    _ps_calc   = (mcap / _rev_ttm_ps) if mcap and _rev_ttm_ps and _rev_ttm_ps > 0 else None
+    ps_cur     = fv(val.get("PriceSalesTTM")) or _ps_calc
+    ps_yr      = (mcap / rev_yr)    if mcap and rev_yr and rev_yr > 0 else None
     _q_bs_pb  = data["Financials"]["Balance_Sheet"].get("quarterly", {})
     _qbs_pb   = sorted(_q_bs_pb.keys(), reverse=True)
     _equity_q_pb = fv(_q_bs_pb[_qbs_pb[0]].get("totalStockholderEquity")) if _qbs_pb else None
@@ -1135,21 +1161,49 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         is_ttm = "TTM" in L or "Cur" in L
         rev = rev_ttm if is_ttm else rev_a
         dt  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
-        ps  = safe(mcap, rev)
-        rev_comps = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else                     [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]
+        ps_self = safe(mcap, rev)
+        rev_comps = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else \
+                    [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]
+        if "Cur" in L:
+            ps_api = fv(val.get("PriceSalesTTM"))
+            ps_used = ps_api or ps_self
+            if ps_api:
+                src_lbl = "Valuation.PriceSalesTTM  (primary)"
+                src_val = ps_api
+            else:
+                src_lbl = "self-calculated: MarketCap / Revenue TTM  (fallback - PriceSalesTTM missing)"
+                src_val = ps_self
+            return {
+                "formula": "Primary: Valuation.PriceSalesTTM\nFallback: MarketCap / Revenue TTM (self-calculated)",
+                "fields":  ["Valuation.PriceSalesTTM", "Highlights.MarketCapitalization",
+                            "Income_Statement.totalRevenue (TTM)"],
+                "unit": "x",
+                "components": [
+                    ("Valuation.PriceSalesTTM",                   num(ps_api, 4) if ps_api else "- (not available)"),
+                    ("-- Source used --",                          ""),
+                    (src_lbl,                                      num(src_val, 4) + " x"),
+                    ("-- Self-calc cross-check --",                ""),
+                    ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
+                    *rev_comps,
+                    ("MarketCap / Revenue TTM",                    num(ps_self, 4) + " x"),
+                    ("-- Result --",                               ""),
+                    ("P/S (Cur)",                                  num(ps_used, 4) + " x"),
+                ],
+                "result": num(ps_used, 2)}
+        ps = ps_self
         return {
-            "formula": "Market Cap ÷ Revenue",
+            "formula": "Market Cap / Revenue",
             "fields":  ["Highlights.MarketCapitalization",
                         "Income_Statement.totalRevenue"],
             "unit": "x",
             "components": [
                 ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
-                (f"── Revenue {'TTM quarters' if is_ttm else dt} ──", ""),
+                (f"-- Revenue {dt} --", ""),
                 *rev_comps,
-                ("── Calculation ──",                             ""),
-                ("Market Cap ÷ Revenue",                          f"{raw(mcap)} ÷ {raw(rev)}"),
-                ("── Result ──",                                  ""),
-                ("P/S",                                           num(ps, 4) + " x"),
+                ("-- Calculation --",              ""),
+                ("Market Cap / Revenue",           f"{raw(mcap)} / {raw(rev)}"),
+                ("-- Result --",                   ""),
+                ("P/S",                            num(ps, 4) + " x"),
             ],
             "result": num(ps, 2)}
 
@@ -4927,21 +4981,24 @@ with tab1:
         ("FCF Margin",               "fcf_mar"),
     ]
     GROWTH_ROWS = [
-        ("Revenue Growth Ann",  "rev_gr_ann"),
-        ("Revenue Growth TTM",  "rev_gr_ttm"),
-        ("Revenue Growth YoY",  "rev_gr_yoy"),
-        ("Earnings Growth Ann", "earn_gr_ann"),
-        ("Earnings Growth TTM", "earn_gr_ttm"),
-        ("Earnings Growth YoY", "earn_gr_yoy"),
-        ("EPS Growth Ann",      "eps_gr_ann"),
-        ("EPS Growth TTM",      "eps_gr_ttm"),
-        ("EPS Growth YoY",      "eps_gr_yoy"),
-        ("EBIT Growth Ann",     "ebit_gr_ann"),
-        ("EBIT Growth",         "ebit_gr_yoy"),
-        ("EBITDA Growth Ann",   "ebitda_gr_ann"),
-        ("EBITDA Growth",       "ebitda_gr_yoy"),
-        ("FCF Growth Ann",      "fcf_gr_ann"),
-        ("FCF Growth",          "fcf_gr_yoy"),
+        ("Revenue Growth Ann",   "rev_gr_ann"),
+        ("Revenue Growth TTM",   "rev_gr_ttm"),
+        ("Revenue Growth YoY",   "rev_gr_yoy"),
+        ("Earnings Growth Ann",  "earn_gr_ann"),
+        ("Earnings Growth TTM",  "earn_gr_ttm"),
+        ("Earnings Growth YoY",  "earn_gr_yoy"),
+        ("EPS Growth Ann",       "eps_gr_ann"),
+        ("EPS Growth TTM",       "eps_gr_ttm"),
+        ("EPS Growth YoY",       "eps_gr_yoy"),
+        ("EBIT Growth Ann",      "ebit_gr_ann"),
+        ("EBIT Growth TTM",      "ebit_gr_ttm"),
+        ("EBIT Growth YoY",      "ebit_gr_yoy"),
+        ("EBITDA Growth Ann",    "ebitda_gr_ann"),
+        ("EBITDA Growth TTM",    "ebitda_gr_ttm"),
+        ("EBITDA Growth YoY",    "ebitda_gr_yoy"),
+        ("FCF Growth Ann",       "fcf_gr_ann"),
+        ("FCF Growth TTM",       "fcf_gr_ttm"),
+        ("FCF Growth YoY",       "fcf_gr_yoy"),
     ]
     HEALTH_ROWS = [
         ("Cash Ratio",      "cash_r"),
