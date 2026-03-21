@@ -150,20 +150,26 @@ def grade_badge(css_class, label):
 
 def expand_rows_with_avgs(rows):
     """
-    For each row that has avg3/avg5/avg10 values, insert sub-rows after it.
-    Sub-rows show the historical average as their main value with no grade.
+    Insert 3Y/5Y/10Y avg sub-rows once per group, after the LAST row of that group.
+    Groups are determined by r["group"]. Rows without avgs are skipped.
     """
-    expanded = []
-    for r in rows:
-        expanded.append(r)
-        avg_pairs = [
-            ("3Y Avg", r.get("avg3", "—")),
-            ("5Y Avg", r.get("avg5", "—")),
-            ("10Y Avg", r.get("avg10", "—")),
-        ]
-        has_avgs = any(v not in ("—", None, "") for _, v in avg_pairs)
+    # Find last index per group
+    group_last = {}
+    for i, r in enumerate(rows):
+        g = r.get("group", "")
+        avg_pairs = [r.get("avg3","—"), r.get("avg5","—"), r.get("avg10","—")]
+        has_avgs = any(v not in ("—", None, "") for v in avg_pairs)
         if has_avgs:
-            for suffix, val in avg_pairs:
+            group_last[g] = i
+
+    expanded = []
+    for i, r in enumerate(rows):
+        expanded.append(r)
+        g = r.get("group", "")
+        if group_last.get(g) == i:
+            # Append avg sub-rows once after this last row in the group
+            for suffix, key in [("3Y Avg","avg3"), ("5Y Avg","avg5"), ("10Y Avg","avg10")]:
+                val = r.get(key, "—")
                 if val not in ("—", None, ""):
                     expanded.append({
                         "label":  f"  {suffix}",
@@ -173,7 +179,7 @@ def expand_rows_with_avgs(rows):
                         "avg3":   "—",
                         "avg5":   "—",
                         "avg10":  "—",
-                        "group":  r.get("group", ""),
+                        "group":  g,
                         "is_avg_row": True,
                     })
     return expanded
