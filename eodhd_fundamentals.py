@@ -356,15 +356,14 @@ def compute_kennzahlen(data, hl, val, tech):
 
     # Growth helpers
     def ttm_growth(df, col):
-        """TTM: TTM[0] vs TTM[4] (same quarter last year), fallback TTM[1]"""
+        """TTM YoY growth: TTM[0] vs TTM[4] (rolling 4Q sum now vs 1 year ago).
+        Requires 5 TTM windows (8 quarters of data). No fallback — incorrect period
+        would misrepresent YoY as QoQ."""
         import math
         try:
             s = df[col].dropna()
             if len(s) >= 5 and s.iloc[4] != 0:
                 r = (s.iloc[0] / s.iloc[4] - 1) * 100
-                return None if (math.isnan(r) or math.isinf(r)) else r
-            elif len(s) >= 2 and s.iloc[1] != 0:
-                r = (s.iloc[0] / s.iloc[1] - 1) * 100
                 return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
         return None
@@ -659,7 +658,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     total_debt = (lt_debt or 0) + (st_debt or 0)
 
     # EV: from Valuation, fallback calculated
-    ev = ev_raw or (mcap + total_debt - (cash_yr or 0) if mcap else None)
+    _ev_calc = (mcap + total_debt - (cash_yr or 0)) if mcap else None
+    ev = ev_raw if ev_raw is not None else _ev_calc
 
     # TTM from Highlights
     rev_ttm = fv(hl.get("RevenueTTM"))
@@ -3960,8 +3960,10 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     cd_q  = safe(cash_q, debt_q)
     cd_a  = safe(cash_a, debt_a)
     # Debt/Capital
-    dc_q  = safe(debt_q, (debt_q + (eq_q or 0))) if eq_q else None
-    dc_a  = safe(debt_a, (debt_a + (eq_a or 0))) if eq_a else None
+    _dc_denom_q = debt_q + (eq_q or 0)
+    _dc_denom_a = debt_a + (eq_a or 0)
+    dc_q  = safe(debt_q, _dc_denom_q) if eq_q and _dc_denom_q > 0 else None
+    dc_a  = safe(debt_a, _dc_denom_a) if eq_a and _dc_denom_a > 0 else None
     # FCF/Debt
     fd_q  = safe(fcf_ttm, debt_q)
     fd_a  = safe(fcf_a,   debt_a)
@@ -3974,9 +3976,9 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     # Debt/Equity
     de_q  = safe(debt_q, eq_q)
     de_a  = safe(debt_a, eq_a)
-    # NetDebt/Equity
-    nde_q = safe(nd_q, eq_q)
-    nde_a = safe(nd_a, eq_a)
+    # NetDebt/Equity — undefined when equity is negative (result would invert sign meaning)
+    nde_q = safe(nd_q, eq_q) if eq_q and eq_q > 0 else None
+    nde_a = safe(nd_a, eq_a) if eq_a and eq_a > 0 else None
     # Equity/Assets
     ea_q  = safe(eq_q, ta_q)
     ea_a  = safe(eq_a, ta_a)
@@ -5090,7 +5092,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     # ROIC = NOPAT / IC; NOPAT = EBIT*(1-tax_rate)
     _ebit_ttm_roic = ttm_sum(q_is, "ebit")
     _tax_ttm  = ttm_sum(q_is, "incomeTaxExpense")
-    _pre_ttm  = ttm_sum(q_is, "incomeBeforeTax") or ttm_sum(q_is, "totalOtherIncomeExpenseNet")
+    _pre_ttm  = ttm_sum(q_is, "incomeBeforeTax")  # correct pretax income field
     _eff_tax_ttm = min(max(_tax_ttm / _pre_ttm, 0), 0.50) if _tax_ttm and _pre_ttm and _pre_ttm > 0 else 0.21
     _nopat_ttm = _ebit_ttm_roic * (1 - _eff_tax_ttm) if _ebit_ttm_roic is not None else None
     roic_ttm  = safe_div(_nopat_ttm, (equity_ttm or 0) + debt_ttm)
@@ -5114,7 +5116,10 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     ebitdam_yr  = safe_div(ebitda_yr,  rev_yr)
     fcfm_ttm  = safe_div(fcf_ttm,    rev_ttm)
     fcfm_yr   = safe_div(fcf_yr,     rev_yr)
-    at_ttm    = safe_div(rev_ttm,    assets_ttm)
+    # Asset Turnover TTM: avg(Q0, Q4) assets for consistency with at_yr (uses assets_avg)
+    _at_assets_q4   = fv(q_bs[qbs_sorted[4]].get("totalAssets")) if len(qbs_sorted) > 4 else None
+    _at_assets_avg  = (assets_ttm + _at_assets_q4) / 2 if assets_ttm and _at_assets_q4 else assets_ttm
+    at_ttm    = safe_div(rev_ttm,    _at_assets_avg)
     at_yr     = safe_div(rev_yr,     assets_avg)
 
     # ── Quarterly (Q0) margins ────────────────────────────────────────
@@ -5268,20 +5273,21 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     def roic_hist(n):
         """ROIC = NOPAT / Invested Capital
         NOPAT = EBIT * (1 - effective_tax_rate)
-        IC = Equity + LT Debt + ST Debt (- Cash optional, using gross IC here for simplicity)
-        Effective tax rate = income_tax_expense / pretax_income, capped at 0-50%"""
-        ys  = sorted(a_is.keys(), reverse=True)
+        IC = Equity + LT Debt + ST Debt
+        Effective tax rate = incomeTaxExpense / incomeBeforeTax, capped 0-50%"""
+        # Use intersection of IS and BS keys to avoid fiscal year mismatch
+        ys = sorted(set(a_is.keys()) & set(a_bs.keys()), reverse=True)
         vals, all_yr = [], []
         for y in ys[:n]:
             yr    = y[:4]
             ebit  = fv(a_is[y].get("ebit"))
             tax   = fv(a_is[y].get("incomeTaxExpense"))
-            pre   = fv(a_is[y].get("totalOtherIncomeExpenseNet")) or fv(a_is[y].get("incomeBeforeTax"))
-            # Effective tax rate: use actual if available, else fallback to 21%
+            # incomeBeforeTax is correct pretax income field
+            pre   = fv(a_is[y].get("incomeBeforeTax")) or fv(a_is[y].get("totalOtherIncomeExpenseNet"))
             if tax is not None and pre and pre > 0:
                 eff_tax = min(max(tax / pre, 0), 0.50)
             else:
-                eff_tax = 0.21  # standard fallback
+                eff_tax = 0.21
             bs    = a_bs.get(y, {})
             eq    = fv(bs.get("totalStockholderEquity")) or 0
             ltd   = fv(bs.get("longTermDebt")) or 0
