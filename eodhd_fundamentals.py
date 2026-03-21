@@ -6067,26 +6067,16 @@ with tab2b:
         if search_filter:
             rows_filtered = [r for r in rows_filtered if search_filter.lower() in r["label"].lower()]
 
-        # ── Build DataFrame for st.dataframe with row selection ───────
-        df_all = pd.DataFrame([{
-            "Metric":  r["label"],
-            "Cat.":    r["tab"],
-            "Value":   r["fmt"],
-            "Grade":   r["lbl"],
-            "3Y Avg":  r["avg3"],
-            "5Y Avg":  r["avg5"],
-            "10Y Avg": r.get("avg10", "—"),
-        } for r in rows_filtered])
+        # ── Expand rows with avg/CAGR sub-rows ─────────────────────
+        rows_expanded = expand_rows_with_avgs(rows_filtered)
 
         col_tbl, col_drill = st.columns([3, 2])
 
         with col_tbl:
-            label_list = [r["label"] for r in rows_filtered]
-
-            # Selectbox at the top for drill-down selection
+            # Selectbox for drill-down (use base rows only, not avg sub-rows)
+            label_list = [r["label"] for r in rows_expanded]
             if label_list:
-                if "all_selected_metric" not in st.session_state or \
-                   st.session_state.get("all_selected_metric") not in label_list:
+                if "all_selected_metric" not in st.session_state or                    st.session_state.get("all_selected_metric") not in label_list:
                     st.session_state["all_selected_metric"] = label_list[0]
                 default_idx = label_list.index(st.session_state["all_selected_metric"])
                 selected_metric = st.selectbox(
@@ -6096,51 +6086,107 @@ with tab2b:
                 )
                 st.session_state["all_selected_metric"] = selected_metric
 
-            if not df_all.empty:
-                sel_event = st.dataframe(
-                    df_all,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=600,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key="all_df_selection",
-                    column_config={
-                        "Metric":  st.column_config.TextColumn("Metric",  width="large"),
-                        "Cat.":    st.column_config.TextColumn("Cat.",    width="small"),
-                        "Value":   st.column_config.TextColumn("Value",   width="small"),
-                        "Grade":   st.column_config.TextColumn("Grade",   width="small"),
-                        "3Y Avg":  st.column_config.TextColumn("3Y Avg",  width="small"),
-                        "5Y Avg":  st.column_config.TextColumn("5Y Avg",  width="small"),
-                        "10Y Avg": st.column_config.TextColumn("10Y Avg", width="small"),
-                    },
-                )
-                # Resolve selected row
-                dl_rows = all_rows if not rows_filtered else rows_filtered
-                st.download_button(
-                    label="⬇ Excel Download",
-                    data=score_rows_to_excel(dl_rows, "All_Score"),
-                    file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_All_Score.csv",
-                    mime="text/csv",
-                    key="dl_all_score",
-                )
-                sel_rows = sel_event.selection.rows if sel_event and sel_event.selection else []
-                if sel_rows:
-                    st.session_state["all_selected_metric"] = rows_filtered[sel_rows[0]]["label"]
-                elif "all_selected_metric" not in st.session_state and rows_filtered:
-                    st.session_state["all_selected_metric"] = rows_filtered[0]["label"]
+            # ── HTML table (consistent with other tabs) ────────────────
+            tbl = """
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead>
+                <tr style="color:#64748b;border-bottom:1px solid #2d3748;">
+                  <th style="text-align:left;padding:6px 4px;font-weight:500;">Metric</th>
+                  <th style="text-align:left;padding:6px 4px;font-weight:500;">Cat.</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">Value</th>
+                  <th style="text-align:center;padding:6px 4px;font-weight:500;">Grade</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">3Y</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">5Y</th>
+                  <th style="text-align:right;padding:6px 4px;font-weight:500;">10Y</th>
+                </tr>
+              </thead><tbody>"""
+
+            for r in rows_expanded:
+                is_avg  = r.get("is_avg_row", False)
+                is_cagr = "CAGR" in r["label"]
+                tab_lbl = r.get("tab", "")
+                is_selected = r["label"] == st.session_state.get("all_selected_metric", "")
+                sel_bg = "background:#1a2744;" if is_selected else ""
+
+                if is_avg or is_cagr:
+                    tbl += (
+                        f'<tr style="border-bottom:1px solid #161d2e;background:#0d1320;cursor:pointer;"'
+                        f' onclick="void(0)">'
+                        f'<td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>'
+                        f'<td style="padding:3px 4px;color:#374151;font-size:11px;">{tab_lbl}</td>'
+                        f'<td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>'
+                        f'<td style="padding:3px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>'
+                        f'<td colspan="3"></td>'
+                        f'</tr>'
+                    )
+                else:
+                    tbl += (
+                        f'<tr style="border-bottom:1px solid #1e2535;{sel_bg}">'
+                        f'<td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>'
+                        f'<td style="padding:6px 4px;color:#64748b;font-size:12px;">{tab_lbl}</td>'
+                        f'<td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>'
+                        f'<td style="padding:6px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>'
+                        f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg3"]}</td>'
+                        f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r["avg5"]}</td>'
+                        f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg10","—")}</td>'
+                        f'</tr>'
+                    )
+
+            tbl += "</tbody></table>"
+            st.markdown(
+                f'<div style="max-height:650px;overflow-y:auto;border:1px solid #2d3748;border-radius:8px;padding:4px;">'
+                f'{tbl}</div>',
+                unsafe_allow_html=True
+            )
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+            # Row click via selectbox (HTML table can't trigger rerun directly)
+            clicked = st.selectbox(
+                "Zeile auswählen:",
+                [r["label"] for r in rows_expanded],
+                index=label_list.index(st.session_state.get("all_selected_metric", label_list[0]))
+                      if st.session_state.get("all_selected_metric") in label_list else 0,
+                key="all_row_click",
+                label_visibility="collapsed",
+            )
+            if clicked != st.session_state.get("all_selected_metric"):
+                st.session_state["all_selected_metric"] = clicked
+                st.rerun()
+
+            st.download_button(
+                label="⬇ Excel Download",
+                data=score_rows_to_excel(rows_expanded, "All_Score"),
+                file_name=f"{(g.get('Code','') + '_' + g.get('Exchange','')).strip('_')}_All_Score.csv",
+                mime="text/csv",
+                key="dl_all_score",
+            )
 
         with col_drill:
             sel = st.session_state.get("all_selected_metric")
             # Keep sel valid when filters change
-            valid_labels = [r["label"] for r in rows_filtered]
+            valid_labels = [r["label"] for r in rows_expanded]
             if sel not in valid_labels and valid_labels:
                 sel = valid_labels[0]
                 st.session_state["all_selected_metric"] = sel
 
             if sel:
-                row_data = next((r for r in all_rows if r["label"] == sel), None)
-                dd = compute_drilldown(sel, data, hl, val, price_data)
+                # For avg/CAGR sub-rows, find parent row for drilldown
+                row_data = next((r for r in rows_expanded if r["label"] == sel), None)
+                # Resolve actual drilldown label:
+                # avg rows like "P/Earnings (3Y Avg)" → drilldown on "P/Earnings (Cur)"
+                # CAGR rows like "Revenue Growth (3Y CAGR)" → drilldown directly
+                import re as _re
+                _avg_match = _re.match(r"^(.+?)\s*\((\d+Y Avg)\)$", sel)
+                if _avg_match:
+                    # Find parent row (first non-avg row with same base label)
+                    _base = _avg_match.group(1).strip()
+                    _parent = next((r for r in rows_expanded
+                                   if not r.get("is_avg_row") and "CAGR" not in r["label"]
+                                   and r["label"].startswith(_base)), None)
+                    drill_label = _parent["label"] if _parent else sel
+                else:
+                    drill_label = sel
+                dd = compute_drilldown(drill_label, data, hl, val, price_data)
 
                 # ── Drill-down card ───────────────────────────────────
                 card = (
