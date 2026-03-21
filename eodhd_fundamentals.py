@@ -4070,9 +4070,11 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         # F8: Δgross margin > 0
         if rev and gp and rev_p and gp_p:
             if (gp/rev) > (gp_p/rev_p): score += 1
-        # F9: Δasset turnover > 0
-        if rev and ta_avg and ta_avg!=0 and rev_p and ta_p and ta_p!=0:
-            if (rev/ta_avg) > (rev_p/ta_p): score += 1
+        # F9: Δasset turnover > 0 — use avg assets for both periods
+        ta_pp2 = fv(a_bs.get(years_bs[2], {}).get("totalAssets")) if len(years_bs) > 2 else None
+        ta_avg_p2 = (ta_p + ta_pp2) / 2 if ta_p and ta_pp2 else ta_p
+        if rev and ta_avg and ta_avg!=0 and rev_p and ta_avg_p2 and ta_avg_p2!=0:
+            if (rev/ta_avg) > (rev_p/ta_avg_p2): score += 1
         return score
 
     bs_prev_a = a_bs.get(years_bs[1], {}) if len(years_bs) > 1 else None
@@ -4110,7 +4112,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         bs = a_bs.get(years_bs[i], {})
         d = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         e = fv(bs.get("totalStockholderEquity"))
-        return safe(d, d+(e or 0)) if e else None
+        denom = d + (e or 0)
+        return safe(d, denom) if e and denom > 0 else None
     def yr_fd(i):
         bs = a_bs.get(years_bs[i], {})
         d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
@@ -4131,13 +4134,13 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         bs  = a_bs.get(years_bs[i], {})
         d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         e   = fv(bs.get("totalStockholderEquity"))
-        return safe(d, e)
+        return safe(d, e) if e and e > 0 else None
     def yr_nde(i):
         bs  = a_bs.get(years_bs[i], {})
         c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
         d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         e   = fv(bs.get("totalStockholderEquity"))
-        return safe(d-(c or 0), e)
+        return safe(d-(c or 0), e) if e and e > 0 else None
     def yr_ea(i):
         bs  = a_bs.get(years_bs[i], {})
         return safe(fv(bs.get("totalStockholderEquity")), fv(bs.get("totalAssets")))
@@ -5327,11 +5330,13 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     def sbc_ttm_sum():
         qs = sorted(q_cf.keys(), reverse=True)[:4]
         vals = [fv(q_cf[q].get("stockBasedCompensation")) for q in qs]
-        # Require all 4 quarters — partial sum would understate TTM SBC
-        return sum(vals) if len(vals) == 4 and all(v is not None for v in vals) else (
-            # Fallback: accept if at least 3 quarters available (common for recent filings)
-            sum(v for v in vals if v is not None) if sum(1 for v in vals if v is not None) >= 3 else None
-        )
+        n_valid = sum(1 for v in vals if v is not None)
+        if n_valid == 4:
+            return sum(vals)
+        elif n_valid == 3:
+            # Annualize 3 quarters to avoid ~25% understatement
+            return sum(v for v in vals if v is not None) * 4 / 3
+        return None
 
     def sbc_yr(y):
         return fv(a_cf.get(y, {}).get("stockBasedCompensation"))
@@ -5347,7 +5352,8 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     rev_q0_p  = fv(q_is[sorted(q_is.keys(), reverse=True)[0]].get("totalRevenue")) if q_is else None
 
     sbc_ttm   = sbc_ttm_sum()
-    rev_ttm_p = sum(fv(q_is[q].get("totalRevenue")) or 0 for q in sorted(q_is.keys(), reverse=True)[:4]) or None
+    _rev_ttm_p_vals = [fv(q_is[q].get("totalRevenue")) for q in sorted(q_is.keys(), reverse=True)[:4]]
+    rev_ttm_p = sum(_rev_ttm_p_vals) if len(_rev_ttm_p_vals) == 4 and all(v is not None for v in _rev_ttm_p_vals) else None
     cfo_ttm   = cfo_ttm_sum()
     ni_ttm_p  = sum(fv(q_is[q].get("netIncome")) or 0 for q in sorted(q_is.keys(), reverse=True)[:4]) or None
 
@@ -5367,8 +5373,8 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         return f
     fcf_yr0_p = _fcf_yr_p(y0_p) if y0_p else None
 
-    capex_ttm_p = abs(sum(fv(q_cf[q].get("capitalExpenditures")) or 0
-                         for q in sorted(q_cf.keys(), reverse=True)[:4])) or None
+    _capex_ttm_p_vals = [fv(q_cf[q].get("capitalExpenditures")) for q in sorted(q_cf.keys(), reverse=True)[:4]]
+    capex_ttm_p = abs(sum(_capex_ttm_p_vals)) if len(_capex_ttm_p_vals) == 4 and all(v is not None for v in _capex_ttm_p_vals) else None
     _capex_yr0_raw = fv(a_cf.get(y0_p, {}).get("capitalExpenditures")) if y0_p else None
     capex_yr0_p = abs(_capex_yr0_raw) if _capex_yr0_raw is not None else None
     def _fcf_ttm_sum_p():
