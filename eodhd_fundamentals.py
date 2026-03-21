@@ -6332,8 +6332,8 @@ with tab2b:
                         "_parent_label":   drill_label,
                     }
                 elif _cagr_match:
-                    # Strip ↳ prefix — compute_drilldown uses label matching
-                    drill_label = _cagr_match.group(1).strip()  # "Revenue Growth (3Y CAGR)"
+                    # Reconstruct full label with CAGR period for compute_drilldown
+                    drill_label = f"{_cagr_match.group(1).strip()} ({_cagr_match.group(2)})"  # "Revenue Growth (3Y CAGR)"
                     dd = compute_drilldown(drill_label, data, hl, val, price_data)
                 else:
                     drill_label = sel.lstrip("  ↳ ").strip()
