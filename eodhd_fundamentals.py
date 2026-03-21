@@ -5912,8 +5912,9 @@ with tab2b:
                 </tr>
               </thead><tbody>'''
             for r in rows_show:
-                is_avg = r.get("is_avg_row", False)
-                if is_avg:
+                is_avg  = r.get("is_avg_row", False)
+                is_cagr = "CAGR" in r["label"]
+                if is_avg or is_cagr:
                     tbl += f'''
                 <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
                   <td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>
