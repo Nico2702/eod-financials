@@ -1206,32 +1206,40 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         rev_comps = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else \
                     [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]
         if "Cur" in L:
-            ps_api = fv(val.get("PriceSalesTTM"))
-            ps_used = ps_api or ps_self
-            if ps_api:
-                src_lbl = "Valuation.PriceSalesTTM  (primary)"
+            ps_api  = fv(val.get("PriceSalesTTM"))
+            ps_used = ps_self or ps_api
+            if ps_self:
+                src_lbl = "MCap / Revenue_TTM  (primary — self-calculated)"
+                src_val = ps_self
+            elif ps_api:
+                src_lbl = "Valuation.PriceSalesTTM  (fallback — Revenue TTM not available)"
                 src_val = ps_api
             else:
-                src_lbl = "self-calculated: MarketCap / Revenue TTM  (fallback - PriceSalesTTM missing)"
-                src_val = ps_self
+                src_lbl = "\u2014 (no data available)"
+                src_val = None
             return {
-                "formula": "Primary: Valuation.PriceSalesTTM\nFallback: MarketCap / Revenue TTM (self-calculated)",
-                "fields":  ["Valuation.PriceSalesTTM", "Highlights.MarketCapitalization",
-                            "Income_Statement.totalRevenue (TTM)",
-                            "ℹ Market Cap / Price sourced from Finqube DB"],
+                "formula": (
+                    "Primary: MCap / Revenue_TTM (self-calculated)\n"
+                    "Fallback: Valuation.PriceSalesTTM"
+                ),
+                "fields":  ["Highlights.MarketCapitalization",
+                            "Income_Statement.totalRevenue (quarterly TTM \u2014 primary)",
+                            "Valuation.PriceSalesTTM (fallback)",
+                            "\u2139 Market Cap / Price sourced from Finqube DB"],
                 "unit": "x",
                 "components": [
-                    ("Valuation.PriceSalesTTM",                   num(ps_api, 4) if ps_api else "- (not available)"),
-                    ("-- Source used --",                          ""),
-                    (src_lbl,                                      num(src_val, 4) + " x"),
-                    ("-- Self-calc cross-check --",                ""),
+                    ("\u2500\u2500 Self-Calculated \u2500\u2500",              ""),
                     ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
                     *rev_comps,
-                    ("MarketCap / Revenue TTM",                    num(ps_self, 4) + " x"),
-                    ("-- Result --",                               ""),
-                    ("P/S (Cur)",                                  num(ps_used, 4) + " x"),
+                    ("MCap / Revenue_TTM",                         num(ps_self, 4) + " x" if ps_self else "\u2014 (not available)"),
+                    ("\u2500\u2500 API Value \u2500\u2500",                    ""),
+                    ("Valuation.PriceSalesTTM",                    num(ps_api, 4) if ps_api else "\u2014 (not available)"),
+                    ("\u2500\u2500 Source used \u2500\u2500",                  ""),
+                    (src_lbl,                                      num(src_val, 4) + " x" if src_val else "\u2014"),
+                    ("\u2500\u2500 Result \u2500\u2500",                       ""),
+                    ("P/S (Cur)",                                  num(ps_used, 4) + " x" if ps_used else "\u2014"),
                 ],
-                "result": num(ps_used, 2)}
+                "result": num(ps_used, 2) if ps_used else "\u2014"}
         ps = ps_self
         return {
             "formula": "Market Cap / Revenue",
