@@ -4569,16 +4569,18 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     fcf_gr_qoq = fcf_qoq()
 
     def eps_qoq():
-        qs_is = sorted(q_is.keys(), reverse=True)
-        qs_bs = sorted(q_bs.keys(), reverse=True)
-        if len(qs_is) < 2 or len(qs_bs) < 2: return None
-        def get_eps_q(qi, bi):
-            ni  = fv(q_is[qs_is[qi]].get("netIncomeApplicableToCommonShares")) or fv(q_is[qs_is[qi]].get("netIncome"))
-            shs = fv(q_bs[qs_bs[bi]].get("commonStockSharesOutstanding"))
+        import math
+        # Match IS and BS quarters by the same date key for accurate EPS
+        common_qs = sorted(set(q_is.keys()) & set(q_bs.keys()), reverse=True)
+        if len(common_qs) < 2: return None
+        def get_eps_q(i):
+            q   = common_qs[i]
+            ni  = fv(q_is[q].get("netIncomeApplicableToCommonShares")) or fv(q_is[q].get("netIncome"))
+            shs = fv(q_bs[q].get("commonStockSharesOutstanding"))
             return (ni / shs) if ni and shs and shs > 0 else None
-        eps0 = get_eps_q(0, 0); eps1 = get_eps_q(1, 1)
+        eps0 = get_eps_q(0); eps1 = get_eps_q(1)
         if eps0 is None or not eps1 or eps1 <= 0: return None
-        import math; r = (eps0 / eps1 - 1) * 100
+        r = (eps0 / eps1 - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
     eps_gr_qoq = eps_qoq()
 
@@ -4589,7 +4591,9 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         if len(qs) < 5: return None
         v0 = fv(stmt[qs[0]].get(key))
         v4 = fv(stmt[qs[4]].get(key))
-        if v0 is None or v4 is None or v4 <= 0: return None
+        if v0 is None or v4 is None: return None
+        # Turnaround: negative base → growth not meaningful as %, return None
+        if v4 <= 0: return None
         r = (v0 / v4 - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
 
@@ -4615,16 +4619,18 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     fcf_gr_yoq = fcf_yoq()
 
     def eps_yoq():
-        qs_is = sorted(q_is.keys(), reverse=True)
-        qs_bs = sorted(q_bs.keys(), reverse=True)
-        if len(qs_is) < 5 or len(qs_bs) < 5: return None
-        def get_eps_q(qi, bi):
-            ni  = fv(q_is[qs_is[qi]].get("netIncomeApplicableToCommonShares")) or fv(q_is[qs_is[qi]].get("netIncome"))
-            shs = fv(q_bs[qs_bs[bi]].get("commonStockSharesOutstanding"))
+        import math
+        # Match IS and BS quarters by same date key
+        common_qs = sorted(set(q_is.keys()) & set(q_bs.keys()), reverse=True)
+        if len(common_qs) < 5: return None
+        def get_eps_q(i):
+            q   = common_qs[i]
+            ni  = fv(q_is[q].get("netIncomeApplicableToCommonShares")) or fv(q_is[q].get("netIncome"))
+            shs = fv(q_bs[q].get("commonStockSharesOutstanding"))
             return (ni / shs) if ni and shs and shs > 0 else None
-        eps0 = get_eps_q(0, 0); eps4 = get_eps_q(4, 4)
+        eps0 = get_eps_q(0); eps4 = get_eps_q(4)
         if eps0 is None or not eps4 or eps4 <= 0: return None
-        import math; r = (eps0 / eps4 - 1) * 100
+        r = (eps0 / eps4 - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
     eps_gr_yoq = eps_yoq()
 
@@ -5062,9 +5068,15 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     def safe_div(a, b): return a / b if a is not None and b and b != 0 else None
     def pct(v): return v * 100 if v is not None else None
 
-    roa_ttm   = safe_div(ni_ttm,   assets_ttm)
+    # ROA/ROE TTM: use average of Q0 and Q4 assets/equity for consistency with Year calc
+    qbs_sorted_roa = sorted(q_bs.keys(), reverse=True)
+    _assets_q4  = fv(q_bs[qbs_sorted_roa[4]].get("totalAssets"))        if len(qbs_sorted_roa) > 4 else None
+    _equity_q4  = fv(q_bs[qbs_sorted_roa[4]].get("totalStockholderEquity")) if len(qbs_sorted_roa) > 4 else None
+    _assets_avg_ttm = (assets_ttm + _assets_q4) / 2 if assets_ttm and _assets_q4 else assets_ttm
+    _equity_avg_ttm = (equity_ttm + _equity_q4) / 2 if equity_ttm and _equity_q4 else equity_ttm
+    roa_ttm   = safe_div(ni_ttm,   _assets_avg_ttm)
     roa_yr    = safe_div(ni_yr,    assets_avg)
-    roe_ttm   = safe_div(ni_ttm,   equity_ttm)
+    roe_ttm   = safe_div(ni_ttm,   _equity_avg_ttm)
     roe_yr    = safe_div(ni_yr,    eq_avg)
     # Return on Capital = NI / (Equity + Debt)
     roc_ttm   = safe_div(ni_ttm,   (equity_ttm or 0) + debt_ttm)
@@ -5165,7 +5177,8 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         return avg, all_yr
 
     def roce_hist(n):
-        ys = sorted(a_is.keys(), reverse=True)
+        # Use only years present in BOTH a_is and a_bs to avoid fiscal year mismatch
+        ys = sorted(set(a_is.keys()) & set(a_bs.keys()), reverse=True)
         vals, all_yr = [], []
         for y in ys[:n]:
             yr = y[:4]
@@ -5223,9 +5236,10 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         return avg, all_yr
 
     def roc_hist(n):
-        ys  = sorted(a_is.keys(), reverse=True)
+        # Use only years present in BOTH a_is and a_bs to avoid fiscal year mismatch
+        ys = sorted(set(a_is.keys()) & set(a_bs.keys()), reverse=True)
         vals, all_yr = [], []
-        for i, y in enumerate(ys[:n]):
+        for y in ys[:n]:
             yr  = y[:4]
             ni  = fv(a_is[y].get("netIncome"))
             bs  = a_bs.get(y, {})
