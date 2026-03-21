@@ -3984,16 +3984,16 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     # NetDebt/Assets
     nda_q = safe(nd_q, ta_q)
     nda_a = safe(nd_a, ta_a)
-    # Debt/EBIT
-    debit_ttm = safe(debt_q, ebit_ttm)
-    debit_a   = safe(debt_a, ebit_a)
-    ndebit_ttm= safe(nd_q,   ebit_ttm)
-    ndebit_a  = safe(nd_a,   ebit_a)
-    # Debt/EBITDA
-    debitda_ttm = safe(debt_q,  ebitda_ttm)
-    debitda_a   = safe(debt_a,  ebitda_a)
-    ndebitda_ttm= safe(nd_q,    ebitda_ttm)
-    ndebitda_a  = safe(nd_a,    ebitda_a)
+    # Debt/EBIT — None when EBIT negative (inverted threshold would grade incorrectly)
+    debit_ttm = safe(debt_q, ebit_ttm)  if ebit_ttm and ebit_ttm > 0 else None
+    debit_a   = safe(debt_a, ebit_a)    if ebit_a   and ebit_a   > 0 else None
+    ndebit_ttm= safe(nd_q,   ebit_ttm)  if ebit_ttm and ebit_ttm > 0 else None
+    ndebit_a  = safe(nd_a,   ebit_a)    if ebit_a   and ebit_a   > 0 else None
+    # Debt/EBITDA — None when EBITDA negative
+    debitda_ttm = safe(debt_q,  ebitda_ttm) if ebitda_ttm and ebitda_ttm > 0 else None
+    debitda_a   = safe(debt_a,  ebitda_a)   if ebitda_a   and ebitda_a   > 0 else None
+    ndebitda_ttm= safe(nd_q,    ebitda_ttm) if ebitda_ttm and ebitda_ttm > 0 else None
+    ndebitda_a  = safe(nd_a,    ebitda_a)   if ebitda_a   and ebitda_a   > 0 else None
     # Current Ratio
     cur_q = safe(ca_q, cl_q)
     cur_a = safe(ca_a, cl_a)
@@ -4152,21 +4152,25 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     def yr_debit(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
-        return safe(d, fv(is_d.get("ebit")))
+        e  = fv(is_d.get("ebit"))
+        return safe(d, e) if e and e > 0 else None
     def yr_ndebit(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
         d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
-        return safe(d-(c or 0), fv(is_d.get("ebit")))
+        e  = fv(is_d.get("ebit"))
+        return safe(d-(c or 0), e) if e and e > 0 else None
     def yr_debitda(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
-        return safe(d, fv(is_d.get("ebitda")))
+        eb = fv(is_d.get("ebitda"))
+        return safe(d, eb) if eb and eb > 0 else None
     def yr_ndebitda(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
         d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
-        return safe(d-(c or 0), fv(is_d.get("ebitda")))
+        eb = fv(is_d.get("ebitda"))
+        return safe(d-(c or 0), eb) if eb and eb > 0 else None
     def yr_cur(i):
         bs = a_bs.get(years_bs[i], {})
         return safe(fv(bs.get("totalCurrentAssets")), fv(bs.get("totalCurrentLiabilities")))
