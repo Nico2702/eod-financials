@@ -188,6 +188,7 @@ def expand_rows_with_avgs(rows):
             T       = r.get("T", [])
             higher  = r.get("higher", True)
             pct     = r.get("pct", False)
+            base_label = metric_key(r["label"])  # e.g. "P/Earnings", "Gross Margin"
             for suffix, raw_key, fmt_key in [
                 ("3Y Avg",  "avg3_raw",  "avg3"),
                 ("5Y Avg",  "avg5_raw",  "avg5"),
@@ -207,7 +208,7 @@ def expand_rows_with_avgs(rows):
                 else:
                     css, lbl = "grade-na", "—"
                 expanded.append({
-                    "label":      f"  {suffix}",
+                    "label":      f"  {base_label} ({suffix})",
                     "fmt":        fmt_val,
                     "css":        css,
                     "lbl":        lbl,
