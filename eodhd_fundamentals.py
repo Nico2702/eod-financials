@@ -168,7 +168,7 @@ def expand_rows_with_avgs(rows):
     for i, r in enumerate(rows):
         avg_vals = [r.get("avg3","—"), r.get("avg5","—"), r.get("avg10","—")]
         has_avgs = any(v not in ("—", None, "") for v in avg_vals)
-        if has_avgs:
+        if has_avgs and not r.get("is_avg_row", False):
             mk = metric_key(r["label"])
             group_last[mk] = i
 
@@ -5880,7 +5880,17 @@ with tab2b:
                 </tr>
               </thead><tbody>'''
             for r in rows_show:
-                tbl += f'''
+                is_avg = r.get("is_avg_row", False)
+                if is_avg:
+                    tbl += f'''
+                <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
+                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td colspan="3"></td>
+                </tr>'''
+                else:
+                    tbl += f'''
                 <tr style="border-bottom:1px solid #1e2535;">
                   <td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>
                   <td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
