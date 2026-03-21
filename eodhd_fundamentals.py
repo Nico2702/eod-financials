@@ -199,6 +199,15 @@ def compute_kennzahlen(data, hl, val, tech):
     pe      = fv(hl.get("PERatio"))
     fwd_pe  = fv(val.get("ForwardPE"))
     ps      = fv(val.get("PriceSalesTTM"))
+    # P/S (Fwd): estimated from Revenue_TTM * (1 + revenueEstimateGrowth)
+    _tr_kz   = data.get("Earnings", {}).get("Trend", {})
+    _p1y_kz  = next((v for v in _tr_kz.values() if v.get("period") == "+1y"), {})
+    _rgr_kz  = fv(_p1y_kz.get("revenueEstimateGrowth"))
+    _mcap_kz = fv(hl.get("MarketCapitalization"))
+    _rev_ttm_kz = fv(hl.get("RevenueTTM"))
+    ps_fwd   = (_mcap_kz / (_rev_ttm_kz * (1 + _rgr_kz))) \
+               if _mcap_kz and _rev_ttm_kz and _rgr_kz is not None and _rev_ttm_kz * (1 + _rgr_kz) > 0 \
+               else None
     ev_rev  = fv(val.get("EnterpriseValueRevenue"))
     ev_ebit = fv(val.get("EnterpriseValueEbitda"))  # proxy
     roe     = pct(hl.get("ReturnOnEquityTTM"))
@@ -407,6 +416,7 @@ def compute_kennzahlen(data, hl, val, tech):
         "fwd_pe":    (fwd_pe,    fmt_n(fwd_pe,1),   [(0,"ap"),(15,"a"),(20,"am"),(25,"bp"),(30,"b"),(35,"bm"),(40,"cp"),(50,"c")], False),
         "pe":        (pe,        fmt_n(pe,2),        [(0,"ap"),(15,"a"),(20,"am"),(25,"bp"),(30,"b"),(35,"bm"),(40,"cp"),(50,"c")], False),
         "p_fcf":     (p_fcf,     fmt_n(p_fcf,2),     [(0,"ap"),(15,"a"),(20,"am"),(25,"bp"),(30,"b"),(40,"bm"),(50,"cp"),(60,"c")], False),
+        "ps_fwd":    (ps_fwd,    fmt_n(ps_fwd,2),    [(0,"ap"),(1,"a"),(2,"am"),(3,"bp"),(5,"b"),(7,"bm"),(10,"cp")],               False),
         "ps":        (ps,        fmt_n(ps,2),        [(0,"ap"),(1,"a"),(2,"am"),(3,"bp"),(5,"b"),(7,"bm"),(10,"cp")],               False),
         "ev_rev":    (ev_rev,    fmt_n(ev_rev,2),    [(0,"ap"),(1,"a"),(2,"am"),(3,"bp"),(5,"b"),(7,"bm"),(10,"cp")],               False),
         "ev_ebit":   (ev_ebit_c, fmt_n(ev_ebit_c,2), [(0,"ap"),(8,"a"),(12,"am"),(16,"bp"),(20,"b"),(25,"bm"),(30,"cp")],          False),
@@ -594,7 +604,20 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     _ni_common_yr = fv(a_is[years_is[0]].get("netIncomeApplicableToCommonShares")) if years_is else None
     pe_yr    = (mcap / _ni_common_yr) if mcap and _ni_common_yr and _ni_common_yr > 0 else \
                (mcap / ni_yr)         if mcap and ni_yr          and ni_yr          > 0 else None
-    ps_fwd   = None  # EODHD doesn't provide forward P/S
+    # P/S (Fwd): estimated as MCap / (Revenue_TTM * (1 + revenueEstimateGrowth))
+    _trends_ps  = data.get("Earnings", {}).get("Trend", {})
+    _p1y_ps     = next((v for v in _trends_ps.values() if v.get("period") == "+1y"), {})
+    _rev_gr_est = fv(_p1y_ps.get("revenueEstimateGrowth"))  # raw decimal e.g. 0.08
+    _rev_ttm_ps_fwd = sum(
+        fv(data["Financials"]["Income_Statement"].get("quarterly", {}).get(q, {}).get("totalRevenue")) or 0
+        for q in sorted(data["Financials"]["Income_Statement"].get("quarterly", {}).keys(), reverse=True)[:4]
+    ) or None
+    if _rev_gr_est is not None and _rev_ttm_ps_fwd:
+        _fwd_rev = _rev_ttm_ps_fwd * (1 + _rev_gr_est)
+        ps_fwd   = (mcap / _fwd_rev) if mcap and _fwd_rev and _fwd_rev > 0 else None
+    else:
+        ps_fwd   = None
+
     # P/Sales (Cur): PriceSalesTTM → self-calculated mcap/rev_ttm
     _q_is_ps   = data["Financials"]["Income_Statement"].get("quarterly", {})
     _qs_ps     = sorted(_q_is_ps.keys(), reverse=True)
@@ -833,6 +856,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         row("P/Earnings (Fwd)",      pe_fwd,         None,         None,         None,          PE_T),
         row("P/Earnings (Cur)",      pe_cur,         pe_3y,        pe_5y,        pe_10y,        PE_T),
         row("P/Earnings (Year)",     pe_yr,          pe_3y,        pe_5y,        pe_10y,        PE_T),
+        row("P/Sales (Fwd)",         ps_fwd,         None,         None,         None,          PS_T),
         row("P/Sales (Cur)",         ps_cur,         ps_3y,        ps_5y,        ps_10y,        PS_T),
         row("P/Sales (Year)",        ps_yr,          ps_3y,        ps_5y,        ps_10y,        PS_T),
         row("P/Book (Cur)",          pb_cur,         pb_3y,        pb_5y,        pb_10y,        PB_T),
@@ -1205,6 +1229,38 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ps_self = safe(mcap, rev)
         rev_comps = ttm_rows(q_is, "totalRevenue", "Income_Statement.totalRevenue") if is_ttm else \
                     [(f"Income_Statement.totalRevenue  [{isA_dt}]", raw(rev))]
+        if "Fwd" in L:
+            _tr_ps   = data.get("Earnings", {}).get("Trend", {})
+            _p1y_ps  = next((v for v in _tr_ps.values() if v.get("period") == "+1y"), {})
+            _rgr     = fv(_p1y_ps.get("revenueEstimateGrowth"))
+            _rev_ttm_fwd = rev_ttm  # already computed
+            _fwd_rev = (_rev_ttm_fwd * (1 + _rgr)) if _rgr is not None and _rev_ttm_fwd else None
+            _ps_fwd  = (mcap / _fwd_rev) if mcap and _fwd_rev and _fwd_rev > 0 else None
+            return {
+                "formula": (
+                    "MCap / Forward Revenue (estimated)\n"
+                    "Forward Revenue = Revenue_TTM × (1 + revenueEstimateGrowth)\n"
+                    "⚠ Estimate only — EODHD has no direct Forward Revenue field"
+                ),
+                "fields":  ["Highlights.MarketCapitalization",
+                            "Income_Statement.totalRevenue (quarterly TTM)",
+                            "Earnings.Trend[+1y].revenueEstimateGrowth",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
+                "unit": "x",
+                "components": [
+                    ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
+                    ("── Forward Revenue Estimate ──", ""),
+                    ("Revenue_TTM  [Income_Statement]",              raw(_rev_ttm_fwd)),
+                    ("revenueEstimateGrowth (+1y)  [raw decimal]",   f"{_rgr:.6f}" if _rgr is not None else "— (not available)"),
+                    ("  → as percentage",                          f"{_rgr*100:.2f} %" if _rgr is not None else "—"),
+                    ("Forward Revenue = TTM × (1 + growth)",       raw(_fwd_rev) if _fwd_rev else "—"),
+                    ("── Calculation ──",               ""),
+                    ("MCap / Forward Revenue",                      f"{raw(mcap)} / {raw(_fwd_rev)}" if _fwd_rev else "—"),
+                    ("── Result ──",                    ""),
+                    ("P/S (Fwd)  ⚠ estimate",                     num(_ps_fwd, 4) + " x" if _ps_fwd else "—"),
+                ],
+                "result": num(_ps_fwd, 2) if _ps_fwd else "—"}
+
         if "Cur" in L:
             ps_api  = fv(val.get("PriceSalesTTM"))
             ps_used = ps_self or ps_api
@@ -5033,6 +5089,7 @@ with tab1:
         ("P/Earnings (Fwd)",  "fwd_pe"),
         ("P/Earnings",        "pe"),
         ("P/FCF",             "p_fcf"),
+        ("P/Sales (Fwd)",     "ps_fwd"),
         ("P/Sales",           "ps"),
         ("EV/Revenue",        "ev_rev"),
         ("EV/EBIT",           "ev_ebit"),
