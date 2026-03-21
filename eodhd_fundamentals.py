@@ -4240,8 +4240,11 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
 
     def fmt(v): return f"{v:.2f} %" if v is not None else "—"
 
-    def row(label, cur, avg3, avg5, avg10, T):
+    def row(label, cur, avg3, avg5, avg10, T, hy3=None, hy5=None, hy10=None):
         css, lbl = get_grade(cur, T) if cur is not None else ("grade-na", "—")
+        def conv(hy):
+            if not hy: return []
+            return [(yr, fmt(v) if v is not None else None, r) if len(item:=(yr,v,r)) == 3 else (yr, fmt(v), None) for yr, v, r in [i if len(i)==3 else (*i, None) for i in hy]]
         return {
             "label": label, "fmt": fmt(cur),
             "css": css, "lbl": lbl,
@@ -4251,6 +4254,9 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
             "T": T, "higher": True, "pct": False,
             "group": label.split(" ")[0],
+            "hy3":  conv(hy3),
+            "hy5":  conv(hy5),
+            "hy10": conv(hy10),
         }
 
     rows = [
