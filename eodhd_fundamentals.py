@@ -216,6 +216,7 @@ def expand_rows_with_avgs(rows):
                     "avg5":       "—",
                     "avg10":      "—",
                     "group":      r.get("group", ""),
+                    "tab":        r.get("tab", ""),
                     "is_avg_row": True,
                 })
     return expanded
@@ -6079,12 +6080,8 @@ with tab2b:
 
         with col_tbl:
             # ── st.dataframe with row selection (checkbox) ────────────
-            def _row_label(r):
-                if r.get("is_avg_row") or "CAGR" in r["label"]:
-                    return "  ↳ " + r["label"]
-                return r["label"]
             df_all = pd.DataFrame([{
-                "Metric":  _row_label(r),
+                "Metric":  r["label"],
                 "Cat.":    r.get("tab", ""),
                 "Value":   r["fmt"],
                 "Grade":   r["lbl"],
