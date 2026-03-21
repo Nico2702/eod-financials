@@ -589,7 +589,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     ]
     _ni_ttm_pe = sum(_ni_ttm_pe_vals) if len(_ni_ttm_pe_vals) == 4 and all(v is not None for v in _ni_ttm_pe_vals) else None
     _pe_self   = (mcap / _ni_ttm_pe) if mcap and _ni_ttm_pe and _ni_ttm_pe > 0 else None
-    pe_cur   = fv(val.get("TrailingPE")) or fv(hl.get("PERatio")) or _pe_self
+    pe_cur   = _pe_self or fv(val.get("TrailingPE")) or fv(hl.get("PERatio"))
     pe_yr    = (mcap / ni_yr)     if mcap and ni_yr  and ni_yr  > 0 else None
     ps_fwd   = None  # EODHD doesn't provide forward P/S
     # P/Sales (Cur): PriceSalesTTM → self-calculated mcap/rev_ttm
@@ -1120,19 +1120,22 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             # P/E (Cur): prefer Valuation.TrailingPE -> Highlights.PERatio -> self-calc mcap/NI_TTM
             trailing = fv(val.get("TrailingPE"))
             pe_ratio = fv(hl.get("PERatio"))
-            pe_cur_used = trailing or pe_ratio or pe
-            if trailing:
-                source_label = "Valuation.TrailingPE  (primary)"
+            pe_cur_used = pe or trailing or pe_ratio
+            if pe:
+                source_label = "self-calculated: MarketCap / NI_TTM  (primary)"
+                source_val   = pe
+            elif trailing:
+                source_label = "Valuation.TrailingPE  (fallback 1 - NI TTM not available)"
                 source_val   = trailing
             elif pe_ratio:
-                source_label = "Highlights.PERatio  (fallback - TrailingPE missing)"
+                source_label = "Highlights.PERatio  (fallback 2 - TrailingPE also missing)"
                 source_val   = pe_ratio
             else:
-                source_label = "self-calculated: MarketCap / NI_TTM  (fallback - no API P/E)"
-                source_val   = pe
+                source_label = "— (no data available)"
+                source_val   = None
             ni_comps_cur = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome")
             return {
-                "formula": "Primary: Valuation.TrailingPE\nFallback 1: Highlights.PERatio\nFallback 2: MarketCap / NI_TTM (self-calculated)",
+                "formula": "Primary: MarketCap / NI_TTM (self-calculated)\nFallback 1: Valuation.TrailingPE\nFallback 2: Highlights.PERatio",
                 "fields":  ["Valuation.TrailingPE", "Highlights.PERatio",
                             "Highlights.MarketCapitalization",
                             "Income_Statement.netIncome (quarterly TTM - fallback only)",
