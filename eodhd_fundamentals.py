@@ -380,15 +380,13 @@ def compute_kennzahlen(data, hl, val, tech):
         return None
 
     def yoy_growth(df, col):
-        """YoY: Q[0] vs Q[4] if available, fallback to Q[1]"""
+        """YoY: Q[0] vs Q[4] (same quarter prior year). No fallback — Q[1] would
+        be QoQ not YoY and would misrepresent the metric."""
         import math
         try:
             s = df[col].dropna()
             if len(s) >= 5 and s.iloc[4] != 0:
                 r = (s.iloc[0] / s.iloc[4] - 1) * 100
-                return None if (math.isnan(r) or math.isinf(r)) else r
-            elif len(s) >= 2 and s.iloc[1] != 0:
-                r = (s.iloc[0] / s.iloc[1] - 1) * 100
                 return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
         return None
@@ -457,7 +455,8 @@ def compute_kennzahlen(data, hl, val, tech):
     ebitda_gr_ann = ann_growth(_a_is_hl, "ebitda")
     # EPS annual: NI/shares Y0 vs Y1
     _a_bs_hl = data["Financials"]["Balance_Sheet"].get("yearly", {})
-    _ys_hl   = sorted(_a_is_hl.keys(), reverse=True)
+    # Use intersection of IS and BS keys to ensure shares match the correct fiscal year
+    _ys_hl   = sorted(set(_a_is_hl.keys()) & set(_a_bs_hl.keys()), reverse=True)
     def _eps_ann_hl(idx):
         if idx >= len(_ys_hl): return None
         y   = _ys_hl[idx]
@@ -696,12 +695,9 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     _trends_ps  = data.get("Earnings", {}).get("Trend", {})
     _p1y_ps     = next((v for v in _trends_ps.values() if v.get("period") == "+1y"), {})
     _rev_gr_est = fv(_p1y_ps.get("revenueEstimateGrowth"))  # raw decimal e.g. 0.08
-    _rev_ttm_ps_fwd = sum(
-        fv(data["Financials"]["Income_Statement"].get("quarterly", {}).get(q, {}).get("totalRevenue")) or 0
-        for q in sorted(data["Financials"]["Income_Statement"].get("quarterly", {}).keys(), reverse=True)[:4]
-    ) or None
-    if _rev_gr_est is not None and _rev_ttm_ps_fwd:
-        _fwd_rev = _rev_ttm_ps_fwd * (1 + _rev_gr_est)
+    # P/S Fwd: reuse _rev_ttm_ps (strict 4Q) instead of recalculating with "or 0"
+    if _rev_gr_est is not None and _rev_ttm_ps and _rev_ttm_ps > 0:
+        _fwd_rev = _rev_ttm_ps * (1 + _rev_gr_est)
         ps_fwd   = (mcap / _fwd_rev) if mcap and _fwd_rev and _fwd_rev > 0 else None
     else:
         ps_fwd   = None
@@ -4395,7 +4391,9 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             if all(v is not None for v in vals):
                 rows.append(sum(vals))
         if len(rows) >= 5 and rows[4] and rows[4] > 0:
-            return (rows[0] / rows[4] - 1) * 100
+            import math as _math
+            r = (rows[0] / rows[4] - 1) * 100
+            return None if (_math.isnan(r) or _math.isinf(r)) else r
         return None
 
     # ── Annual YoY: year[0] vs year[1] (kept for Rule of 40 only) ────
@@ -4440,21 +4438,26 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         return None if (math.isnan(r) or math.isinf(r)) else r
 
     def eps_ttm_gr():
-        """EPS TTM growth: (NI_TTM/shares_Q0) vs (NI_TTM_1Yago/shares_Q4)."""
-        qs = sorted(q_is.keys(), reverse=True)
-        qbs = sorted(q_bs.keys(), reverse=True)
-        if len(qs) < 8 or len(qbs) < 5: return None
-        def ttm_ni(start):
+        """EPS TTM growth: (NI_TTM/shares_Q0) vs (NI_TTM_1Yago/shares_Q4).
+        Uses common quarter keys between q_is and q_bs to avoid period mismatch."""
+        import math
+        common_qs = sorted(set(q_is.keys()) & set(q_bs.keys()), reverse=True)
+        if len(common_qs) < 5: return None
+        # Need 8 IS quarters for two TTM windows; use all q_is for NI but common for shares
+        qs_is = sorted(q_is.keys(), reverse=True)
+        if len(qs_is) < 8: return None
+        def ttm_ni(qs, start):
             vals = [fv(q_is[qs[i]].get("netIncomeApplicableToCommonShares"))
                     or fv(q_is[qs[i]].get("netIncome")) for i in range(start, start+4)]
             return sum(vals) if all(v is not None for v in vals) else None
-        ni0  = ttm_ni(0); ni4  = ttm_ni(4)
-        shs0 = fv(q_bs[qbs[0]].get("commonStockSharesOutstanding"))
-        shs4 = fv(q_bs[qbs[4]].get("commonStockSharesOutstanding")) if len(qbs) > 4 else shs0
+        ni0 = ttm_ni(qs_is, 0); ni4 = ttm_ni(qs_is, 4)
+        shs0 = fv(q_bs[common_qs[0]].get("commonStockSharesOutstanding"))
+        shs4 = fv(q_bs[common_qs[4]].get("commonStockSharesOutstanding")) if len(common_qs) > 4 else None
         if not ni0 or not ni4 or not shs0 or shs0 <= 0 or not shs4 or shs4 <= 0: return None
         eps0 = ni0 / shs0; eps4 = ni4 / shs4
         if eps4 <= 0: return None
-        return (eps0 / eps4 - 1) * 100
+        r = (eps0 / eps4 - 1) * 100
+        return None if (math.isnan(r) or math.isinf(r)) else r
 
     def fcf_yr(y):
         d = a_cf.get(y, {})
@@ -5083,13 +5086,24 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     roa_yr    = safe_div(ni_yr,    assets_avg)
     roe_ttm   = safe_div(ni_ttm,   _equity_avg_ttm)
     roe_yr    = safe_div(ni_yr,    eq_avg)
-    # Return on Capital = NI / (Equity + Debt)
-    roc_ttm   = safe_div(ni_ttm,   (equity_ttm or 0) + debt_ttm)
-    roc_yr    = safe_div(ni_yr,    (equity_yr  or 0) + debt_yr)
-    # ROCE = EBIT / Capital Employed (Assets - Current Liabilities)
+    # Return on Capital = NI / (Equity + Debt) — use avg(Q0,Q4) for TTM consistency
+    _equity_q4_roc = fv(q_bs[qbs_sorted_roa[4]].get("totalStockholderEquity")) if len(qbs_sorted_roa) > 4 else None
+    _debt_q4_roc   = ((fv(q_bs[qbs_sorted_roa[4]].get("longTermDebt")) or 0) +
+                      (fv(q_bs[qbs_sorted_roa[4]].get("shortLongTermDebt")) or 0)) if len(qbs_sorted_roa) > 4 else None
+    _ic_ttm   = (equity_ttm or 0) + debt_ttm
+    _ic_q4    = (_equity_q4_roc or 0) + (_debt_q4_roc or debt_ttm)
+    _ic_avg   = (_ic_ttm + _ic_q4) / 2 if _ic_q4 else _ic_ttm
+    roc_ttm   = safe_div(ni_ttm, _ic_avg)
+    roc_yr    = safe_div(ni_yr,  (equity_yr or 0) + debt_yr)
+
+    # ROCE = EBIT / Capital Employed (Assets - Current Liabilities) — avg for TTM
+    _cur_lia_q4_roce = fv(q_bs[qbs_sorted_roa[4]].get("totalCurrentLiabilities")) if len(qbs_sorted_roa) > 4 else None
+    _assets_q4_roce  = fv(q_bs[qbs_sorted_roa[4]].get("totalAssets"))             if len(qbs_sorted_roa) > 4 else None
     cap_emp_ttm = (assets_ttm - cur_lia_ttm) if assets_ttm and cur_lia_ttm else None
+    _cap_emp_q4 = (_assets_q4_roce - _cur_lia_q4_roce) if _assets_q4_roce and _cur_lia_q4_roce else None
+    _cap_emp_avg = (cap_emp_ttm + _cap_emp_q4) / 2 if cap_emp_ttm and _cap_emp_q4 else cap_emp_ttm
     cap_emp_yr  = (assets_yr  - cur_lia_yr)  if assets_yr  and cur_lia_yr  else None
-    roce_ttm  = safe_div(ebit_ttm, cap_emp_ttm)
+    roce_ttm  = safe_div(ebit_ttm, _cap_emp_avg)
     roce_yr   = safe_div(ebit_yr,  cap_emp_yr)
     # ROIC = EBIT*(1-tax_rate) / Invested Capital — simplified: NI / (Equity + Debt)
     # ROIC = NOPAT / IC; NOPAT = EBIT*(1-tax_rate)
