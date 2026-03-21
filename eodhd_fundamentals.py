@@ -4441,111 +4441,147 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     # ── Historical averages ───────────────────────────────────────────
     def margin_hist(is_key_num, is_key_den, n, cf=False):
         ys = sorted(a_is.keys(), reverse=True)
-        vals = []
+        vals, all_yr = [], []
         for y in ys[:n]:
+            yr = y[:4]
             num = fv((a_cf if cf else a_is)[y].get(is_key_num)) if y in (a_cf if cf else a_is) else None
             den = fv(a_is[y].get(is_key_den))
-            if num is not None and den and den != 0:
-                vals.append(num / den)
-        return sum(vals)/len(vals) if vals else None
+            if num is None:
+                all_yr.append((yr, None, f"{is_key_num} fehlt")); continue
+            if not den or den == 0:
+                all_yr.append((yr, None, f"{is_key_den} fehlt/0")); continue
+            v = num / den
+            vals.append(v); all_yr.append((yr, v, None))
+        avg = sum(vals)/len(vals) if vals else None
+        return avg, all_yr
 
     def return_hist(ni_key, asset_key, n, use_avg=False):
         ys = sorted(a_is.keys(), reverse=True)
-        vals = []
+        vals, all_yr = [], []
         for i, y in enumerate(ys[:n]):
+            yr  = y[:4]
             ni  = fv(a_is[y].get(ni_key))
             bs  = fv(a_bs[y].get(asset_key)) if y in a_bs else None
             if use_avg:
-                # Find correct prior year BS (same key as IS year y, one step back)
                 bsy_all = sorted(a_bs.keys(), reverse=True)
                 y_idx   = bsy_all.index(y) if y in bsy_all else None
                 if y_idx is not None and y_idx + 1 < len(bsy_all):
                     bs_p = fv(a_bs[bsy_all[y_idx + 1]].get(asset_key))
                     bs = (bs + bs_p) / 2 if bs and bs_p else bs
-            if ni is not None and bs and bs != 0:
-                vals.append(ni / bs)
-        return sum(vals)/len(vals) if vals else None
+            if ni is None:
+                all_yr.append((yr, None, f"{ni_key} fehlt")); continue
+            if not bs or bs == 0:
+                all_yr.append((yr, None, f"{asset_key} fehlt/0")); continue
+            v = ni / bs
+            vals.append(v); all_yr.append((yr, v, None))
+        avg = sum(vals)/len(vals) if vals else None
+        return avg, all_yr
 
     def roce_hist(n):
         ys = sorted(a_is.keys(), reverse=True)
-        vals = []
+        vals, all_yr = [], []
         for y in ys[:n]:
-            e = fv(a_is[y].get("ebit"))
+            yr = y[:4]
+            e  = fv(a_is[y].get("ebit"))
             bs = a_bs.get(y, {})
             ta = fv(bs.get("totalAssets"))
             cl = fv(bs.get("totalCurrentLiabilities"))
-            if e is not None and ta and cl:
-                vals.append(e / (ta - cl))
-        return sum(vals)/len(vals) if vals else None
+            if e is None:
+                all_yr.append((yr, None, "EBIT fehlt")); continue
+            if not ta or not cl:
+                all_yr.append((yr, None, "Assets/CL fehlen")); continue
+            v = e / (ta - cl)
+            vals.append(v); all_yr.append((yr, v, None))
+        avg = sum(vals)/len(vals) if vals else None
+        return avg, all_yr
 
     def at_hist(n):
         ys = sorted(a_is.keys(), reverse=True)
         bsy_all = sorted(a_bs.keys(), reverse=True)
-        vals = []
+        vals, all_yr = [], []
         for y in ys[:n]:
+            yr = y[:4]
             r = fv(a_is[y].get("totalRevenue"))
             a = fv(a_bs[y].get("totalAssets")) if y in a_bs else None
             y_idx = bsy_all.index(y) if y in bsy_all else None
             a_p   = fv(a_bs[bsy_all[y_idx + 1]].get("totalAssets")) if y_idx is not None and y_idx + 1 < len(bsy_all) else None
             a_avg = (a + a_p)/2 if a and a_p else a
-            if r and a_avg and a_avg != 0: vals.append(r / a_avg)
-        return sum(vals)/len(vals) if vals else None
+            if not r:
+                all_yr.append((yr, None, "Revenue fehlt")); continue
+            if not a_avg or a_avg == 0:
+                all_yr.append((yr, None, "Assets fehlen")); continue
+            v = r / a_avg
+            vals.append(v); all_yr.append((yr, v, None))
+        avg = sum(vals)/len(vals) if vals else None
+        return avg, all_yr
 
     def fcfm_hist(n):
         ys = sorted(a_is.keys(), reverse=True)
-        vals = []
+        vals, all_yr = [], []
         for y in ys[:n]:
+            yr  = y[:4]
             rev = fv(a_is[y].get("totalRevenue"))
             fcf = fv(a_cf[y].get("freeCashFlow")) if y in a_cf else None
             if not fcf and y in a_cf:
-                c   = fv(a_cf[y].get("totalCashFromOperatingActivities"))
-                cx  = fv(a_cf[y].get("capitalExpenditures"))
+                c  = fv(a_cf[y].get("totalCashFromOperatingActivities"))
+                cx = fv(a_cf[y].get("capitalExpenditures"))
                 fcf = c - abs(cx) if c and cx else None
-            if fcf is not None and rev and rev != 0: vals.append(fcf / rev)
-        return sum(vals)/len(vals) if vals else None
+            if not rev or rev == 0:
+                all_yr.append((yr, None, "Revenue fehlt")); continue
+            if fcf is None:
+                all_yr.append((yr, None, "FCF fehlt")); continue
+            v = fcf / rev
+            vals.append(v); all_yr.append((yr, v, None))
+        avg = sum(vals)/len(vals) if vals else None
+        return avg, all_yr
 
     def roc_hist(n):
         ys  = sorted(a_is.keys(), reverse=True)
-        bsy = sorted(a_bs.keys(), reverse=True)
-        vals = []
+        vals, all_yr = [], []
         for i, y in enumerate(ys[:n]):
+            yr  = y[:4]
             ni  = fv(a_is[y].get("netIncome"))
             bs  = a_bs.get(y, {})
             eq  = fv(bs.get("totalStockholderEquity"))
             ltd = fv(bs.get("longTermDebt")) or 0
             std = fv(bs.get("shortLongTermDebt")) or 0
             ic  = (eq or 0) + ltd + std
-            if ni is not None and ic > 0:
-                vals.append(ni / ic)
-        return sum(vals)/len(vals) if vals else None
+            if ni is None:
+                all_yr.append((yr, None, "NI fehlt")); continue
+            if ic <= 0:
+                all_yr.append((yr, None, f"Inv.Capital ≤ 0 ({ic:,.0f})")); continue
+            v = ni / ic
+            vals.append(v); all_yr.append((yr, v, None))
+        avg = sum(vals)/len(vals) if vals else None
+        return avg, all_yr
 
-    roa_3y  = return_hist("netIncome","totalAssets",3,use_avg=True)
-    roa_5y  = return_hist("netIncome","totalAssets",5,use_avg=True)
-    roa_10y = return_hist("netIncome","totalAssets",10,use_avg=True)
-    roe_3y  = return_hist("netIncome","totalStockholderEquity",3,use_avg=True)
-    roe_5y  = return_hist("netIncome","totalStockholderEquity",5,use_avg=True)
-    roe_10y = return_hist("netIncome","totalStockholderEquity",10,use_avg=True)
-    roc_3y  = roc_hist(3);  roc_5y  = roc_hist(5);  roc_10y = roc_hist(10)
-    roce_3y = roce_hist(3); roce_5y = roce_hist(5);  roce_10y = roce_hist(10)
-    roic_3y = roc_hist(3);  roic_5y = roc_hist(5);  roic_10y = roc_hist(10)
+    roa_3y,  _hy_roa_3  = return_hist("netIncome","totalAssets",3,use_avg=True)
+    roa_5y,  _hy_roa_5  = return_hist("netIncome","totalAssets",5,use_avg=True)
+    roa_10y, _hy_roa_10 = return_hist("netIncome","totalAssets",10,use_avg=True)
+    roe_3y,  _hy_roe_3  = return_hist("netIncome","totalStockholderEquity",3,use_avg=True)
+    roe_5y,  _hy_roe_5  = return_hist("netIncome","totalStockholderEquity",5,use_avg=True)
+    roe_10y, _hy_roe_10 = return_hist("netIncome","totalStockholderEquity",10,use_avg=True)
+    roc_3y,  _hy_roc_3  = roc_hist(3);  roc_5y,  _hy_roc_5  = roc_hist(5);  roc_10y, _hy_roc_10  = roc_hist(10)
+    roce_3y, _hy_roce_3 = roce_hist(3); roce_5y, _hy_roce_5 = roce_hist(5); roce_10y,_hy_roce_10 = roce_hist(10)
+    roic_3y, _hy_roic_3 = roc_hist(3);  roic_5y, _hy_roic_5 = roc_hist(5);  roic_10y,_hy_roic_10 = roc_hist(10)
 
-    gm_3y   = margin_hist("grossProfit",  "totalRevenue",3)
-    gm_5y   = margin_hist("grossProfit",  "totalRevenue",5)
-    gm_10y  = margin_hist("grossProfit",  "totalRevenue",10)
-    om_3y   = margin_hist("operatingIncome","totalRevenue",3)
-    om_5y   = margin_hist("operatingIncome","totalRevenue",5)
-    om_10y  = margin_hist("operatingIncome","totalRevenue",10)
-    nm_3y   = margin_hist("netIncome",    "totalRevenue",3)
-    nm_5y   = margin_hist("netIncome",    "totalRevenue",5)
-    nm_10y  = margin_hist("netIncome",    "totalRevenue",10)
-    ebitm_3y = margin_hist("ebit",        "totalRevenue",3)
-    ebitm_5y = margin_hist("ebit",        "totalRevenue",5)
-    ebitm_10y= margin_hist("ebit",        "totalRevenue",10)
-    ebitdam_3y  = margin_hist("ebitda",   "totalRevenue",3)
-    ebitdam_5y  = margin_hist("ebitda",   "totalRevenue",5)
-    ebitdam_10y = margin_hist("ebitda",   "totalRevenue",10)
-    fcfm_3y = fcfm_hist(3);  fcfm_5y = fcfm_hist(5);  fcfm_10y = fcfm_hist(10)
-    at_3y   = at_hist(3);    at_5y   = at_hist(5);    at_10y   = at_hist(10)
+    gm_3y,   _hy_gm_3   = margin_hist("grossProfit",    "totalRevenue",3)
+    gm_5y,   _hy_gm_5   = margin_hist("grossProfit",    "totalRevenue",5)
+    gm_10y,  _hy_gm_10  = margin_hist("grossProfit",    "totalRevenue",10)
+    om_3y,   _hy_om_3   = margin_hist("operatingIncome","totalRevenue",3)
+    om_5y,   _hy_om_5   = margin_hist("operatingIncome","totalRevenue",5)
+    om_10y,  _hy_om_10  = margin_hist("operatingIncome","totalRevenue",10)
+    nm_3y,   _hy_nm_3   = margin_hist("netIncome",      "totalRevenue",3)
+    nm_5y,   _hy_nm_5   = margin_hist("netIncome",      "totalRevenue",5)
+    nm_10y,  _hy_nm_10  = margin_hist("netIncome",      "totalRevenue",10)
+    ebitm_3y,  _hy_ebitm_3  = margin_hist("ebit",   "totalRevenue",3)
+    ebitm_5y,  _hy_ebitm_5  = margin_hist("ebit",   "totalRevenue",5)
+    ebitm_10y, _hy_ebitm_10 = margin_hist("ebit",   "totalRevenue",10)
+    ebitdam_3y,  _hy_ebitdam_3  = margin_hist("ebitda","totalRevenue",3)
+    ebitdam_5y,  _hy_ebitdam_5  = margin_hist("ebitda","totalRevenue",5)
+    ebitdam_10y, _hy_ebitdam_10 = margin_hist("ebitda","totalRevenue",10)
+    fcfm_3y, _hy_fcfm_3 = fcfm_hist(3);  fcfm_5y, _hy_fcfm_5 = fcfm_hist(5);  fcfm_10y, _hy_fcfm_10 = fcfm_hist(10)
+    at_3y,   _hy_at_3   = at_hist(3);    at_5y,   _hy_at_5   = at_hist(5);    at_10y,   _hy_at_10   = at_hist(10)
 
     # ── Grade thresholds ─────────────────────────────────────────────
     ROA_T   = [(15,"ap"),(10,"a"),(7,"am"),(5,"bp"),(3,"b"),(1,"bm"),(0,"cp")]
@@ -4567,13 +4603,22 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         if pct: return f"{val:.{decimals}f} %"
         return f"{val:.{decimals}f}"
 
-    def row(label, cur, avg3, avg5, avg10, T, pct=True):
+    def row(label, cur, avg3, avg5, avg10, T, pct=True, hy3=None, hy5=None, hy10=None):
         cur_pct = cur * 100 if cur is not None and pct else cur
         a3  = avg3  * 100 if avg3  is not None and pct else avg3
         a5  = avg5  * 100 if avg5  is not None and pct else avg5
         a10 = avg10 * 100 if avg10 is not None and pct else avg10
         css, lbl = get_grade(cur_pct if cur_pct is not None else cur, T) if cur is not None else ("grade-na","—")
         f = lambda v: (f"{v:.2f} %" if pct else f"{v:.2f}") if v is not None else "—"
+        def conv(hy):
+            if not hy: return []
+            result = []
+            for item in hy:
+                yr, v, reason = item if len(item) == 3 else (*item, None)
+                v_scaled = v * 100 if v is not None and pct else v
+                fmt_v = f(v_scaled) if v_scaled is not None else None
+                result.append((yr, fmt_v, reason))
+            return result
         return {
             "label": label, "cur": cur_pct, "fmt": f(cur_pct if pct else cur),
             "css": css, "lbl": lbl,
@@ -4583,39 +4628,42 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
             "avg3_raw": a3, "avg5_raw": a5, "avg10_raw": a10,
             "T": T, "higher": True, "pct": pct,
             "group": label.split(" ")[0],
+            "hy3":  conv(hy3),
+            "hy5":  conv(hy5),
+            "hy10": conv(hy10),
         }
 
     rows = [
-        row("Return on Assets (TTM)",           roa_ttm,     roa_3y,     roa_5y,     roa_10y,     ROA_T),
-        row("Return on Assets (Year)",           roa_yr,      roa_3y,     roa_5y,     roa_10y,     ROA_T),
-        row("Return on Equity (TTM)",            roe_ttm,     roe_3y,     roe_5y,     roe_10y,     ROE_T),
-        row("Return on Equity (Year)",           roe_yr,      roe_3y,     roe_5y,     roe_10y,     ROE_T),
-        row("Return on Capital (TTM)",           roc_ttm,     roc_3y,     roc_5y,     roc_10y,     ROC_T),
-        row("Return on Capital (Year)",          roc_yr,      roc_3y,     roc_5y,     roc_10y,     ROC_T),
-        row("Return on Cap. Empl. (TTM)",        roce_ttm,    roce_3y,    roce_5y,    roce_10y,    ROCE_T),
-        row("Return on Cap. Empl. (Year)",       roce_yr,     roce_3y,    roce_5y,    roce_10y,    ROCE_T),
-        row("Return on Inv. Capital (TTM)",      roic_ttm,    roic_3y,    roic_5y,    roic_10y,    ROIC_T),
-        row("Return on Inv. Capital (Year)",     roic_yr,     roic_3y,    roic_5y,    roic_10y,    ROIC_T),
-        row("Gross Margin (Quarterly)",          gm_q,        gm_3y,      gm_5y,      gm_10y,      GM_T),
-        row("Gross Margin (TTM)",                gm_ttm,      gm_3y,      gm_5y,      gm_10y,      GM_T),
-        row("Gross Margin (Year)",               gm_yr,       gm_3y,      gm_5y,      gm_10y,      GM_T),
-        row("Operating Margin (Quarterly)",      om_q,        om_3y,      om_5y,      om_10y,      OM_T),
-        row("Operating Margin (TTM)",            om_ttm,      om_3y,      om_5y,      om_10y,      OM_T),
-        row("Operating Margin (Year)",           om_yr,       om_3y,      om_5y,      om_10y,      OM_T),
-        row("Net Margin (Quarterly)",            nm_q,        nm_3y,      nm_5y,      nm_10y,      NM_T),
-        row("Net Margin (TTM)",                  nm_ttm,      nm_3y,      nm_5y,      nm_10y,      NM_T),
-        row("Net Margin (Year)",                 nm_yr,       nm_3y,      nm_5y,      nm_10y,      NM_T),
-        row("EBIT Margin (Quarterly)",           ebitm_q,     ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T),
-        row("EBIT Margin (TTM)",                 ebitm_ttm,   ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T),
-        row("EBIT Margin (Year)",                ebitm_yr,    ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T),
-        row("EBITDA Margin (Quarterly)",         ebitdam_q,   ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T),
-        row("EBITDA Margin (TTM)",               ebitdam_ttm, ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T),
-        row("EBITDA Margin (Year)",              ebitdam_yr,  ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T),
-        row("FCF Margin (Quarterly)",            fcfm_q,      fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
-        row("FCF Margin (TTM)",                  fcfm_ttm,    fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
-        row("FCF Margin (Year)",                 fcfm_yr,     fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
-        row("Asset Turnover (TTM)",              at_ttm,      at_3y,      at_5y,      at_10y,      AT_T, pct=False),
-        row("Asset Turnover (Year)",             at_yr,       at_3y,      at_5y,      at_10y,      AT_T, pct=False),
+        row("Return on Assets (TTM)",           roa_ttm,     roa_3y,     roa_5y,     roa_10y,     ROA_T, hy3=_hy_roa_3, hy5=_hy_roa_5, hy10=_hy_roa_10),
+        row("Return on Assets (Year)",           roa_yr,      roa_3y,     roa_5y,     roa_10y,     ROA_T, hy3=_hy_roa_3, hy5=_hy_roa_5, hy10=_hy_roa_10),
+        row("Return on Equity (TTM)",            roe_ttm,     roe_3y,     roe_5y,     roe_10y,     ROE_T, hy3=_hy_roe_3, hy5=_hy_roe_5, hy10=_hy_roe_10),
+        row("Return on Equity (Year)",           roe_yr,      roe_3y,     roe_5y,     roe_10y,     ROE_T, hy3=_hy_roe_3, hy5=_hy_roe_5, hy10=_hy_roe_10),
+        row("Return on Capital (TTM)",           roc_ttm,     roc_3y,     roc_5y,     roc_10y,     ROC_T, hy3=_hy_roc_3, hy5=_hy_roc_5, hy10=_hy_roc_10),
+        row("Return on Capital (Year)",          roc_yr,      roc_3y,     roc_5y,     roc_10y,     ROC_T, hy3=_hy_roc_3, hy5=_hy_roc_5, hy10=_hy_roc_10),
+        row("Return on Cap. Empl. (TTM)",        roce_ttm,    roce_3y,    roce_5y,    roce_10y,    ROCE_T, hy3=_hy_roce_3, hy5=_hy_roce_5, hy10=_hy_roce_10),
+        row("Return on Cap. Empl. (Year)",       roce_yr,     roce_3y,    roce_5y,    roce_10y,    ROCE_T, hy3=_hy_roce_3, hy5=_hy_roce_5, hy10=_hy_roce_10),
+        row("Return on Inv. Capital (TTM)",      roic_ttm,    roic_3y,    roic_5y,    roic_10y,    ROIC_T, hy3=_hy_roic_3, hy5=_hy_roic_5, hy10=_hy_roic_10),
+        row("Return on Inv. Capital (Year)",     roic_yr,     roic_3y,    roic_5y,    roic_10y,    ROIC_T, hy3=_hy_roic_3, hy5=_hy_roic_5, hy10=_hy_roic_10),
+        row("Gross Margin (Quarterly)",          gm_q,        gm_3y,      gm_5y,      gm_10y,      GM_T, hy3=_hy_gm_3, hy5=_hy_gm_5, hy10=_hy_gm_10),
+        row("Gross Margin (TTM)",                gm_ttm,      gm_3y,      gm_5y,      gm_10y,      GM_T, hy3=_hy_gm_3, hy5=_hy_gm_5, hy10=_hy_gm_10),
+        row("Gross Margin (Year)",               gm_yr,       gm_3y,      gm_5y,      gm_10y,      GM_T, hy3=_hy_gm_3, hy5=_hy_gm_5, hy10=_hy_gm_10),
+        row("Operating Margin (Quarterly)",      om_q,        om_3y,      om_5y,      om_10y,      OM_T, hy3=_hy_om_3, hy5=_hy_om_5, hy10=_hy_om_10),
+        row("Operating Margin (TTM)",            om_ttm,      om_3y,      om_5y,      om_10y,      OM_T, hy3=_hy_om_3, hy5=_hy_om_5, hy10=_hy_om_10),
+        row("Operating Margin (Year)",           om_yr,       om_3y,      om_5y,      om_10y,      OM_T, hy3=_hy_om_3, hy5=_hy_om_5, hy10=_hy_om_10),
+        row("Net Margin (Quarterly)",            nm_q,        nm_3y,      nm_5y,      nm_10y,      NM_T, hy3=_hy_nm_3, hy5=_hy_nm_5, hy10=_hy_nm_10),
+        row("Net Margin (TTM)",                  nm_ttm,      nm_3y,      nm_5y,      nm_10y,      NM_T, hy3=_hy_nm_3, hy5=_hy_nm_5, hy10=_hy_nm_10),
+        row("Net Margin (Year)",                 nm_yr,       nm_3y,      nm_5y,      nm_10y,      NM_T, hy3=_hy_nm_3, hy5=_hy_nm_5, hy10=_hy_nm_10),
+        row("EBIT Margin (Quarterly)",           ebitm_q,     ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T, hy3=_hy_ebitm_3, hy5=_hy_ebitm_5, hy10=_hy_ebitm_10),
+        row("EBIT Margin (TTM)",                 ebitm_ttm,   ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T, hy3=_hy_ebitm_3, hy5=_hy_ebitm_5, hy10=_hy_ebitm_10),
+        row("EBIT Margin (Year)",                ebitm_yr,    ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T, hy3=_hy_ebitm_3, hy5=_hy_ebitm_5, hy10=_hy_ebitm_10),
+        row("EBITDA Margin (Quarterly)",         ebitdam_q,   ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T, hy3=_hy_ebitdam_3, hy5=_hy_ebitdam_5, hy10=_hy_ebitdam_10),
+        row("EBITDA Margin (TTM)",               ebitdam_ttm, ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T, hy3=_hy_ebitdam_3, hy5=_hy_ebitdam_5, hy10=_hy_ebitdam_10),
+        row("EBITDA Margin (Year)",              ebitdam_yr,  ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T, hy3=_hy_ebitdam_3, hy5=_hy_ebitdam_5, hy10=_hy_ebitdam_10),
+        row("FCF Margin (Quarterly)",            fcfm_q,      fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T, hy3=_hy_fcfm_3, hy5=_hy_fcfm_5, hy10=_hy_fcfm_10),
+        row("FCF Margin (TTM)",                  fcfm_ttm,    fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T, hy3=_hy_fcfm_3, hy5=_hy_fcfm_5, hy10=_hy_fcfm_10),
+        row("FCF Margin (Year)",                 fcfm_yr,     fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T, hy3=_hy_fcfm_3, hy5=_hy_fcfm_5, hy10=_hy_fcfm_10),
+        row("Asset Turnover (TTM)",              at_ttm,      at_3y,      at_5y,      at_10y,      AT_T, pct=False, hy3=_hy_at_3, hy5=_hy_at_5, hy10=_hy_at_10),
+        row("Asset Turnover (Year)",             at_yr,       at_3y,      at_5y,      at_10y,      AT_T, pct=False, hy3=_hy_at_3, hy5=_hy_at_5, hy10=_hy_at_10),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
