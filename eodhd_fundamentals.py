@@ -6069,24 +6069,28 @@ with tab2b:
 
         # ── Expand rows with avg/CAGR sub-rows ─────────────────────
         rows_expanded = expand_rows_with_avgs(rows_filtered)
+        label_list = [r["label"] for r in rows_expanded]
+
+        # Init / validate selection
+        if "all_selected_metric" not in st.session_state or            st.session_state["all_selected_metric"] not in label_list:
+            st.session_state["all_selected_metric"] = label_list[0] if label_list else ""
 
         col_tbl, col_drill = st.columns([3, 2])
 
         with col_tbl:
-            # Selectbox for drill-down (use base rows only, not avg sub-rows)
-            label_list = [r["label"] for r in rows_expanded]
-            if label_list:
-                if "all_selected_metric" not in st.session_state or                    st.session_state.get("all_selected_metric") not in label_list:
-                    st.session_state["all_selected_metric"] = label_list[0]
-                default_idx = label_list.index(st.session_state["all_selected_metric"])
-                selected_metric = st.selectbox(
-                    "🔍 Metric auswählen für Drill-Down:",
-                    label_list, index=default_idx,
-                    key="all_metric_selectbox"
-                )
-                st.session_state["all_selected_metric"] = selected_metric
+            # ── Selectbox for row selection (drives drilldown) ────────
+            sel_idx = label_list.index(st.session_state["all_selected_metric"])                       if st.session_state["all_selected_metric"] in label_list else 0
+            selected = st.selectbox(
+                "Metric auswählen:",
+                label_list,
+                index=sel_idx,
+                key="all_metric_selectbox",
+            )
+            if selected != st.session_state.get("all_selected_metric"):
+                st.session_state["all_selected_metric"] = selected
+                st.rerun()
 
-            # ── HTML table (consistent with other tabs) ────────────────
+            # ── HTML table ────────────────────────────────────────────
             tbl = """
             <table style="width:100%;border-collapse:collapse;font-size:13px;">
               <thead>
@@ -6105,13 +6109,12 @@ with tab2b:
                 is_avg  = r.get("is_avg_row", False)
                 is_cagr = "CAGR" in r["label"]
                 tab_lbl = r.get("tab", "")
-                is_selected = r["label"] == st.session_state.get("all_selected_metric", "")
-                sel_bg = "background:#1a2744;" if is_selected else ""
+                is_sel  = r["label"] == st.session_state.get("all_selected_metric", "")
+                sel_bg  = "background:#1a2744;" if is_sel else ""
 
                 if is_avg or is_cagr:
                     tbl += (
-                        f'<tr style="border-bottom:1px solid #161d2e;background:#0d1320;cursor:pointer;"'
-                        f' onclick="void(0)">'
+                        f'<tr style="border-bottom:1px solid #161d2e;background:#0d1320;">'
                         f'<td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>'
                         f'<td style="padding:3px 4px;color:#374151;font-size:11px;">{tab_lbl}</td>'
                         f'<td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>'
@@ -6134,25 +6137,11 @@ with tab2b:
 
             tbl += "</tbody></table>"
             st.markdown(
-                f'<div style="max-height:650px;overflow-y:auto;border:1px solid #2d3748;border-radius:8px;padding:4px;">'
+                f'<div style="max-height:600px;overflow-y:auto;border:1px solid #2d3748;border-radius:8px;padding:4px;">'
                 f'{tbl}</div>',
                 unsafe_allow_html=True
             )
             st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-            # Row click via selectbox (HTML table can't trigger rerun directly)
-            clicked = st.selectbox(
-                "Zeile auswählen:",
-                [r["label"] for r in rows_expanded],
-                index=label_list.index(st.session_state.get("all_selected_metric", label_list[0]))
-                      if st.session_state.get("all_selected_metric") in label_list else 0,
-                key="all_row_click",
-                label_visibility="collapsed",
-            )
-            if clicked != st.session_state.get("all_selected_metric"):
-                st.session_state["all_selected_metric"] = clicked
-                st.rerun()
-
             st.download_button(
                 label="⬇ Excel Download",
                 data=score_rows_to_excel(rows_expanded, "All_Score"),
@@ -6162,8 +6151,7 @@ with tab2b:
             )
 
         with col_drill:
-            sel = st.session_state.get("all_selected_metric")
-            # Keep sel valid when filters change
+            sel = st.session_state.get("all_selected_metric", "")
             valid_labels = [r["label"] for r in rows_expanded]
             if sel not in valid_labels and valid_labels:
                 sel = valid_labels[0]
