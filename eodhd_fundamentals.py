@@ -4267,10 +4267,10 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         row("Piotroski F-Score (Cur)",  pf_cur, h(yr_pf,3),    h(yr_pf,5),    h(yr_pf,10), PF_T, decimals=0, hy3=hy(yr_pf,3), hy5=hy(yr_pf,5), hy10=hy(yr_pf,10)),
         row("Piotroski F-Score (Year)", pf_a,   h(yr_pf,3),    h(yr_pf,5),    h(yr_pf,10), PF_T, decimals=0, hy3=hy(yr_pf,3), hy5=hy(yr_pf,5), hy10=hy(yr_pf,10)),
         # Goodwill Ratios
-        row("Goodwill / Assets (Quarterly)", gw_ta_q, h(yr_gw_ta,3), h(yr_gw_ta,5), h(yr_gw_ta,10), GW_TA_Ti, pct=False, decimals=3, hy3=hy(yr_gw_ta,3), hy5=hy(yr_gw_ta,5), hy10=hy(yr_gw_ta,10)),
-        row("Goodwill / Assets (Year)",      gw_ta_a, h(yr_gw_ta,3), h(yr_gw_ta,5), h(yr_gw_ta,10), GW_TA_Ti, pct=False, decimals=3, hy3=hy(yr_gw_ta,3), hy5=hy(yr_gw_ta,5), hy10=hy(yr_gw_ta,10)),
-        row("Goodwill / Equity (Quarterly)", gw_eq_q, h(yr_gw_eq,3), h(yr_gw_eq,5), h(yr_gw_eq,10), GW_EQ_Ti, pct=False, decimals=3, hy3=hy(yr_gw_eq,3), hy5=hy(yr_gw_eq,5), hy10=hy(yr_gw_eq,10)),
-        row("Goodwill / Equity (Year)",      gw_eq_a, h(yr_gw_eq,3), h(yr_gw_eq,5), h(yr_gw_eq,10), GW_EQ_Ti, pct=False, decimals=3, hy3=hy(yr_gw_eq,3), hy5=hy(yr_gw_eq,5), hy10=hy(yr_gw_eq,10)),
+        row("Goodwill / Assets (Quarterly)", gw_ta_q, h(yr_gw_ta,3), h(yr_gw_ta,5), h(yr_gw_ta,10), GW_TA_Ti, decimals=3, hy3=hy(yr_gw_ta,3), hy5=hy(yr_gw_ta,5), hy10=hy(yr_gw_ta,10)),
+        row("Goodwill / Assets (Year)",      gw_ta_a, h(yr_gw_ta,3), h(yr_gw_ta,5), h(yr_gw_ta,10), GW_TA_Ti, decimals=3, hy3=hy(yr_gw_ta,3), hy5=hy(yr_gw_ta,5), hy10=hy(yr_gw_ta,10)),
+        row("Goodwill / Equity (Quarterly)", gw_eq_q, h(yr_gw_eq,3), h(yr_gw_eq,5), h(yr_gw_eq,10), GW_EQ_Ti, decimals=3, hy3=hy(yr_gw_eq,3), hy5=hy(yr_gw_eq,5), hy10=hy(yr_gw_eq,10)),
+        row("Goodwill / Equity (Year)",      gw_eq_a, h(yr_gw_eq,3), h(yr_gw_eq,5), h(yr_gw_eq,10), GW_EQ_Ti, decimals=3, hy3=hy(yr_gw_eq,3), hy5=hy(yr_gw_eq,5), hy10=hy(yr_gw_eq,10)),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
