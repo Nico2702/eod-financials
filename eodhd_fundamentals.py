@@ -785,14 +785,23 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     # ── Historical averages using real year-end prices ────────────────
     # price_data: {YYYY: adjusted_close} — last trading day of each year
     def hist_multiple(statement, key, n, use_ev=False, invert_fcf=False):
-        """Return (avg, [(year, val)]) using real year-end prices."""
+        """Return (avg, [(year, val_or_skip_reason)]) using real year-end prices.
+        Skipped years are included as (year, None, reason_str) tuples for display."""
         years = sorted(statement.keys(), reverse=True)
-        vals = []
+        vals   = []   # (year, float) — used for avg
+        all_yr = []   # (year, float|None, reason|None) — full display list
         for y in years[:n]:
             yr_str = y[:4]
             price  = price_data.get(yr_str)
             fund   = fv(statement[y].get(key))
-            if price is None or not fund or fund <= 0:
+            if price is None:
+                all_yr.append((yr_str, None, "kein Preis verfügbar"))
+                continue
+            if not fund:
+                all_yr.append((yr_str, None, "Fundamental-Wert fehlt"))
+                continue
+            if fund <= 0:
+                all_yr.append((yr_str, None, f"neg. Basis ({key})"))
                 continue
             if use_ev:
                 bs_y   = data["Financials"]["Balance_Sheet"]["yearly"].get(y, {})
@@ -800,49 +809,83 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
                 std    = fv(bs_y.get("shortLongTermDebt")) or 0
                 csh    = (fv(bs_y.get("cash")) or fv(bs_y.get("cashAndEquivalents")) or 0) + (fv(bs_y.get("shortTermInvestments")) or 0)
                 shs    = fv(bs_y.get("commonStockSharesOutstanding"))
-                if not shs: continue
-                ev_y   = price * shs + ltd + std - csh
-                vals.append((y[:4], ev_y / fund))
+                if not shs:
+                    all_yr.append((yr_str, None, "Shares fehlen"))
+                    continue
+                ev_y  = price * shs + ltd + std - csh
+                mult  = ev_y / fund
+                vals.append((yr_str, mult))
+                all_yr.append((yr_str, mult, None))
             else:
                 shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
-                if not shs: continue
+                if not shs:
+                    all_yr.append((yr_str, None, "Shares fehlen"))
+                    continue
                 mcap_y = price * shs
-                vals.append((y[:4], mcap_y / fund))
+                mult   = mcap_y / fund
+                vals.append((yr_str, mult))
+                all_yr.append((yr_str, mult, None))
         avg = sum(v for _, v in vals) / len(vals) if vals else None
-        return avg, vals
+        return avg, all_yr
 
     def fcf_hist_real(n):
         years = sorted(a_cf.keys(), reverse=True)
-        vals = []
+        vals   = []
+        all_yr = []
         for y in years[:n]:
             yr_str = y[:4]
             price  = price_data.get(yr_str)
+            if price is None:
+                all_yr.append((yr_str, None, "kein Preis verfügbar"))
+                continue
             f = fv(a_cf[y].get("freeCashFlow"))
             if not f:
                 cfo   = fv(a_cf[y].get("totalCashFromOperatingActivities"))
                 capex = fv(a_cf[y].get("capitalExpenditures"))
                 f = cfo - abs(capex) if cfo and capex else None
-            if price is None or not f or f <= 0: continue
+            if not f:
+                all_yr.append((yr_str, None, "FCF-Wert fehlt"))
+                continue
+            if f <= 0:
+                all_yr.append((yr_str, None, "neg. FCF"))
+                continue
             shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
-            if not shs: continue
-            vals.append((y[:4], price * shs / f))
+            if not shs:
+                all_yr.append((yr_str, None, "Shares fehlen"))
+                continue
+            mult = price * shs / f
+            vals.append((yr_str, mult))
+            all_yr.append((yr_str, mult, None))
         avg = sum(v for _, v in vals) / len(vals) if vals else None
-        return avg, vals
+        return avg, all_yr
 
     def yield_hist_real(statement, key, n):
         years = sorted(statement.keys(), reverse=True)
-        vals = []
+        vals   = []
+        all_yr = []
         for y in years[:n]:
             yr_str = y[:4]
             price  = price_data.get(yr_str)
-            fund   = fv(statement[y].get(key))
-            if price is None or not fund: continue
+            if price is None:
+                all_yr.append((yr_str, None, "kein Preis verfügbar"))
+                continue
+            fund = fv(statement[y].get(key))
+            if not fund:
+                all_yr.append((yr_str, None, "Fundamental-Wert fehlt"))
+                continue
             shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
-            if not shs: continue
+            if not shs:
+                all_yr.append((yr_str, None, "Shares fehlen"))
+                continue
             mcap_y = price * shs
-            if mcap_y > 0: vals.append((y[:4], fund / mcap_y * 100))
+            if mcap_y > 0:
+                yld = fund / mcap_y * 100
+                vals.append((yr_str, yld))
+                all_yr.append((yr_str, yld, None))
+            else:
+                all_yr.append((yr_str, None, "MCap ≤ 0"))
         avg = sum(v for _, v in vals) / len(vals) if vals else None
-        return avg, vals
+        return avg, all_yr
 
     pe_3y,   _hy_pe_3   = hist_multiple(a_is, "netIncome",             3)
     pe_5y,   _hy_pe_5   = hist_multiple(a_is, "netIncome",             5)
@@ -875,23 +918,38 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     # PEG historical averages: avg(P/E_year / EPS_growth_year) per rolling window
     def peg_hist_avg(n):
         years = sorted(a_is.keys(), reverse=True)
-        vals = []
+        vals   = []
+        all_yr = []
         for i in range(min(n, len(years) - 1)):
             y_cur  = years[i]
             y_prev = years[i + 1]
+            yr_str = y_cur[:4]
             ni_c = fv(a_is[y_cur].get("netIncome"))
             ni_p = fv(a_is[y_prev].get("netIncome"))
-            if not ni_c or not ni_p or ni_p <= 0: continue
+            if not ni_c or not ni_p or ni_p <= 0:
+                all_yr.append((yr_str, None, "NI fehlt oder neg. Basis"))
+                continue
             gr = (ni_c / ni_p - 1) * 100
-            if gr <= 0: continue
-            yr_str = y_cur[:4]
-            price  = price_data.get(yr_str)
-            shs    = fv(a_bs.get(y_cur, {}).get("commonStockSharesOutstanding"))
-            if not price or not shs: continue
+            if gr <= 0:
+                all_yr.append((yr_str, None, f"neg. NI-Wachstum ({gr:.1f}%)"))
+                continue
+            price = price_data.get(yr_str)
+            if not price:
+                all_yr.append((yr_str, None, "kein Preis verfügbar"))
+                continue
+            shs = fv(a_bs.get(y_cur, {}).get("commonStockSharesOutstanding"))
+            if not shs:
+                all_yr.append((yr_str, None, "Shares fehlen"))
+                continue
             pe_y = price * shs / ni_c if ni_c > 0 else None
-            if pe_y: vals.append((y_cur[:4], pe_y / gr))
+            if pe_y:
+                peg = pe_y / gr
+                vals.append((yr_str, peg))
+                all_yr.append((yr_str, peg, None))
+            else:
+                all_yr.append((yr_str, None, "P/E nicht berechenbar"))
         avg = sum(v for _, v in vals) / len(vals) if vals else None
-        return avg, vals
+        return avg, all_yr
 
     peg_3y,  _hy_peg_3  = peg_hist_avg(3)
     peg_5y,  _hy_peg_5  = peg_hist_avg(5)
@@ -918,7 +976,18 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     def row(label, cur, avg3, avg5, avg10, T, higher=False, pct=False,
             hy3=None, hy5=None, hy10=None):
         css, lbl = ratio_grade(cur, T, higher_is_better=higher)
-        def fmtv(v): return f"{v:.2f} %" if pct else f"{v:.2f}" if v is not None else "—"
+        def fmtv(v): return f"{v:.2f} %" if pct else f"{v:.2f}" if v is not None else None
+        def conv(hy):
+            # accepts [(y, val, reason)] or [(y, val)] — normalise to 3-tuple
+            if not hy: return []
+            result = []
+            for item in hy:
+                if len(item) == 3:
+                    yr, v, reason = item
+                else:
+                    yr, v = item; reason = None
+                result.append((yr, fmtv(v), reason))
+            return result
         return {
             "label":  label,
             "cur":    cur,
@@ -931,9 +1000,9 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
             "T": T, "higher": higher, "pct": pct,
             "group":  label.split(" ")[0],
-            "hy3":  [(y, fmtv(v)) for y, v in hy3]  if hy3  else [],
-            "hy5":  [(y, fmtv(v)) for y, v in hy5]  if hy5  else [],
-            "hy10": [(y, fmtv(v)) for y, v in hy10] if hy10 else [],
+            "hy3":  conv(hy3),
+            "hy5":  conv(hy5),
+            "hy10": conv(hy10),
         }
 
     PEG_T   = [(0,"ap"),(0.5,"a"),(1,"am"),(1.5,"bp"),(2,"b"),(3,"bm"),(4,"cp"),(5,"c")]
@@ -6185,18 +6254,25 @@ with tab2b:
                         )
                     drill_label = _parent["label"] if _parent else sel
                     # Build yearly breakdown table from hy_vals stored on the row
-                    _hy_vals = row_data.get("hy_vals", []) if row_data else []
+                    # hy_vals: [(year, fmt_val|None, reason|None), ...]
+                    _hy_key   = {"3": "hy3", "5": "hy5", "10": "hy10"}.get(_nyrs, "hy3")
+                    _hy_vals  = row_data.get(_hy_key, []) if row_data else []
                     _hy_comps = []
                     if _hy_vals:
-                        for _yr, _yv in _hy_vals:
-                            _hy_comps.append((f"  {_yr}", str(_yv)))
-                        _sum_vals = [v for _, v in _hy_vals]
-                        _hy_comps.append((f"  → Avg ({len(_hy_vals)}Y)", row_data["fmt"] if row_data else "—"))
+                        _valid_count = 0
+                        for item in _hy_vals:
+                            yr, fv_str, reason = item if len(item) == 3 else (*item, None)
+                            if fv_str is not None:
+                                _hy_comps.append((f"  {yr}", fv_str, None))
+                                _valid_count += 1
+                            else:
+                                _hy_comps.append((f"  {yr}", f"— übersprungen", reason or ""))
+                        _hy_comps.append((f"  → Avg ({_valid_count} gültige Jahre)", row_data["fmt"] if row_data else "—", None))
                     else:
                         _hy_comps = [
-                            (f"{_nyrs}Y Avg Value", row_data["fmt"] if row_data else "—"),
-                            ("── Based on same calculation as ──", ""),
-                            (f"→ See drilldown of: {drill_label}", "↓ below"),
+                            (f"{_nyrs}Y Avg Value", row_data["fmt"] if row_data else "—", None),
+                            ("── Based on same calculation as ──", "", None),
+                            (f"→ See drilldown of: {drill_label}", "↓ below", None),
                         ]
                     dd = {
                         "formula": _method,
@@ -6283,14 +6359,36 @@ with tab2b:
                         'text-transform:uppercase;letter-spacing:.05em;">Rohdaten</div>'
                         '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
                     )
-                    for name, value in dd["components"]:
+                    for comp in dd["components"]:
+                        # support both 2-tuple (name, val) and 3-tuple (name, val, reason)
+                        if len(comp) == 3:
+                            name, value, skip_reason = comp
+                        else:
+                            name, value = comp; skip_reason = None
                         if not name: continue
-                        card += (
-                            f'<tr style="border-bottom:1px solid #1e2535;">'
-                            f'<td style="padding:5px 2px;color:#94a3b8;">{name}</td>'
-                            f'<td style="padding:5px 2px;text-align:right;color:#e2e8f0;'
-                            f'font-weight:600;">{value}</td></tr>'
-                        )
+                        is_skipped = skip_reason is not None
+                        is_avg_row = name.strip().startswith("→")
+                        if is_skipped:
+                            card += (
+                                f'<tr style="border-bottom:1px solid #1e2535;opacity:0.5;">'
+                                f'<td style="padding:5px 2px;color:#64748b;font-style:italic;">{name}</td>'
+                                f'<td style="padding:5px 2px;text-align:right;color:#f59e0b;'
+                                f'font-size:11px;">{value} &nbsp;<span style="color:#64748b;">({skip_reason})</span></td></tr>'
+                            )
+                        elif is_avg_row:
+                            card += (
+                                f'<tr style="border-top:1px solid #3b82f6;background:#0a1628;">'
+                                f'<td style="padding:6px 2px;color:#93c5fd;font-weight:600;">{name}</td>'
+                                f'<td style="padding:6px 2px;text-align:right;color:#60a5fa;'
+                                f'font-weight:700;">{value}</td></tr>'
+                            )
+                        else:
+                            card += (
+                                f'<tr style="border-bottom:1px solid #1e2535;">'
+                                f'<td style="padding:5px 2px;color:#94a3b8;">{name}</td>'
+                                f'<td style="padding:5px 2px;text-align:right;color:#e2e8f0;'
+                                f'font-weight:600;">{value}</td></tr>'
+                            )
                     card += '</table></div>'
                 # Historical averages
                 if row_data:
