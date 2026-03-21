@@ -185,20 +185,38 @@ def expand_rows_with_avgs(rows):
         mk = metric_key(r["label"])
         if group_last.get(mk) == i:
             # Append avg sub-rows once after the last period-variant of this metric
-            for suffix, key in [("3Y Avg","avg3"), ("5Y Avg","avg5"), ("10Y Avg","avg10")]:
-                val = r.get(key, "—")
-                if val not in ("—", None, ""):
-                    expanded.append({
-                        "label":      f"  {suffix}",
-                        "fmt":        val,
-                        "css":        "grade-na",
-                        "lbl":        "—",
-                        "avg3":       "—",
-                        "avg5":       "—",
-                        "avg10":      "—",
-                        "group":      r.get("group", ""),
-                        "is_avg_row": True,
-                    })
+            T       = r.get("T", [])
+            higher  = r.get("higher", True)
+            pct     = r.get("pct", False)
+            for suffix, raw_key, fmt_key in [
+                ("3Y Avg",  "avg3_raw",  "avg3"),
+                ("5Y Avg",  "avg5_raw",  "avg5"),
+                ("10Y Avg", "avg10_raw", "avg10"),
+            ]:
+                raw_val = r.get(raw_key)
+                fmt_val = r.get(fmt_key, "—")
+                if raw_val is None or fmt_val in ("—", None, ""):
+                    continue
+                # Compute grade for this avg value
+                if T:
+                    if higher:
+                        css, lbl = get_grade(raw_val, T)
+                    else:
+                        neg = [(-t, g) for t, g in T]
+                        css, lbl = get_grade(-raw_val, neg)
+                else:
+                    css, lbl = "grade-na", "—"
+                expanded.append({
+                    "label":      f"  {suffix}",
+                    "fmt":        fmt_val,
+                    "css":        css,
+                    "lbl":        lbl,
+                    "avg3":       "—",
+                    "avg5":       "—",
+                    "avg10":      "—",
+                    "group":      r.get("group", ""),
+                    "is_avg_row": True,
+                })
     return expanded
 
 def score_rows_to_excel(rows: list, sheet_name: str = "Score") -> bytes:
@@ -900,8 +918,9 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             "avg3":   fmt(avg3,  pct),
             "avg5":   fmt(avg5,  pct),
             "avg10":  fmt(avg10, pct),
+            "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
+            "T": T, "higher": higher, "pct": pct,
             "group":  label.split(" ")[0],
-            "higher": higher,
         }
 
     PEG_T   = [(0,"ap"),(0.5,"a"),(1,"am"),(1.5,"bp"),(2,"b"),(3,"bm"),(4,"cp"),(5,"c")]
@@ -3687,6 +3706,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
             "label": label, "fmt": f(cur),
             "css": css, "lbl": lbl,
             "avg3": f(avg3), "avg5": f(avg5), "avg10": f(avg10),
+            "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
+            "T": T, "higher": True, "pct": False, "decimals": decimals,
             "group": label.split("/")[0].split(" ")[0],
         }
 
@@ -4098,6 +4119,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             "avg3":  fmt(avg3),
             "avg5":  fmt(avg5),
             "avg10": fmt(avg10),
+            "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
+            "T": T, "higher": True, "pct": False,
             "group": label.split(" ")[0],
         }
 
@@ -4475,6 +4498,8 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
             "avg3":  f(a3  if pct else avg3),
             "avg5":  f(a5  if pct else avg5),
             "avg10": f(a10 if pct else avg10),
+            "avg3_raw": a3, "avg5_raw": a5, "avg10_raw": a10,
+            "T": T, "higher": True, "pct": pct,
             "group": label.split(" ")[0],
         }
 
@@ -5514,9 +5539,9 @@ with tab2b:
                 if is_avg:
                     hdr_html += f'''
                 <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
-                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
-                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
-                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
                   <td colspan="3"></td>
                 </tr>'''
                 else:
@@ -5609,9 +5634,9 @@ with tab2b:
                 if is_avg:
                     tbl += f'''
                 <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
-                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
-                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
-                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
                   <td colspan="3"></td>
                 </tr>'''
                 else:
@@ -5697,13 +5722,13 @@ with tab2b:
                 </tr>
               </thead><tbody>'''
             for r in rows_show:
-                is_avg = r.get("is_avg_row", False)
-                if is_avg:
+                is_cagr = "CAGR" in r["label"]
+                if is_cagr:
                     tbl += f'''
                 <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
-                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
-                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
-                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
                   <td colspan="3"></td>
                 </tr>'''
                 else:
@@ -5796,9 +5821,9 @@ with tab2b:
                 if is_avg:
                     tbl += f'''
                 <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
-                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
-                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
-                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
                   <td colspan="3"></td>
                 </tr>'''
                 else:
@@ -5891,9 +5916,9 @@ with tab2b:
                 if is_avg:
                     tbl += f'''
                 <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
-                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
-                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
-                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>
                   <td colspan="3"></td>
                 </tr>'''
                 else:
