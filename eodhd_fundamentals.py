@@ -716,7 +716,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     _qbs_pb   = sorted(_q_bs_pb.keys(), reverse=True)
     _equity_q_pb = fv(_q_bs_pb[_qbs_pb[0]].get("totalStockholderEquity")) if _qbs_pb else None
     _pb_self  = (mcap / _equity_q_pb) if mcap and _equity_q_pb and _equity_q_pb > 0 else None
-    pb_cur    = fv(val.get("PriceBookMRQ")) or _pb_self
+    _pb_api   = fv(val.get("PriceBookMRQ"))
+    pb_cur    = (_pb_api if _pb_api and _pb_api > 0 else None) or _pb_self
     pb_yr     = (mcap / equity_yr) if mcap and equity_yr and equity_yr > 0 else None
 
     # P/Tangible Book = MCap / (Equity - Goodwill - Intangibles)
@@ -3969,9 +3970,9 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     # Cash Ratio
     cr_q  = safe(cash_q, cl_q)
     cr_a  = safe(cash_a, cl_a)
-    # Debt/Equity
-    de_q  = safe(debt_q, eq_q)
-    de_a  = safe(debt_a, eq_a)
+    # Debt/Equity — undefined/misleading when equity is negative
+    de_q  = safe(debt_q, eq_q) if eq_q and eq_q > 0 else None
+    de_a  = safe(debt_a, eq_a) if eq_a and eq_a > 0 else None
     # NetDebt/Equity — undefined when equity is negative (result would invert sign meaning)
     nde_q = safe(nd_q, eq_q) if eq_q and eq_q > 0 else None
     nde_a = safe(nd_a, eq_a) if eq_a and eq_a > 0 else None
