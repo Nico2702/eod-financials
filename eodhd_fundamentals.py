@@ -6255,8 +6255,7 @@ with tab2b:
                     drill_label = _parent["label"] if _parent else sel
                     # Build yearly breakdown table from hy_vals stored on the row
                     # hy_vals: [(year, fmt_val|None, reason|None), ...]
-                    _hy_key   = {"3": "hy3", "5": "hy5", "10": "hy10"}.get(_nyrs, "hy3")
-                    _hy_vals  = row_data.get(_hy_key, []) if row_data else []
+                    _hy_vals  = row_data.get("hy_vals", []) if row_data else []
                     _hy_comps = []
                     if _hy_vals:
                         _valid_count = 0
