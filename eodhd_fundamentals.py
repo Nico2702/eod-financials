@@ -1022,7 +1022,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     def row(label, cur, avg3, avg5, avg10, T, higher=False, pct=False,
             hy3=None, hy5=None, hy10=None):
         css, lbl = ratio_grade(cur, T, higher_is_better=higher)
-        def fmtv(v): return f"{v:.2f} %" if pct else f"{v:.2f}" if v is not None else None
+        def fmtv(v): return (f"{v:.2f} %" if pct else f"{v:.2f}") if v is not None else None
         def conv(hy):
             # accepts [(y, val, reason)] or [(y, val)] — normalise to 3-tuple
             if not hy: return []
