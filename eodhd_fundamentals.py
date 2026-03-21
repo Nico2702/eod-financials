@@ -4778,15 +4778,15 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     FCF_CAGR_T    = [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
     # Share Count Change: lower = better (dilution negative, buybacks positive)
     # negative = buyback (good), positive = dilution (bad)
-    SC_T      = [(-3,"ap"),(-1,"a"),(0,"am"),(1,"bp"),(2,"b"),(3,"bm"),(5,"cp"),(10,"c")]
-    SC_CAGR_T = [(-3,"ap"),(-1,"a"),(0,"am"),(1,"bp"),(2,"b"),(3,"bm"),(5,"cp"),(10,"c")]
+    SC_T      = [(10,"c"),(5,"cp"),(3,"bm"),(2,"b"),(1,"bp"),(0,"am"),(-1,"a"),(-3,"ap")]
+    SC_CAGR_T = [(10,"c"),(5,"cp"),(3,"bm"),(2,"b"),(1,"bp"),(0,"am"),(-1,"a"),(-3,"ap")]
     # Goodwill Growth: context-dependent, lower is generally safer
-    GW_T      = [(0,"ap"),(3,"a"),(5,"am"),(10,"bp"),(15,"b"),(25,"bm"),(40,"cp")]
-    GW_CAGR_T = [(0,"ap"),(3,"a"),(5,"am"),(10,"bp"),(15,"b"),(25,"bm"),(40,"cp")]
+    GW_T      = [(40,"cp"),(25,"bm"),(15,"b"),(10,"bp"),(5,"am"),(3,"a"),(0,"ap")]
+    GW_CAGR_T = [(40,"cp"),(25,"bm"),(15,"b"),(10,"bp"),(5,"am"),(3,"a"),(0,"ap")]
 
     def fmt(v): return f"{v:.2f} %" if v is not None else "—"
 
-    def row(label, cur, avg3, avg5, avg10, T, hy3=None, hy5=None, hy10=None):
+    def row(label, cur, avg3, avg5, avg10, T, hy3=None, hy5=None, hy10=None, higher=True):
         css, lbl = get_grade(cur, T) if cur is not None else ("grade-na", "—")
         def conv(hy):
             if not hy: return []
@@ -4798,7 +4798,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             "avg5":  fmt(avg5),
             "avg10": fmt(avg10),
             "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
-            "T": T, "higher": True, "pct": False,
+            "T": T, "higher": higher, "pct": False,
             "group": label.split(" ")[0],
             "hy3":  conv(hy3),
             "hy5":  conv(hy5),
@@ -4861,19 +4861,19 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         row("Rule of 40 (TTM)",              ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,   RO40_T, hy3=_hy_ro40_3, hy5=_hy_ro40_5, hy10=_hy_ro40_10),
         row("Rule of 40 (Year)",             ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,   RO40_T, hy3=_hy_ro40_3, hy5=_hy_ro40_5, hy10=_hy_ro40_10),
         # Share Count Change (negative = buyback/good, positive = dilution/bad)
-        row("Share Count Change (Ann)",       sc_gr_ann,    sc_3y,     sc_5y,     sc_10y,     SC_T,   hy3=_hy_sc_3, hy5=_hy_sc_5, hy10=_hy_sc_10),
-        row("Share Count Change (QoQ)",       sc_gr_qoq,    sc_3y,     sc_5y,     sc_10y,     SC_T,   hy3=_hy_sc_3, hy5=_hy_sc_5, hy10=_hy_sc_10),
-        row("Share Count Change (YoY)",       sc_gr_yoy,    sc_3y,     sc_5y,     sc_10y,     SC_T,   hy3=_hy_sc_3, hy5=_hy_sc_5, hy10=_hy_sc_10),
-        row("  ↳ Share Count Change (3Y CAGR)",  sc_cagr_3,    None,      None,      None,       SC_CAGR_T),
-        row("  ↳ Share Count Change (5Y CAGR)",  sc_cagr_5,    None,      None,      None,       SC_CAGR_T),
-        row("  ↳ Share Count Change (10Y CAGR)", sc_cagr_10,   None,      None,      None,       SC_CAGR_T),
+        row("Share Count Change (Ann)",       sc_gr_ann,    sc_3y,     sc_5y,     sc_10y,     SC_T,   hy3=_hy_sc_3, hy5=_hy_sc_5, hy10=_hy_sc_10, higher=False),
+        row("Share Count Change (QoQ)",       sc_gr_qoq,    sc_3y,     sc_5y,     sc_10y,     SC_T,   hy3=_hy_sc_3, hy5=_hy_sc_5, hy10=_hy_sc_10, higher=False),
+        row("Share Count Change (YoY)",       sc_gr_yoy,    sc_3y,     sc_5y,     sc_10y,     SC_T,   hy3=_hy_sc_3, hy5=_hy_sc_5, hy10=_hy_sc_10, higher=False),
+        row("  ↳ Share Count Change (3Y CAGR)",  sc_cagr_3,    None,      None,      None,       SC_CAGR_T, higher=False),
+        row("  ↳ Share Count Change (5Y CAGR)",  sc_cagr_5,    None,      None,      None,       SC_CAGR_T, higher=False),
+        row("  ↳ Share Count Change (10Y CAGR)", sc_cagr_10,   None,      None,      None,       SC_CAGR_T, higher=False),
         # Goodwill Growth
-        row("Goodwill Growth (Ann)",          gw_gr_ann,    gw_3y,     gw_5y,     gw_10y,     GW_T,   hy3=_hy_gw_3, hy5=_hy_gw_5, hy10=_hy_gw_10),
-        row("Goodwill Growth (QoQ)",          gw_gr_qoq,    gw_3y,     gw_5y,     gw_10y,     GW_T,   hy3=_hy_gw_3, hy5=_hy_gw_5, hy10=_hy_gw_10),
-        row("Goodwill Growth (YoY)",          gw_gr_yoy,    gw_3y,     gw_5y,     gw_10y,     GW_T,   hy3=_hy_gw_3, hy5=_hy_gw_5, hy10=_hy_gw_10),
-        row("  ↳ Goodwill Growth (3Y CAGR)",     gw_cagr_3,    None,      None,      None,       GW_CAGR_T),
-        row("  ↳ Goodwill Growth (5Y CAGR)",     gw_cagr_5,    None,      None,      None,       GW_CAGR_T),
-        row("  ↳ Goodwill Growth (10Y CAGR)",    gw_cagr_10,   None,      None,      None,       GW_CAGR_T),
+        row("Goodwill Growth (Ann)",          gw_gr_ann,    gw_3y,     gw_5y,     gw_10y,     GW_T,   hy3=_hy_gw_3, hy5=_hy_gw_5, hy10=_hy_gw_10, higher=False),
+        row("Goodwill Growth (QoQ)",          gw_gr_qoq,    gw_3y,     gw_5y,     gw_10y,     GW_T,   hy3=_hy_gw_3, hy5=_hy_gw_5, hy10=_hy_gw_10, higher=False),
+        row("Goodwill Growth (YoY)",          gw_gr_yoy,    gw_3y,     gw_5y,     gw_10y,     GW_T,   hy3=_hy_gw_3, hy5=_hy_gw_5, hy10=_hy_gw_10, higher=False),
+        row("  ↳ Goodwill Growth (3Y CAGR)",     gw_cagr_3,    None,      None,      None,       GW_CAGR_T, higher=False),
+        row("  ↳ Goodwill Growth (5Y CAGR)",     gw_cagr_5,    None,      None,      None,       GW_CAGR_T, higher=False),
+        row("  ↳ Goodwill Growth (10Y CAGR)",    gw_cagr_10,   None,      None,      None,       GW_CAGR_T, higher=False),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
