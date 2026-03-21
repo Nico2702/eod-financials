@@ -150,36 +150,46 @@ def grade_badge(css_class, label):
 
 def expand_rows_with_avgs(rows):
     """
-    Insert 3Y/5Y/10Y avg sub-rows once per group, after the LAST row of that group.
-    Groups are determined by r["group"]. Rows without avgs are skipped.
+    Insert 3Y/5Y/10Y avg sub-rows once per metric, after the LAST period-variant row.
+    Metric group = label stripped of period suffixes like (TTM), (Year), (Quarterly),
+    (Cur), (Fwd), (Ann), (QoQ), (YoY), (3Y CAGR) etc.
     """
-    # Find last index per group
+    import re as _re
+
+    def metric_key(label):
+        """Strip period/variant suffix to get canonical metric name."""
+        return _re.sub(
+            r"\s*\((Fwd|Cur|TTM|Year|Ann|QoQ|YoY|Quarterly|\d+Y CAGR)\)\s*$",
+            "", label
+        ).strip()
+
+    # Find last index per metric key (only rows that have avgs)
     group_last = {}
     for i, r in enumerate(rows):
-        g = r.get("group", "")
-        avg_pairs = [r.get("avg3","—"), r.get("avg5","—"), r.get("avg10","—")]
-        has_avgs = any(v not in ("—", None, "") for v in avg_pairs)
+        avg_vals = [r.get("avg3","—"), r.get("avg5","—"), r.get("avg10","—")]
+        has_avgs = any(v not in ("—", None, "") for v in avg_vals)
         if has_avgs:
-            group_last[g] = i
+            mk = metric_key(r["label"])
+            group_last[mk] = i
 
     expanded = []
     for i, r in enumerate(rows):
         expanded.append(r)
-        g = r.get("group", "")
-        if group_last.get(g) == i:
-            # Append avg sub-rows once after this last row in the group
+        mk = metric_key(r["label"])
+        if group_last.get(mk) == i:
+            # Append avg sub-rows once after the last period-variant of this metric
             for suffix, key in [("3Y Avg","avg3"), ("5Y Avg","avg5"), ("10Y Avg","avg10")]:
                 val = r.get(key, "—")
                 if val not in ("—", None, ""):
                     expanded.append({
-                        "label":  f"  {suffix}",
-                        "fmt":    val,
-                        "css":    "grade-na",
-                        "lbl":    "—",
-                        "avg3":   "—",
-                        "avg5":   "—",
-                        "avg10":  "—",
-                        "group":  g,
+                        "label":      f"  {suffix}",
+                        "fmt":        val,
+                        "css":        "grade-na",
+                        "lbl":        "—",
+                        "avg3":       "—",
+                        "avg5":       "—",
+                        "avg10":      "—",
+                        "group":      r.get("group", ""),
                         "is_avg_row": True,
                     })
     return expanded
