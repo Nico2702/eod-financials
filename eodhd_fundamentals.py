@@ -4652,7 +4652,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
 
     # ── Rule of 40 (keeps YoY rev growth as per convention) ──────────
     rev_gr_yr = yr_gr(a_is, "totalRevenue")
-    rev_ttm_v = sum(fv(q_is[q].get("totalRevenue")) or 0 for q in sorted(q_is.keys(), reverse=True)[:4])
+    _rev_ttm_v_vals = [fv(q_is[q].get("totalRevenue")) for q in sorted(q_is.keys(), reverse=True)[:4]]
+    rev_ttm_v = sum(_rev_ttm_v_vals) if len(_rev_ttm_v_vals) == 4 and all(v is not None for v in _rev_ttm_v_vals) else None
     fcf_ttm_v = fcf_ttm_sum()
     fcfm_ttm  = fcf_ttm_v / rev_ttm_v * 100 if rev_ttm_v and fcf_ttm_v is not None else None
     ro40_ttm  = (rev_gr_ttm or 0) + (fcfm_ttm or 0) if rev_gr_ttm is not None and fcfm_ttm is not None else None
@@ -5034,7 +5035,12 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     cfo_ttm    = ttm_sum(q_cf, "totalCashFromOperatingActivities")
     capex_ttm  = ttm_sum(q_cf, "capitalExpenditures")
     fcf_ttm_raw= ttm_sum(q_cf, "freeCashFlow")
-    fcf_ttm    = fcf_ttm_raw or (cfo_ttm - abs(capex_ttm) if cfo_ttm and capex_ttm else None)
+    if fcf_ttm_raw is not None:
+        fcf_ttm = fcf_ttm_raw
+    elif cfo_ttm is not None and capex_ttm is not None:
+        fcf_ttm = cfo_ttm - abs(capex_ttm)
+    else:
+        fcf_ttm = None
 
     assets_ttm  = fv(q_bs[qbs_sorted[0]].get("totalAssets"))      if qbs_sorted else None
     equity_ttm  = fv(q_bs[qbs_sorted[0]].get("totalStockholderEquity")) if qbs_sorted else None
@@ -5112,7 +5118,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     _pre_ttm  = ttm_sum(q_is, "incomeBeforeTax")  # correct pretax income field
     _eff_tax_ttm = min(max(_tax_ttm / _pre_ttm, 0), 0.50) if _tax_ttm and _pre_ttm and _pre_ttm > 0 else 0.21
     _nopat_ttm = _ebit_ttm_roic * (1 - _eff_tax_ttm) if _ebit_ttm_roic is not None else None
-    roic_ttm  = safe_div(_nopat_ttm, (equity_ttm or 0) + debt_ttm)
+    roic_ttm  = safe_div(_nopat_ttm, _ic_avg)  # use same avg IC as roc_ttm for consistency
 
     _ebit_yr_roic = fv(a_is[years_is[0]].get("ebit")) if years_is else None
     _tax_yr  = fv(a_is[years_is[0]].get("incomeTaxExpense")) if years_is else None
@@ -5369,7 +5375,8 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     _rev_ttm_p_vals = [fv(q_is[q].get("totalRevenue")) for q in sorted(q_is.keys(), reverse=True)[:4]]
     rev_ttm_p = sum(_rev_ttm_p_vals) if len(_rev_ttm_p_vals) == 4 and all(v is not None for v in _rev_ttm_p_vals) else None
     cfo_ttm   = cfo_ttm_sum()
-    ni_ttm_p  = sum(fv(q_is[q].get("netIncome")) or 0 for q in sorted(q_is.keys(), reverse=True)[:4]) or None
+    _ni_ttm_p_vals = [fv(q_is[q].get("netIncome")) for q in sorted(q_is.keys(), reverse=True)[:4]]
+    ni_ttm_p = sum(_ni_ttm_p_vals) if len(_ni_ttm_p_vals) == 4 and all(v is not None for v in _ni_ttm_p_vals) else None
 
     # Annual (most recent)
     y0_p      = sorted(a_is.keys(), reverse=True)[0] if a_is else None
