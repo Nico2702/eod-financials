@@ -5101,8 +5101,11 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     _debt_q4_roc   = ((fv(q_bs[qbs_sorted_roa[4]].get("longTermDebt")) or 0) +
                       (fv(q_bs[qbs_sorted_roa[4]].get("shortLongTermDebt")) or 0)) if len(qbs_sorted_roa) > 4 else None
     _ic_ttm   = (equity_ttm or 0) + debt_ttm
-    _ic_q4    = (_equity_q4_roc or 0) + (_debt_q4_roc or debt_ttm)
-    _ic_avg   = (_ic_ttm + _ic_q4) / 2 if _ic_q4 else _ic_ttm
+    if _equity_q4_roc is not None and _debt_q4_roc is not None:
+        _ic_q4  = (_equity_q4_roc or 0) + _debt_q4_roc
+        _ic_avg = (_ic_ttm + _ic_q4) / 2
+    else:
+        _ic_avg = _ic_ttm  # fall back to spot IC if Q4 data incomplete
     roc_ttm   = safe_div(ni_ttm, _ic_avg)
     roc_yr    = safe_div(ni_yr,  (equity_yr or 0) + debt_yr)
 
