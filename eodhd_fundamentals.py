@@ -157,7 +157,8 @@ def expand_rows_with_avgs(rows):
     import re as _re
 
     def metric_key(label):
-        """Strip period/variant suffix to get canonical metric name."""
+        """Strip period/variant suffix and ↳ prefix to get canonical metric name."""
+        label = label.strip().lstrip("↳").strip()
         return _re.sub(
             r"\s*\((Fwd|Cur|TTM|Year|Ann|QoQ|YoY|Quarterly|\d+Y CAGR)\)\s*$",
             "", label
@@ -168,21 +169,21 @@ def expand_rows_with_avgs(rows):
     CAGR_KEYWORDS = ("CAGR", "Fwd", "TTM", "Ann", "QoQ", "YoY")
     def is_growth_variant(label):
         """Returns True if label is a period-variant that already has explicit CAGR rows below it."""
-        # Growth metrics: Revenue/Net Income/EPS/EBIT/EBITDA/FCF Growth
         return "Growth" in label and any(k in label for k in CAGR_KEYWORDS)
 
+    # Use (tab, metric_key) as group key so rows from different tabs don't interfere
     group_last = {}
     for i, r in enumerate(rows):
         avg_vals = [r.get("avg3","—"), r.get("avg5","—"), r.get("avg10","—")]
         has_avgs = any(v not in ("—", None, "") for v in avg_vals)
         if has_avgs and not r.get("is_avg_row", False) and not is_growth_variant(r["label"]):
-            mk = metric_key(r["label"])
+            mk = (r.get("tab", ""), metric_key(r["label"]))
             group_last[mk] = i
 
     expanded = []
     for i, r in enumerate(rows):
         expanded.append(r)
-        mk = metric_key(r["label"])
+        mk = (r.get("tab", ""), metric_key(r["label"]))
         if group_last.get(mk) == i:
             # Append avg sub-rows once after the last period-variant of this metric
             T       = r.get("T", [])
