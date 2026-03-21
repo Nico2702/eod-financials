@@ -147,6 +147,37 @@ def get_grade(value, thresholds):
 def grade_badge(css_class, label):
     return f'<span class="grade {css_class}">{label}</span>'
 
+
+def expand_rows_with_avgs(rows):
+    """
+    For each row that has avg3/avg5/avg10 values, insert sub-rows after it.
+    Sub-rows show the historical average as their main value with no grade.
+    """
+    expanded = []
+    for r in rows:
+        expanded.append(r)
+        avg_pairs = [
+            ("3Y Avg", r.get("avg3", "—")),
+            ("5Y Avg", r.get("avg5", "—")),
+            ("10Y Avg", r.get("avg10", "—")),
+        ]
+        has_avgs = any(v not in ("—", None, "") for _, v in avg_pairs)
+        if has_avgs:
+            for suffix, val in avg_pairs:
+                if val not in ("—", None, ""):
+                    expanded.append({
+                        "label":  f"  {suffix}",
+                        "fmt":    val,
+                        "css":    "grade-na",
+                        "lbl":    "—",
+                        "avg3":   "—",
+                        "avg5":   "—",
+                        "avg10":  "—",
+                        "group":  r.get("group", ""),
+                        "is_avg_row": True,
+                    })
+    return expanded
+
 def score_rows_to_excel(rows: list, sheet_name: str = "Score") -> bytes:
     """Convert score tab rows to CSV bytes for download."""
     import io
@@ -5435,6 +5466,7 @@ with tab2b:
             filter_sel = st.selectbox("", groups, key="value_score_filter", label_visibility="collapsed")
 
         rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].startswith(filter_sel)]
+        rows_show = expand_rows_with_avgs(rows_show)
 
         # ── Table + Chart ─────────────────────────────────────────────
         col_table, col_chart = st.columns([1, 1])
@@ -5455,7 +5487,17 @@ with tab2b:
               </thead><tbody>'''
 
             for r in rows_show:
-                hdr_html += f'''
+                is_avg = r.get("is_avg_row", False)
+                if is_avg:
+                    hdr_html += f'''
+                <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
+                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td colspan="3"></td>
+                </tr>'''
+                else:
+                    hdr_html += f'''
                 <tr style="border-bottom:1px solid #1e2535;">
                   <td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>
                   <td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
@@ -5522,6 +5564,7 @@ with tab2b:
             filter_sel = st.selectbox("", groups, key="profit_score_filter", label_visibility="collapsed")
 
         rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].startswith(filter_sel)]
+        rows_show = expand_rows_with_avgs(rows_show)
 
         col_table, col_chart = st.columns([1, 1])
 
@@ -5539,7 +5582,17 @@ with tab2b:
                 </tr>
               </thead><tbody>'''
             for r in rows_show:
-                tbl += f'''
+                is_avg = r.get("is_avg_row", False)
+                if is_avg:
+                    tbl += f'''
+                <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
+                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td colspan="3"></td>
+                </tr>'''
+                else:
+                    tbl += f'''
                 <tr style="border-bottom:1px solid #1e2535;">
                   <td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>
                   <td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
@@ -5604,6 +5657,7 @@ with tab2b:
             filter_sel = st.selectbox("", groups, key="growth_score_filter", label_visibility="collapsed")
 
         rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].startswith(filter_sel)]
+        rows_show = expand_rows_with_avgs(rows_show)
 
         col_table, col_chart = st.columns([1, 1])
 
@@ -5621,7 +5675,17 @@ with tab2b:
                 </tr>
               </thead><tbody>'''
             for r in rows_show:
-                tbl += f'''
+                is_avg = r.get("is_avg_row", False)
+                if is_avg:
+                    tbl += f'''
+                <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
+                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td colspan="3"></td>
+                </tr>'''
+                else:
+                    tbl += f'''
                 <tr style="border-bottom:1px solid #1e2535;">
                   <td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>
                   <td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
@@ -5688,6 +5752,7 @@ with tab2b:
             filter_sel = st.selectbox("", groups, key="health_score_filter", label_visibility="collapsed")
 
         rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].split(" ")[0].split("/")[0] == filter_sel]
+        rows_show = expand_rows_with_avgs(rows_show)
 
         col_table, col_chart = st.columns([1, 1])
 
@@ -5705,7 +5770,17 @@ with tab2b:
                 </tr>
               </thead><tbody>'''
             for r in rows_show:
-                tbl += f'''
+                is_avg = r.get("is_avg_row", False)
+                if is_avg:
+                    tbl += f'''
+                <tr style="border-bottom:1px solid #161d2e;background:#0d1320;">
+                  <td style="padding:3px 4px 3px 18px;color:#4a5568;font-size:11px;font-style:italic;">{r["label"]}</td>
+                  <td style="padding:3px 4px;text-align:right;color:#64748b;font-size:11px;">{r["fmt"]}</td>
+                  <td style="padding:3px 4px;text-align:center;color:#374151;font-size:11px;">—</td>
+                  <td colspan="3"></td>
+                </tr>'''
+                else:
+                    tbl += f'''
                 <tr style="border-bottom:1px solid #1e2535;">
                   <td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>
                   <td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>
@@ -5772,6 +5847,7 @@ with tab2b:
             filter_sel = st.selectbox("", groups, key="quality_score_filter", label_visibility="collapsed")
 
         rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].startswith(filter_sel)]
+        rows_show = expand_rows_with_avgs(rows_show)
 
         col_table, col_charts = st.columns([1, 1])
 
