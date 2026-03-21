@@ -796,7 +796,9 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     pfcf_cur = (mcap / fcf_ttm) if mcap and fcf_ttm and fcf_ttm > 0 else None
     pfcf_yr  = (mcap / fcf_yr)  if mcap and fcf_yr  and fcf_yr  > 0 else None
 
-    ev_rev_cur = fv(val.get("EnterpriseValueRevenue"))
+    # EV/Revenue Cur: self-calculated with TTM revenue preferred over stale API field
+    _ev_rev_calc = (ev / _rev_ttm_ps) if ev and _rev_ttm_ps and _rev_ttm_ps > 0 else None
+    ev_rev_cur = _ev_rev_calc or fv(val.get("EnterpriseValueRevenue"))
     ev_rev_yr  = (ev / rev_yr)    if ev and rev_yr   and rev_yr  > 0 else None
     # EV/EBIT Cur: use TTM EBIT (4Q rolling) for more current picture
     _q_is_ev = data["Financials"]["Income_Statement"].get("quarterly", {})
@@ -5037,7 +5039,12 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     fcf_yr_raw= fv(a_cf[years_is[0]].get("freeCashFlow")) if years_is and years_is[0] in a_cf else None
     cfo_yr    = fv(a_cf[years_is[0]].get("totalCashFromOperatingActivities")) if years_is and years_is[0] in a_cf else None
     capex_yr  = fv(a_cf[years_is[0]].get("capitalExpenditures")) if years_is and years_is[0] in a_cf else None
-    fcf_yr    = fcf_yr_raw or (cfo_yr - abs(capex_yr) if cfo_yr and capex_yr else None)
+    if fcf_yr_raw is not None:
+        fcf_yr = fcf_yr_raw
+    elif cfo_yr is not None and capex_yr is not None:
+        fcf_yr = cfo_yr - abs(capex_yr)
+    else:
+        fcf_yr = None
     assets_yr = yr_bs("totalAssets")
     equity_yr = yr_bs("totalStockholderEquity")
     cur_lia_yr= yr_bs("totalCurrentLiabilities")
@@ -5485,16 +5492,17 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     FCFM_T  = [(25,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-15,"c"),(-30,"cm")]
     AT_T    = [(2,"ap"),(1.5,"a"),(1,"am"),(0.7,"bp"),(0.4,"b"),(0.2,"bm"),(0,"cp")]
     # SBC/Revenue: lower = better (less dilution)
-    SBC_REV_T      = [(0,"ap"),(0.01,"a"),(0.02,"am"),(0.05,"bp"),(0.08,"b"),(0.12,"bm"),(0.2,"cp")]
-    SBC_REV_Ti     = [(0.2,"cp"),(0.12,"bm"),(0.08,"b"),(0.05,"bp"),(0.02,"am"),(0.01,"a"),(0,"ap")]
-    # SBC-adj FCF Margin: higher = better
+    # SBC/Revenue thresholds in % form (row uses pct=True → *100 before grading)
+    SBC_REV_T      = [(0,"ap"),(1,"a"),(2,"am"),(5,"bp"),(8,"b"),(12,"bm"),(20,"cp")]
+    SBC_REV_Ti     = [(20,"cp"),(12,"bm"),(8,"b"),(5,"bp"),(2,"am"),(1,"a"),(0,"ap")]
+    # SBC-adj FCF Margin: higher = better (already in % form)
     SBC_FCFM_T     = [(20,"ap"),(15,"a"),(10,"am"),(5,"bp"),(0,"bm"),(-10,"cp")]
-    # CapEx/Revenue: lower usually = better (less capital intensive), but context-dependent
-    CAPEX_REV_Ti   = [(0.3,"cp"),(0.2,"bm"),(0.15,"b"),(0.1,"bp"),(0.05,"am"),(0.02,"a"),(0,"ap")]
-    CAPEX_REV_T    = [(0,"ap"),(0.02,"a"),(0.05,"am"),(0.1,"bp"),(0.15,"b"),(0.2,"bm"),(0.3,"cp")]
-    # CapEx/OCF: lower = more cash left over
-    CAPEX_OCF_T    = [(0,"ap"),(0.1,"a"),(0.2,"am"),(0.35,"bp"),(0.5,"b"),(0.75,"bm"),(1,"cp")]
-    CAPEX_OCF_Ti   = [(1,"cp"),(0.75,"bm"),(0.5,"b"),(0.35,"bp"),(0.2,"am"),(0.1,"a"),(0,"ap")]
+    # CapEx/Revenue thresholds in % form (pct=True → *100)
+    CAPEX_REV_Ti   = [(30,"cp"),(20,"bm"),(15,"b"),(10,"bp"),(5,"am"),(2,"a"),(0,"ap")]
+    CAPEX_REV_T    = [(0,"ap"),(2,"a"),(5,"am"),(10,"bp"),(15,"b"),(20,"bm"),(30,"cp")]
+    # CapEx/OCF thresholds in % form (pct=True → *100)
+    CAPEX_OCF_T    = [(0,"ap"),(10,"a"),(20,"am"),(35,"bp"),(50,"b"),(75,"bm"),(100,"cp")]
+    CAPEX_OCF_Ti   = [(100,"cp"),(75,"bm"),(50,"b"),(35,"bp"),(20,"am"),(10,"a"),(0,"ap")]
     # FCF Conversion: higher = better (1.0 = perfect conversion)
     FCF_CONV_T     = [(1.2,"ap"),(1.0,"a"),(0.8,"am"),(0.6,"bp"),(0.4,"b"),(0.2,"bm"),(0,"cp")]
 
