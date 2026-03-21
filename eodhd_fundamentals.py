@@ -6013,8 +6013,7 @@ with tab2b:
         qs_all = compute_quality_score(data, hl, price_data)
         all_rows = []
         for tag, sub_rows in [("💎 Value", vs["rows"]), ("📈 Profit", ps["rows"]),
-                               ("🚀 Growth", gs["rows"]), ("🏥 Health",  hs["rows"]),
-                               ("⭐ Quality", qs_all["rows"])]:
+                               ("🚀 Growth", gs["rows"]), ("🏥 Health",  hs["rows"])]:
             for r in sub_rows:
                 all_rows.append({**r, "tab": tag})
 
@@ -6049,7 +6048,7 @@ with tab2b:
         # ── Filters ───────────────────────────────────────────────────
         fcol1, fcol2, fcol3 = st.columns([2, 2, 2])
         with fcol1:
-            tab_filter = st.selectbox("Kategorie", ["All","💎 Value","📈 Profit","🚀 Growth","🏥 Health","⭐ Quality"],
+            tab_filter = st.selectbox("Kategorie", ["All","💎 Value","📈 Profit","🚀 Growth","🏥 Health"],
                                       key="all_tab_filter", label_visibility="collapsed")
         with fcol2:
             grade_filter = st.selectbox("Grade", ["All Grades","A+","A","A-","B+","B","B-","C+","C","C-","D"],
@@ -6067,7 +6066,8 @@ with tab2b:
                        "C-":"grade-cm","D":"grade-d"}
             rows_filtered = [r for r in rows_filtered if r["css"] == css_map.get(grade_filter,"")]
         if search_filter:
-            rows_filtered = [r for r in rows_filtered if search_filter.lower() in r["label"].lower()]
+            rows_filtered = [r for r in rows_filtered
+                             if search_filter.lower() in r["label"].lstrip("↳ ").lower()]
 
         # ── Expand rows with avg/CAGR sub-rows ─────────────────────
         rows_expanded = expand_rows_with_avgs(rows_filtered)
