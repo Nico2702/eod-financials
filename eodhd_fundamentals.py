@@ -691,18 +691,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     _ni_common_yr = fv(a_is[years_is[0]].get("netIncomeApplicableToCommonShares")) if years_is else None
     pe_yr    = (mcap / _ni_common_yr) if mcap and _ni_common_yr and _ni_common_yr > 0 else \
                (mcap / ni_yr)         if mcap and ni_yr          and ni_yr          > 0 else None
-    # P/S (Fwd): estimated as MCap / (Revenue_TTM * (1 + revenueEstimateGrowth))
-    _trends_ps  = data.get("Earnings", {}).get("Trend", {})
-    _p1y_ps     = next((v for v in _trends_ps.values() if v.get("period") == "+1y"), {})
-    _rev_gr_est = fv(_p1y_ps.get("revenueEstimateGrowth"))  # raw decimal e.g. 0.08
-    # P/S Fwd: reuse _rev_ttm_ps (strict 4Q) instead of recalculating with "or 0"
-    if _rev_gr_est is not None and _rev_ttm_ps and _rev_ttm_ps > 0:
-        _fwd_rev = _rev_ttm_ps * (1 + _rev_gr_est)
-        ps_fwd   = (mcap / _fwd_rev) if mcap and _fwd_rev and _fwd_rev > 0 else None
-    else:
-        ps_fwd   = None
-
-    # P/Sales (Cur): PriceSalesTTM → self-calculated mcap/rev_ttm
+    # P/Sales TTM revenue (strict 4Q) — used by both P/S Cur and P/S Fwd
     _q_is_ps   = data["Financials"]["Income_Statement"].get("quarterly", {})
     _qs_ps     = sorted(_q_is_ps.keys(), reverse=True)
     _rev_ttm_ps_vals = [
@@ -711,6 +700,16 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     _rev_ttm_ps = sum(_rev_ttm_ps_vals) if len(_rev_ttm_ps_vals) == 4 and all(v is not None for v in _rev_ttm_ps_vals) else None
     _ps_calc   = (mcap / _rev_ttm_ps) if mcap and _rev_ttm_ps and _rev_ttm_ps > 0 else None
     ps_cur     = fv(val.get("PriceSalesTTM")) or _ps_calc
+
+    # P/S (Fwd): estimated as MCap / (Revenue_TTM * (1 + revenueEstimateGrowth))
+    _trends_ps  = data.get("Earnings", {}).get("Trend", {})
+    _p1y_ps     = next((v for v in _trends_ps.values() if v.get("period") == "+1y"), {})
+    _rev_gr_est = fv(_p1y_ps.get("revenueEstimateGrowth"))  # raw decimal e.g. 0.08
+    if _rev_gr_est is not None and _rev_ttm_ps and _rev_ttm_ps > 0:
+        _fwd_rev = _rev_ttm_ps * (1 + _rev_gr_est)
+        ps_fwd   = (mcap / _fwd_rev) if mcap and _fwd_rev and _fwd_rev > 0 else None
+    else:
+        ps_fwd   = None
     ps_yr      = (mcap / rev_yr)    if mcap and rev_yr and rev_yr > 0 else None
     _q_bs_pb  = data["Financials"]["Balance_Sheet"].get("quarterly", {})
     _qbs_pb   = sorted(_q_bs_pb.keys(), reverse=True)
