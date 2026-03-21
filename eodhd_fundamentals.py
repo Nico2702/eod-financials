@@ -2451,19 +2451,29 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             else:
                 gr = ((v0 / vn) ** (1 / n) - 1) * 100
             fcf_note = "\n⚠ FCF = freeCashFlow; fallback CFO−|CapEx| if null" if is_fcf else ""
+            # Build per-year value table (all n+1 years used in CAGR span)
+            yr_comps = []
+            for i, y in enumerate(ys[:n + 1]):
+                if is_fcf:
+                    yv, _ = get_fcf_a(y)
+                else:
+                    yv = fv(stmt_a[y].get(api_key))
+                label_suffix = "  ← recent" if i == 0 else (f"  ← base ({n}Y ago)" if i == n else "")
+                yr_comps.append((f"  {y[:4]}{label_suffix}", raw(yv)))
             return {
                 "formula": f"(V[{y0}] ÷ V[{yn}])^(1/{n}) − 1  × 100\n= Compound Annual Growth Rate over {n} years{fcf_note}\n⚠ N/A when base year ≤ 0",
                 "fields":  [f"{stmt_lbl}.{api_key} — annual"],
                 "unit": "%",
-                "components": [
-                    (f"{stmt_lbl}.{api_key}  [{y0}]  (V recent)" + (f"  source: {s0}" if is_fcf else ""), raw(v0)),
-                    (f"{stmt_lbl}.{api_key}  [{yn}]  (V base, {n}Y ago)" + (f"  source: {sn}" if is_fcf else ""), raw(vn)),
-                    ("── Calculation ──",                                            ""),
-                    (f"({raw(v0)} ÷ {raw(vn)})^(1/{n}) − 1",  f"{(gr / 100):.6f}" if gr is not None else (gr_note or "—")),
-                    ("× 100",                                                        ""),
-                    ("── Result ──",                                                 ""),
-                    (f"{field_label} Growth ({n}Y CAGR)",  f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
-                ],
+                "components": (
+                    yr_comps +
+                    [
+                        ("── Berechnung ──",                                             ""),
+                        (f"({raw(v0)} ÷ {raw(vn)})^(1/{n}) − 1",  f"{(gr / 100):.6f}" if gr is not None else (gr_note or "—")),
+                        ("× 100",                                                        ""),
+                        ("── Result ──",                                                 ""),
+                        (f"→ {field_label} Growth ({n}Y CAGR)",  f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
+                    ]
+                ),
                 "result": f"{gr:.4f} %" if gr is not None else (gr_note or "—")}
 
         elif "Fwd" in L:
@@ -3665,6 +3675,21 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         valid = [v for v in vals if v is not None]
         return sum(valid)/len(valid) if valid else None
 
+    def hist_hy(fn, n):
+        """Return [(year_str, value_or_None, reason_or_None)] for n years."""
+        result = []
+        for i in range(min(n, len(years_bs))):
+            yr = years_bs[i][:4]
+            v  = fn(i)
+            if v is None:
+                result.append((yr, None, "Wert nicht berechenbar"))
+            else:
+                result.append((yr, v, None))
+        return result
+
+    def h(fn, n):  return hist_avg(fn, n)
+    def hy(fn, n): return hist_hy(fn, n)
+
     def yr_cd(i):
         bs = a_bs.get(years_bs[i], {}); cf = a_cf.get(years_bs[i], {})
         c = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
@@ -3781,9 +3806,17 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     def fmt_r(v, decimals=2):
         return f"{v:.{decimals}f}" if v is not None else "—"
 
-    def row(label, cur, avg3, avg5, avg10, T, invert=False, decimals=2):
+    def row(label, cur, avg3, avg5, avg10, T, invert=False, decimals=2,
+            hy3=None, hy5=None, hy10=None):
         css, lbl = get_grade(cur, T) if cur is not None else ("grade-na", "—")
         f = lambda v: fmt_r(v, decimals) if v is not None else "—"
+        def conv(hy):
+            if not hy: return []
+            result = []
+            for item in hy:
+                yr, v, reason = item if len(item) == 3 else (*item, None)
+                result.append((yr, f(v) if v is not None else None, reason))
+            return result
         return {
             "label": label, "fmt": f(cur),
             "css": css, "lbl": lbl,
@@ -3791,43 +3824,46 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
             "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
             "T": T, "higher": True, "pct": False, "decimals": decimals,
             "group": label.split("/")[0].split(" ")[0],
+            "hy3":  conv(hy3),
+            "hy5":  conv(hy5),
+            "hy10": conv(hy10),
         }
 
     rows = [
-        row("Cash/Debt (Quarterly)",      cd_q,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T),
-        row("Cash/Debt (Year)",           cd_a,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T),
-        row("Debt/Capital (Quarterly)",   dc_q,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T),
-        row("Debt/Capital (Year)",        dc_a,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T),
-        row("FCF/Debt (Quarterly)",       fd_q,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T),
-        row("FCF/Debt (Year)",            fd_a,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T),
-        row("Interest Coverage (TTM)",    ic_ttm,      h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T),
-        row("Interest Coverage (Year)",   ic_a,        h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T),
-        row("Cash Ratio (Quarterly)",     cr_q,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T),
-        row("Cash Ratio (Year)",          cr_a,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T),
-        row("Debt/Equity (Quarterly)",    de_q,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T),
-        row("Debt/Equity (Year)",         de_a,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T),
-        row("NetDebt/Equity (Quarterly)", nde_q,       h(yr_nde,3),   h(yr_nde,5),   h(yr_nde,10),   NDEi_T),
-        row("NetDebt/Equity (Year)",      nde_a,       h(yr_nde,3),   h(yr_nde,5),   h(yr_nde,10),   NDEi_T),
-        row("Equity/Assets (Quarterly)",  ea_q,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T),
-        row("Equity/Assets (Year)",       ea_a,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T),
-        row("Debt/Asset (Quarterly)",     da_q,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T),
-        row("Debt/Asset (Year)",          da_a,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T),
-        row("NetDebt/Asset (Quarterly)",  nda_q,       h(yr_nda,3),   h(yr_nda,5),   h(yr_nda,10),   NDEi_T),
-        row("NetDebt/Asset (Year)",       nda_a,       h(yr_nda,3),   h(yr_nda,5),   h(yr_nda,10),   NDEi_T),
-        row("Debt/EBIT (TTM)",            debit_ttm,   h(yr_debit,3), h(yr_debit,5), h(yr_debit,10), DEBITi_T),
-        row("Debt/EBIT (Year)",           debit_a,     h(yr_debit,3), h(yr_debit,5), h(yr_debit,10), DEBITi_T),
-        row("NetDebt/EBIT (TTM)",         ndebit_ttm,  h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T),
-        row("NetDebt/EBIT (Year)",        ndebit_a,    h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T),
-        row("Debt/EBITDA (TTM)",          debitda_ttm, h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T),
-        row("Debt/EBITDA (Year)",         debitda_a,   h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T),
-        row("NetDebt/EBITDA (TTM)",       ndebitda_ttm,h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T),
-        row("NetDebt/EBITDA (Year)",      ndebitda_a,  h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T),
-        row("Current Ratio (Quarterly)",  cur_q,       h(yr_cur,3),   h(yr_cur,5),   h(yr_cur,10),   CURR_T),
-        row("Current Ratio (Year)",       cur_a,       h(yr_cur,3),   h(yr_cur,5),   h(yr_cur,10),   CURR_T),
-        row("Quick Ratio (Quarterly)",    qr_q,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T),
-        row("Quick Ratio (Year)",         qr_a,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T),
-        row("Altman Z-Score (Cur)",       az_cur,      h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
-        row("Altman Z-Score (Year)",      az_a,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
+        row("Cash/Debt (Quarterly)",      cd_q,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T, hy3=hy(yr_cd,3), hy5=hy(yr_cd,5), hy10=hy(yr_cd,10)),
+        row("Cash/Debt (Year)",           cd_a,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T, hy3=hy(yr_cd,3), hy5=hy(yr_cd,5), hy10=hy(yr_cd,10)),
+        row("Debt/Capital (Quarterly)",   dc_q,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T, hy3=hy(yr_dc,3), hy5=hy(yr_dc,5), hy10=hy(yr_dc,10)),
+        row("Debt/Capital (Year)",        dc_a,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T, hy3=hy(yr_dc,3), hy5=hy(yr_dc,5), hy10=hy(yr_dc,10)),
+        row("FCF/Debt (Quarterly)",       fd_q,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T, hy3=hy(yr_fd,3), hy5=hy(yr_fd,5), hy10=hy(yr_fd,10)),
+        row("FCF/Debt (Year)",            fd_a,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T, hy3=hy(yr_fd,3), hy5=hy(yr_fd,5), hy10=hy(yr_fd,10)),
+        row("Interest Coverage (TTM)",    ic_ttm,      h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T, hy3=hy(yr_ic,3), hy5=hy(yr_ic,5), hy10=hy(yr_ic,10)),
+        row("Interest Coverage (Year)",   ic_a,        h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T, hy3=hy(yr_ic,3), hy5=hy(yr_ic,5), hy10=hy(yr_ic,10)),
+        row("Cash Ratio (Quarterly)",     cr_q,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T, hy3=hy(yr_cr,3), hy5=hy(yr_cr,5), hy10=hy(yr_cr,10)),
+        row("Cash Ratio (Year)",          cr_a,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T, hy3=hy(yr_cr,3), hy5=hy(yr_cr,5), hy10=hy(yr_cr,10)),
+        row("Debt/Equity (Quarterly)",    de_q,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T, hy3=hy(yr_de,3), hy5=hy(yr_de,5), hy10=hy(yr_de,10)),
+        row("Debt/Equity (Year)",         de_a,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T, hy3=hy(yr_de,3), hy5=hy(yr_de,5), hy10=hy(yr_de,10)),
+        row("NetDebt/Equity (Quarterly)", nde_q,       h(yr_nde,3),    h(yr_nde,5),    h(yr_nde,10),   NDEi_T, hy3=hy(yr_nde,3), hy5=hy(yr_nde,5), hy10=hy(yr_nde,10)),
+        row("NetDebt/Equity (Year)",      nde_a,       h(yr_nde,3),    h(yr_nde,5),    h(yr_nde,10),   NDEi_T, hy3=hy(yr_nde,3), hy5=hy(yr_nde,5), hy10=hy(yr_nde,10)),
+        row("Equity/Assets (Quarterly)",  ea_q,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T, hy3=hy(yr_ea,3), hy5=hy(yr_ea,5), hy10=hy(yr_ea,10)),
+        row("Equity/Assets (Year)",       ea_a,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T, hy3=hy(yr_ea,3), hy5=hy(yr_ea,5), hy10=hy(yr_ea,10)),
+        row("Debt/Asset (Quarterly)",     da_q,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T, hy3=hy(yr_da,3), hy5=hy(yr_da,5), hy10=hy(yr_da,10)),
+        row("Debt/Asset (Year)",          da_a,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T, hy3=hy(yr_da,3), hy5=hy(yr_da,5), hy10=hy(yr_da,10)),
+        row("NetDebt/Asset (Quarterly)",  nda_q,       h(yr_nda,3),    h(yr_nda,5),    h(yr_nda,10),   NDEi_T, hy3=hy(yr_nda,3), hy5=hy(yr_nda,5), hy10=hy(yr_nda,10)),
+        row("NetDebt/Asset (Year)",       nda_a,       h(yr_nda,3),    h(yr_nda,5),    h(yr_nda,10),   NDEi_T, hy3=hy(yr_nda,3), hy5=hy(yr_nda,5), hy10=hy(yr_nda,10)),
+        row("Debt/EBIT (TTM)",            debit_ttm,   h(yr_debit,3),    h(yr_debit,5),    h(yr_debit,10), DEBITi_T, hy3=hy(yr_debit,3), hy5=hy(yr_debit,5), hy10=hy(yr_debit,10)),
+        row("Debt/EBIT (Year)",           debit_a,     h(yr_debit,3),    h(yr_debit,5),    h(yr_debit,10), DEBITi_T, hy3=hy(yr_debit,3), hy5=hy(yr_debit,5), hy10=hy(yr_debit,10)),
+        row("NetDebt/EBIT (TTM)",         ndebit_ttm,  h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T, hy3=hy(yr_ndebit,3), hy5=hy(yr_ndebit,5), hy10=hy(yr_ndebit,10)),
+        row("NetDebt/EBIT (Year)",        ndebit_a,    h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T, hy3=hy(yr_ndebit,3), hy5=hy(yr_ndebit,5), hy10=hy(yr_ndebit,10)),
+        row("Debt/EBITDA (TTM)",          debitda_ttm, h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T, hy3=hy(yr_debitda,3), hy5=hy(yr_debitda,5), hy10=hy(yr_debitda,10)),
+        row("Debt/EBITDA (Year)",         debitda_a,   h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T, hy3=hy(yr_debitda,3), hy5=hy(yr_debitda,5), hy10=hy(yr_debitda,10)),
+        row("NetDebt/EBITDA (TTM)",       ndebitda_ttm,h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T, hy3=hy(yr_ndebitda,3), hy5=hy(yr_ndebitda,5), hy10=hy(yr_ndebitda,10)),
+        row("NetDebt/EBITDA (Year)",      ndebitda_a,  h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T, hy3=hy(yr_ndebitda,3), hy5=hy(yr_ndebitda,5), hy10=hy(yr_ndebitda,10)),
+        row("Current Ratio (Quarterly)",  cur_q,       h(yr_cur,3),    h(yr_cur,5),    h(yr_cur,10),   CURR_T, hy3=hy(yr_cur,3), hy5=hy(yr_cur,5), hy10=hy(yr_cur,10)),
+        row("Current Ratio (Year)",       cur_a,       h(yr_cur,3),    h(yr_cur,5),    h(yr_cur,10),   CURR_T, hy3=hy(yr_cur,3), hy5=hy(yr_cur,5), hy10=hy(yr_cur,10)),
+        row("Quick Ratio (Quarterly)",    qr_q,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T, hy3=hy(yr_qr,3), hy5=hy(yr_qr,5), hy10=hy(yr_qr,10)),
+        row("Quick Ratio (Year)",         qr_a,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T, hy3=hy(yr_qr,3), hy5=hy(yr_qr,5), hy10=hy(yr_qr,10)),
+        row("Altman Z-Score (Cur)",       az_cur,      h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T, hy3=hy(yr_az,3), hy5=hy(yr_az,5), hy10=hy(yr_az,10)),
+        row("Altman Z-Score (Year)",      az_a,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T, hy3=hy(yr_az,3), hy5=hy(yr_az,5), hy10=hy(yr_az,10)),
     ]
 
     def yr_pf(i):
@@ -3838,8 +3874,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return piotroski(is_d, cf_d, bs_d, bs_p)
 
     rows += [
-        row("Piotroski F-Score (Cur)",  pf_cur, h(yr_pf,3), h(yr_pf,5), h(yr_pf,10), PF_T, decimals=0),
-        row("Piotroski F-Score (Year)", pf_a,   h(yr_pf,3), h(yr_pf,5), h(yr_pf,10), PF_T, decimals=0),
+        row("Piotroski F-Score (Cur)",  pf_cur, h(yr_pf,3),    h(yr_pf,5),    h(yr_pf,10), PF_T, decimals=0, hy3=hy(yr_pf,3), hy5=hy(yr_pf,5), hy10=hy(yr_pf,10)),
+        row("Piotroski F-Score (Year)", pf_a,   h(yr_pf,3),    h(yr_pf,5),    h(yr_pf,10), PF_T, decimals=0, hy3=hy(yr_pf,3), hy5=hy(yr_pf,5), hy10=hy(yr_pf,10)),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
@@ -4162,17 +4198,28 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
 
     def ro40_hist(n):
         ys = sorted(a_is.keys(), reverse=True)
-        vals = []
+        vals, all_yr = [], []
         for i in range(min(n, len(ys) - 1)):
+            yr = ys[i][:4]
             r0 = fv(a_is[ys[i]].get("totalRevenue"))
             r1 = fv(a_is[ys[i+1]].get("totalRevenue"))
-            rg = (r0/r1 - 1)*100 if r0 and r1 and r1 > 0 else None
+            if not r0 or not r1 or r1 <= 0:
+                all_yr.append((yr, None, "Revenue fehlt/0")); continue
+            rg = (r0/r1 - 1)*100
             fc = fcf_yr(ys[i])
-            fm = fc/r0*100 if fc is not None and r0 and r0 > 0 else None
-            if rg is not None and fm is not None: vals.append(rg + fm)
-        return sum(vals)/len(vals) if vals else None
+            if fc is None:
+                all_yr.append((yr, None, "FCF fehlt")); continue
+            fm = fc/r0*100 if r0 > 0 else None
+            if fm is None:
+                all_yr.append((yr, None, "FCF Margin nicht berechenbar")); continue
+            v = rg + fm
+            vals.append(v); all_yr.append((yr, v, None))
+        avg = sum(vals)/len(vals) if vals else None
+        return avg, all_yr
 
-    ro40_3y = ro40_hist(3); ro40_5y = ro40_hist(5); ro40_10y = ro40_hist(10)
+    ro40_3y,  _hy_ro40_3  = ro40_hist(3)
+    ro40_5y,  _hy_ro40_5  = ro40_hist(5)
+    ro40_10y, _hy_ro40_10 = ro40_hist(10)
 
     # ── Grade thresholds ─────────────────────────────────────────────
     # Single-period (Fwd, TTM): higher expected volatility
@@ -4259,8 +4306,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         row("  ↳ FCF Growth (5Y CAGR)",          fcf_5y,        None,      None,      None,       FCF_CAGR_T),
         row("  ↳ FCF Growth (10Y CAGR)",         fcf_10y,       None,      None,      None,       FCF_CAGR_T),
         # Rule of 40
-        row("Rule of 40 (TTM)",              ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
-        row("Rule of 40 (Year)",             ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
+        row("Rule of 40 (TTM)",              ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,   RO40_T, hy3=_hy_ro40_3, hy5=_hy_ro40_5, hy10=_hy_ro40_10),
+        row("Rule of 40 (Year)",             ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,   RO40_T, hy3=_hy_ro40_3, hy5=_hy_ro40_5, hy10=_hy_ro40_10),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
