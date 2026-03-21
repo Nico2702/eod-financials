@@ -5239,7 +5239,18 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     capex_ttm_p = abs(sum(fv(q_cf[q].get("capitalExpenditures")) or 0
                          for q in sorted(q_cf.keys(), reverse=True)[:4])) or None
     capex_yr0_p = abs(fv(a_cf.get(y0_p, {}).get("capitalExpenditures")) or 0) if y0_p else None
-    fcf_ttm_p   = fcf_ttm_sum()
+    def _fcf_ttm_sum_p():
+        qs = sorted(q_cf.keys(), reverse=True)
+        vals = []
+        for q in qs[:4]:
+            f = fv(q_cf[q].get("freeCashFlow"))
+            if f is None:
+                cfo_  = fv(q_cf[q].get("totalCashFromOperatingActivities"))
+                capex_= fv(q_cf[q].get("capitalExpenditures"))
+                f = cfo_ - abs(capex_) if cfo_ and capex_ else None
+            if f is not None: vals.append(f)
+        return sum(vals) if len(vals) == 4 else None
+    fcf_ttm_p   = _fcf_ttm_sum_p()
 
     def safe(a, b): return a/b if a is not None and b and b != 0 else None
 
