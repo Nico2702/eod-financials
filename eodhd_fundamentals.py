@@ -5657,7 +5657,6 @@ with tab2b:
             filter_sel = st.selectbox("", groups, key="growth_score_filter", label_visibility="collapsed")
 
         rows_show = rows_all if filter_sel == "All Values" else [r for r in rows_all if r["label"].startswith(filter_sel)]
-        rows_show = expand_rows_with_avgs(rows_show)
 
         col_table, col_chart = st.columns([1, 1])
 
