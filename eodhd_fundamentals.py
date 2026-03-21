@@ -889,12 +889,13 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             shs    = fv(a_bs.get(y_cur, {}).get("commonStockSharesOutstanding"))
             if not price or not shs: continue
             pe_y = price * shs / ni_c if ni_c > 0 else None
-            if pe_y: vals.append(pe_y / gr)
-        return sum(vals) / len(vals) if vals else None
+            if pe_y: vals.append((y_cur[:4], pe_y / gr))
+        avg = sum(v for _, v in vals) / len(vals) if vals else None
+        return avg, vals
 
-    peg_3y  = peg_hist_avg(3)
-    peg_5y  = peg_hist_avg(5)
-    peg_10y = peg_hist_avg(10)
+    peg_3y,  _hy_peg_3  = peg_hist_avg(3)
+    peg_5y,  _hy_peg_5  = peg_hist_avg(5)
+    peg_10y, _hy_peg_10 = peg_hist_avg(10)
 
     # ── Grade thresholds ─────────────────────────────────────────────
     PE_T    = [(0,"ap"),(10,"a"),(15,"am"),(20,"bp"),(25,"b"),(30,"bm"),(40,"cp"),(50,"c")]
@@ -949,8 +950,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         row("P/FCF (Cur)",           pfcf_cur,       pfcf_3y,       pfcf_5y,       pfcf_10y,       PFCF_T, hy3=_hy_pfcf_3, hy5=_hy_pfcf_5, hy10=_hy_pfcf_10),
         row("P/FCF (Year)",          pfcf_yr,        pfcf_3y,       pfcf_5y,       pfcf_10y,       PFCF_T, hy3=_hy_pfcf_3, hy5=_hy_pfcf_5, hy10=_hy_pfcf_10),
         row("PEG Ratio (Fwd)",       peg_fwd,        peg_3y,        peg_5y,        peg_10y,        PEG_T),
-        row("PEG Ratio (Cur)",       peg_cur,        peg_3y,        peg_5y,        peg_10y,        PEG_T),
-        row("PEG Ratio (Year)",      peg_yr,         peg_3y,        peg_5y,        peg_10y,        PEG_T),
+        row("PEG Ratio (Cur)",       peg_cur,        peg_3y,        peg_5y,        peg_10y,        PEG_T, hy3=_hy_peg_3, hy5=_hy_peg_5, hy10=_hy_peg_10),
+        row("PEG Ratio (Year)",      peg_yr,         peg_3y,        peg_5y,        peg_10y,        PEG_T, hy3=_hy_peg_3, hy5=_hy_peg_5, hy10=_hy_peg_10),
         row("EV/Revenue (Cur)",      ev_rev_cur,     ev_rev_3y,     ev_rev_5y,     ev_rev_10y,     EVR_T,   hy3=_hy_evr_3,  hy5=_hy_evr_5,  hy10=_hy_evr_10),
         row("EV/Revenue (Year)",     ev_rev_yr,      ev_rev_3y,     ev_rev_5y,     ev_rev_10y,     EVR_T,   hy3=_hy_evr_3,  hy5=_hy_evr_5,  hy10=_hy_evr_10),
         row("EV/EBIT (Cur)",         ev_ebit_cur,    ev_ebit_3y,    ev_ebit_5y,    ev_ebit_10y,    EVEBIT_T, hy3=_hy_eveb_3, hy5=_hy_eveb_5, hy10=_hy_eveb_10),
