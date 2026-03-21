@@ -190,10 +190,10 @@ def expand_rows_with_avgs(rows):
             higher  = r.get("higher", True)
             pct     = r.get("pct", False)
             base_label = metric_key(r["label"])  # e.g. "P/Earnings", "Gross Margin"
-            for suffix, raw_key, fmt_key in [
-                ("3Y Avg",  "avg3_raw",  "avg3"),
-                ("5Y Avg",  "avg5_raw",  "avg5"),
-                ("10Y Avg", "avg10_raw", "avg10"),
+            for suffix, raw_key, fmt_key, hy_key in [
+                ("3Y Avg",  "avg3_raw",  "avg3",  "hy3"),
+                ("5Y Avg",  "avg5_raw",  "avg5",  "hy5"),
+                ("10Y Avg", "avg10_raw", "avg10", "hy10"),
             ]:
                 raw_val = r.get(raw_key)
                 fmt_val = r.get(fmt_key, "—")
@@ -219,6 +219,8 @@ def expand_rows_with_avgs(rows):
                     "group":      r.get("group", ""),
                     "tab":        r.get("tab", ""),
                     "is_avg_row": True,
+                    "hy_vals":    r.get(hy_key, []),   # [(year, fmt_val), ...]
+                    "hy_n":       suffix,               # "3Y Avg" / "5Y Avg" / "10Y Avg"
                 })
     return expanded
 
@@ -783,7 +785,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     # ── Historical averages using real year-end prices ────────────────
     # price_data: {YYYY: adjusted_close} — last trading day of each year
     def hist_multiple(statement, key, n, use_ev=False, invert_fcf=False):
-        """Return n-year average multiple using real year-end prices."""
+        """Return (avg, [(year, val)]) using real year-end prices."""
         years = sorted(statement.keys(), reverse=True)
         vals = []
         for y in years[:n]:
@@ -793,7 +795,6 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             if price is None or not fund or fund <= 0:
                 continue
             if use_ev:
-                # For EV multiples: approximate EV per year as price * shares + debt - cash
                 bs_y   = data["Financials"]["Balance_Sheet"]["yearly"].get(y, {})
                 ltd    = fv(bs_y.get("longTermDebt")) or 0
                 std    = fv(bs_y.get("shortLongTermDebt")) or 0
@@ -801,13 +802,14 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
                 shs    = fv(bs_y.get("commonStockSharesOutstanding"))
                 if not shs: continue
                 ev_y   = price * shs + ltd + std - csh
-                vals.append(ev_y / fund)
+                vals.append((y[:4], ev_y / fund))
             else:
                 shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
                 if not shs: continue
                 mcap_y = price * shs
-                vals.append(mcap_y / fund)
-        return sum(vals) / len(vals) if vals else None
+                vals.append((y[:4], mcap_y / fund))
+        avg = sum(v for _, v in vals) / len(vals) if vals else None
+        return avg, vals
 
     def fcf_hist_real(n):
         years = sorted(a_cf.keys(), reverse=True)
@@ -823,8 +825,9 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             if price is None or not f or f <= 0: continue
             shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
             if not shs: continue
-            vals.append(price * shs / f)
-        return sum(vals) / len(vals) if vals else None
+            vals.append((y[:4], price * shs / f))
+        avg = sum(v for _, v in vals) / len(vals) if vals else None
+        return avg, vals
 
     def yield_hist_real(statement, key, n):
         years = sorted(statement.keys(), reverse=True)
@@ -837,36 +840,37 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
             if not shs: continue
             mcap_y = price * shs
-            if mcap_y > 0: vals.append(fund / mcap_y * 100)
-        return sum(vals) / len(vals) if vals else None
+            if mcap_y > 0: vals.append((y[:4], fund / mcap_y * 100))
+        avg = sum(v for _, v in vals) / len(vals) if vals else None
+        return avg, vals
 
-    pe_3y   = hist_multiple(a_is, "netIncome",             3)
-    pe_5y   = hist_multiple(a_is, "netIncome",             5)
-    pe_10y  = hist_multiple(a_is, "netIncome",            10)
-    ps_3y   = hist_multiple(a_is, "totalRevenue",          3)
-    ps_5y   = hist_multiple(a_is, "totalRevenue",          5)
-    ps_10y  = hist_multiple(a_is, "totalRevenue",         10)
-    pb_3y   = hist_multiple(a_bs, "totalStockholderEquity",3)
-    pb_5y   = hist_multiple(a_bs, "totalStockholderEquity",5)
-    pb_10y  = hist_multiple(a_bs, "totalStockholderEquity",10)
-    pfcf_3y = fcf_hist_real(3)
-    pfcf_5y = fcf_hist_real(5)
-    pfcf_10y= fcf_hist_real(10)
-    ev_rev_3y   = hist_multiple(a_is, "totalRevenue", 3,  use_ev=True)
-    ev_rev_5y   = hist_multiple(a_is, "totalRevenue", 5,  use_ev=True)
-    ev_rev_10y  = hist_multiple(a_is, "totalRevenue", 10, use_ev=True)
-    ev_ebit_3y  = hist_multiple(a_is, "ebit",         3,  use_ev=True)
-    ev_ebit_5y  = hist_multiple(a_is, "ebit",         5,  use_ev=True)
-    ev_ebit_10y = hist_multiple(a_is, "ebit",         10, use_ev=True)
-    ev_ebitda_3y = hist_multiple(a_is, "ebitda",      3,  use_ev=True)
-    ev_ebitda_5y = hist_multiple(a_is, "ebitda",      5,  use_ev=True)
-    ev_ebitda_10y= hist_multiple(a_is, "ebitda",      10, use_ev=True)
-    earn_yield_3y = yield_hist_real(a_is, "netIncome",    3)
-    earn_yield_5y = yield_hist_real(a_is, "netIncome",    5)
-    earn_yield_10y= yield_hist_real(a_is, "netIncome",   10)
-    fcf_yield_3y  = yield_hist_real(a_cf, "freeCashFlow", 3)
-    fcf_yield_5y  = yield_hist_real(a_cf, "freeCashFlow", 5)
-    fcf_yield_10y = yield_hist_real(a_cf, "freeCashFlow",10)
+    pe_3y,   _hy_pe_3   = hist_multiple(a_is, "netIncome",             3)
+    pe_5y,   _hy_pe_5   = hist_multiple(a_is, "netIncome",             5)
+    pe_10y,  _hy_pe_10  = hist_multiple(a_is, "netIncome",            10)
+    ps_3y,   _hy_ps_3   = hist_multiple(a_is, "totalRevenue",          3)
+    ps_5y,   _hy_ps_5   = hist_multiple(a_is, "totalRevenue",          5)
+    ps_10y,  _hy_ps_10  = hist_multiple(a_is, "totalRevenue",         10)
+    pb_3y,   _hy_pb_3   = hist_multiple(a_bs, "totalStockholderEquity",3)
+    pb_5y,   _hy_pb_5   = hist_multiple(a_bs, "totalStockholderEquity",5)
+    pb_10y,  _hy_pb_10  = hist_multiple(a_bs, "totalStockholderEquity",10)
+    pfcf_3y, _hy_pfcf_3 = fcf_hist_real(3)
+    pfcf_5y, _hy_pfcf_5 = fcf_hist_real(5)
+    pfcf_10y,_hy_pfcf_10= fcf_hist_real(10)
+    ev_rev_3y,  _hy_evr_3   = hist_multiple(a_is, "totalRevenue", 3,  use_ev=True)
+    ev_rev_5y,  _hy_evr_5   = hist_multiple(a_is, "totalRevenue", 5,  use_ev=True)
+    ev_rev_10y, _hy_evr_10  = hist_multiple(a_is, "totalRevenue", 10, use_ev=True)
+    ev_ebit_3y, _hy_eveb_3  = hist_multiple(a_is, "ebit",         3,  use_ev=True)
+    ev_ebit_5y, _hy_eveb_5  = hist_multiple(a_is, "ebit",         5,  use_ev=True)
+    ev_ebit_10y,_hy_eveb_10 = hist_multiple(a_is, "ebit",         10, use_ev=True)
+    ev_ebitda_3y, _hy_evda_3  = hist_multiple(a_is, "ebitda",      3,  use_ev=True)
+    ev_ebitda_5y, _hy_evda_5  = hist_multiple(a_is, "ebitda",      5,  use_ev=True)
+    ev_ebitda_10y,_hy_evda_10 = hist_multiple(a_is, "ebitda",      10, use_ev=True)
+    earn_yield_3y, _hy_ey_3  = yield_hist_real(a_is, "netIncome",    3)
+    earn_yield_5y, _hy_ey_5  = yield_hist_real(a_is, "netIncome",    5)
+    earn_yield_10y,_hy_ey_10 = yield_hist_real(a_is, "netIncome",   10)
+    fcf_yield_3y,  _hy_fy_3  = yield_hist_real(a_cf, "freeCashFlow", 3)
+    fcf_yield_5y,  _hy_fy_5  = yield_hist_real(a_cf, "freeCashFlow", 5)
+    fcf_yield_10y, _hy_fy_10 = yield_hist_real(a_cf, "freeCashFlow",10)
 
     # PEG historical averages: avg(P/E_year / EPS_growth_year) per rolling window
     def peg_hist_avg(n):
@@ -910,8 +914,10 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
     # ── Build rows ───────────────────────────────────────────────────
     # Each row: (label, cur_val, cur_fmt, grade_css, grade_lbl, avg3y, avg5y, avg10y, thresholds, higher)
-    def row(label, cur, avg3, avg5, avg10, T, higher=False, pct=False):
+    def row(label, cur, avg3, avg5, avg10, T, higher=False, pct=False,
+            hy3=None, hy5=None, hy10=None):
         css, lbl = ratio_grade(cur, T, higher_is_better=higher)
+        def fmtv(v): return f"{v:.2f} %" if pct else f"{v:.2f}" if v is not None else "—"
         return {
             "label":  label,
             "cur":    cur,
@@ -924,34 +930,37 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
             "T": T, "higher": higher, "pct": pct,
             "group":  label.split(" ")[0],
+            "hy3":  [(y, fmtv(v)) for y, v in hy3]  if hy3  else [],
+            "hy5":  [(y, fmtv(v)) for y, v in hy5]  if hy5  else [],
+            "hy10": [(y, fmtv(v)) for y, v in hy10] if hy10 else [],
         }
 
     PEG_T   = [(0,"ap"),(0.5,"a"),(1,"am"),(1.5,"bp"),(2,"b"),(3,"bm"),(4,"cp"),(5,"c")]
 
     rows = [
-        row("P/Earnings (Fwd)",      pe_fwd,         None,         None,         None,          PE_T),
-        row("P/Earnings (Cur)",      pe_cur,         pe_3y,        pe_5y,        pe_10y,        PE_T),
-        row("P/Earnings (Year)",     pe_yr,          pe_3y,        pe_5y,        pe_10y,        PE_T),
-        row("P/Sales (Fwd)",         ps_fwd,         None,         None,         None,          PS_T),
-        row("P/Sales (Cur)",         ps_cur,         ps_3y,        ps_5y,        ps_10y,        PS_T),
-        row("P/Sales (Year)",        ps_yr,          ps_3y,        ps_5y,        ps_10y,        PS_T),
-        row("P/Book (Cur)",          pb_cur,         pb_3y,        pb_5y,        pb_10y,        PB_T),
-        row("P/Book (Year)",         pb_yr,          pb_3y,        pb_5y,        pb_10y,        PB_T),
-        row("P/FCF (Cur)",           pfcf_cur,       pfcf_3y,      pfcf_5y,      pfcf_10y,      PFCF_T),
-        row("P/FCF (Year)",          pfcf_yr,        pfcf_3y,      pfcf_5y,      pfcf_10y,      PFCF_T),
-        row("PEG Ratio (Fwd)",       peg_fwd,        peg_3y,       peg_5y,       peg_10y,       PEG_T),
-        row("PEG Ratio (Cur)",       peg_cur,        peg_3y,       peg_5y,       peg_10y,       PEG_T),
-        row("PEG Ratio (Year)",      peg_yr,         peg_3y,       peg_5y,       peg_10y,       PEG_T),
-        row("EV/Revenue (Cur)",      ev_rev_cur,     ev_rev_3y,    ev_rev_5y,    ev_rev_10y,    EVR_T),
-        row("EV/Revenue (Year)",     ev_rev_yr,      ev_rev_3y,    ev_rev_5y,    ev_rev_10y,    EVR_T),
-        row("EV/EBIT (Cur)",         ev_ebit_cur,    ev_ebit_3y,   ev_ebit_5y,   ev_ebit_10y,   EVEBIT_T),
-        row("EV/EBIT (Year)",        ev_ebit_yr,     ev_ebit_3y,   ev_ebit_5y,   ev_ebit_10y,   EVEBIT_T),
-        row("EV/EBITDA (Cur)",       ev_ebitda_cur,  ev_ebitda_3y, ev_ebitda_5y, ev_ebitda_10y, EVEBDA_T),
-        row("EV/EBITDA (Year)",      ev_ebitda_yr,   ev_ebitda_3y, ev_ebitda_5y, ev_ebitda_10y, EVEBDA_T),
-        row("Earnings Yield (Cur)",  earn_yield_cur, earn_yield_3y,earn_yield_5y,earn_yield_10y, EY_T,   higher=True, pct=True),
-        row("Earnings Yield (Year)", earn_yield_yr,  earn_yield_3y,earn_yield_5y,earn_yield_10y, EY_T,   higher=True, pct=True),
-        row("FCF Yield (TTM)",       fcf_yield_ttm,  fcf_yield_3y, fcf_yield_5y, fcf_yield_10y,  FCFY_T, higher=True, pct=True),
-        row("FCF Yield (Year)",      fcf_yield_yr,   fcf_yield_3y, fcf_yield_5y, fcf_yield_10y,  FCFY_T, higher=True, pct=True),
+        row("P/Earnings (Fwd)",      pe_fwd,         None,          None,          None,           PE_T),
+        row("P/Earnings (Cur)",      pe_cur,         pe_3y,         pe_5y,         pe_10y,         PE_T,  hy3=_hy_pe_3,   hy5=_hy_pe_5,   hy10=_hy_pe_10),
+        row("P/Earnings (Year)",     pe_yr,          pe_3y,         pe_5y,         pe_10y,         PE_T,  hy3=_hy_pe_3,   hy5=_hy_pe_5,   hy10=_hy_pe_10),
+        row("P/Sales (Fwd)",         ps_fwd,         None,          None,          None,           PS_T),
+        row("P/Sales (Cur)",         ps_cur,         ps_3y,         ps_5y,         ps_10y,         PS_T,  hy3=_hy_ps_3,   hy5=_hy_ps_5,   hy10=_hy_ps_10),
+        row("P/Sales (Year)",        ps_yr,          ps_3y,         ps_5y,         ps_10y,         PS_T,  hy3=_hy_ps_3,   hy5=_hy_ps_5,   hy10=_hy_ps_10),
+        row("P/Book (Cur)",          pb_cur,         pb_3y,         pb_5y,         pb_10y,         PB_T,  hy3=_hy_pb_3,   hy5=_hy_pb_5,   hy10=_hy_pb_10),
+        row("P/Book (Year)",         pb_yr,          pb_3y,         pb_5y,         pb_10y,         PB_T,  hy3=_hy_pb_3,   hy5=_hy_pb_5,   hy10=_hy_pb_10),
+        row("P/FCF (Cur)",           pfcf_cur,       pfcf_3y,       pfcf_5y,       pfcf_10y,       PFCF_T, hy3=_hy_pfcf_3, hy5=_hy_pfcf_5, hy10=_hy_pfcf_10),
+        row("P/FCF (Year)",          pfcf_yr,        pfcf_3y,       pfcf_5y,       pfcf_10y,       PFCF_T, hy3=_hy_pfcf_3, hy5=_hy_pfcf_5, hy10=_hy_pfcf_10),
+        row("PEG Ratio (Fwd)",       peg_fwd,        peg_3y,        peg_5y,        peg_10y,        PEG_T),
+        row("PEG Ratio (Cur)",       peg_cur,        peg_3y,        peg_5y,        peg_10y,        PEG_T),
+        row("PEG Ratio (Year)",      peg_yr,         peg_3y,        peg_5y,        peg_10y,        PEG_T),
+        row("EV/Revenue (Cur)",      ev_rev_cur,     ev_rev_3y,     ev_rev_5y,     ev_rev_10y,     EVR_T,   hy3=_hy_evr_3,  hy5=_hy_evr_5,  hy10=_hy_evr_10),
+        row("EV/Revenue (Year)",     ev_rev_yr,      ev_rev_3y,     ev_rev_5y,     ev_rev_10y,     EVR_T,   hy3=_hy_evr_3,  hy5=_hy_evr_5,  hy10=_hy_evr_10),
+        row("EV/EBIT (Cur)",         ev_ebit_cur,    ev_ebit_3y,    ev_ebit_5y,    ev_ebit_10y,    EVEBIT_T, hy3=_hy_eveb_3, hy5=_hy_eveb_5, hy10=_hy_eveb_10),
+        row("EV/EBIT (Year)",        ev_ebit_yr,     ev_ebit_3y,    ev_ebit_5y,    ev_ebit_10y,    EVEBIT_T, hy3=_hy_eveb_3, hy5=_hy_eveb_5, hy10=_hy_eveb_10),
+        row("EV/EBITDA (Cur)",       ev_ebitda_cur,  ev_ebitda_3y,  ev_ebitda_5y,  ev_ebitda_10y,  EVEBDA_T, hy3=_hy_evda_3, hy5=_hy_evda_5, hy10=_hy_evda_10),
+        row("EV/EBITDA (Year)",      ev_ebitda_yr,   ev_ebitda_3y,  ev_ebitda_5y,  ev_ebitda_10y,  EVEBDA_T, hy3=_hy_evda_3, hy5=_hy_evda_5, hy10=_hy_evda_10),
+        row("Earnings Yield (Cur)",  earn_yield_cur, earn_yield_3y, earn_yield_5y, earn_yield_10y, EY_T,   higher=True, pct=True, hy3=_hy_ey_3, hy5=_hy_ey_5, hy10=_hy_ey_10),
+        row("Earnings Yield (Year)", earn_yield_yr,  earn_yield_3y, earn_yield_5y, earn_yield_10y, EY_T,   higher=True, pct=True, hy3=_hy_ey_3, hy5=_hy_ey_5, hy10=_hy_ey_10),
+        row("FCF Yield (TTM)",       fcf_yield_ttm,  fcf_yield_3y,  fcf_yield_5y,  fcf_yield_10y,  FCFY_T, higher=True, pct=True, hy3=_hy_fy_3, hy5=_hy_fy_5, hy10=_hy_fy_10),
+        row("FCF Yield (Year)",      fcf_yield_yr,   fcf_yield_3y,  fcf_yield_5y,  fcf_yield_10y,  FCFY_T, higher=True, pct=True, hy3=_hy_fy_3, hy5=_hy_fy_5, hy10=_hy_fy_10),
     ]
 
     # ── Overall Score ────────────────────────────────────────────────
@@ -6174,16 +6183,26 @@ with tab2b:
                             f"Then: sum(values) / {_nyrs}"
                         )
                     drill_label = _parent["label"] if _parent else sel
+                    # Build yearly breakdown table from hy_vals stored on the row
+                    _hy_vals = row_data.get("hy_vals", []) if row_data else []
+                    _hy_comps = []
+                    if _hy_vals:
+                        for _yr, _yv in _hy_vals:
+                            _hy_comps.append((f"  {_yr}", str(_yv)))
+                        _sum_vals = [v for _, v in _hy_vals]
+                        _hy_comps.append((f"  → Avg ({len(_hy_vals)}Y)", row_data["fmt"] if row_data else "—"))
+                    else:
+                        _hy_comps = [
+                            (f"{_nyrs}Y Avg Value", row_data["fmt"] if row_data else "—"),
+                            ("── Based on same calculation as ──", ""),
+                            (f"→ See drilldown of: {drill_label}", "↓ below"),
+                        ]
                     dd = {
                         "formula": _method,
                         "fields":  [f"Same fields as: {drill_label}",
                                     "ℹ Historical year-end prices from Finqube DB (for value multiples)"],
                         "unit":    "",
-                        "components": [
-                            (f"{_nyrs}Y Avg Value", row_data["fmt"] if row_data else "—"),
-                            ("── Based on same calculation as ──", ""),
-                            (f"→ See drilldown of: {drill_label}", "↓ below"),
-                        ],
+                        "components": _hy_comps,
                         "result": row_data["fmt"] if row_data else "—",
                         "_show_parent_dd": True,
                         "_parent_label":   drill_label,
