@@ -6092,8 +6092,21 @@ with tab2b:
             } for r in rows_expanded])
 
             if rows_expanded:
+                # Row-level styling: AVG/CAGR rows get a dimmed background
+                _is_sub = [
+                    r.get("is_avg_row", False) or "CAGR" in r["label"]
+                    for r in rows_expanded
+                ]
+                def _style_rows(row):
+                    idx = row.name
+                    if idx < len(_is_sub) and _is_sub[idx]:
+                        return ["background-color: #0d1320; color: #4b5563; font-style: italic; font-size: 11px"] * len(row)
+                    return [""] * len(row)
+
+                styled_df = df_all.style.apply(_style_rows, axis=1)
+
                 sel_event = st.dataframe(
-                    df_all,
+                    styled_df,
                     use_container_width=True,
                     hide_index=True,
                     height=600,
