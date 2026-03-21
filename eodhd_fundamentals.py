@@ -169,7 +169,16 @@ def expand_rows_with_avgs(rows):
     CAGR_KEYWORDS = ("CAGR", "Fwd", "TTM", "Ann", "QoQ", "YoY")
     def is_growth_variant(label):
         """Returns True if label is a period-variant that already has explicit CAGR rows below it."""
-        return "Growth" in label and any(k in label for k in CAGR_KEYWORDS)
+        has_cagr_kw = any(k in label for k in CAGR_KEYWORDS)
+        # Standard growth metrics with CAGR sub-rows
+        if "Growth" in label and has_cagr_kw:
+            return True
+        # Share Count Change and Goodwill Growth also have CAGR sub-rows
+        if "Share Count Change" in label and has_cagr_kw:
+            return True
+        if "Goodwill Growth" in label and has_cagr_kw:
+            return True
+        return False
 
     # Use (tab, metric_key) as group key so rows from different tabs don't interfere
     group_last = {}
@@ -731,9 +740,18 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         ptbv_yr = None
 
     def ptbv_hist_multiple(n):
-        """P/TBV historical: MCap(year-end) / TBV(year)"""
+        """P/TBV historical: starts with current (MCap/TBV_Q), then year-end values"""
         ys = sorted(_a_bs_ptbv.keys(), reverse=True)
         vals, all_yr = [], []
+        # First entry: current P/TBV using live MCap and latest quarterly TBV
+        if ptbv_cur is not None and _tbv_q > 0:
+            all_yr.append(("aktuell", ptbv_cur, None))
+            vals.append(("aktuell", ptbv_cur))
+        elif _tbv_q <= 0:
+            all_yr.append(("aktuell", None, f"TBV ≤ 0 ({_tbv_q:,.0f})"))
+        else:
+            all_yr.append(("aktuell", None, "MCap fehlt"))
+        # Historical year-end entries
         for y in ys[:n]:
             yr_str = y[:4]
             price  = price_data.get(yr_str)
@@ -751,7 +769,9 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
                 all_yr.append((yr_str, None, f"TBV ≤ 0 ({tbv:,.0f})")); continue
             mult = price * shs / tbv
             vals.append((yr_str, mult)); all_yr.append((yr_str, mult, None))
-        avg = sum(v for _, v in vals) / len(vals) if vals else None
+        # Avg only from historical year-end values (exclude "aktuell")
+        hist_vals = [v for yr, v in vals if yr != "aktuell"]
+        avg = sum(hist_vals) / len(hist_vals) if hist_vals else None
         return avg, all_yr
 
     ptbv_3y,  _hy_ptbv_3  = ptbv_hist_multiple(3)
@@ -2888,11 +2908,18 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             if n and len(ys_bs) >= n+1:
                 v0 = get_sc_a(ys_bs[0]); vn = get_sc_a(ys_bs[n])
                 gr = ((v0/vn)**(1/n)-1)*100 if v0 and vn and vn>0 else None
-                yr_comps = [(f"  {ys_bs[i][:4]}", raw(get_sc_a(ys_bs[i]))) for i in range(n+1)]
-                return {"formula": f"(Shares[{ys_bs[0][:4]}] ÷ Shares[{ys_bs[n][:4]}])^(1/{n}) − 1 × 100",
+                yr_comps = []
+                for i in range(n+1):
+                    val_i = get_sc_a(ys_bs[i])
+                    yr_comps.append((f"  {ys_bs[i][:4]}  (Shares)", raw(val_i)))
+                    if i < n:
+                        val_next = get_sc_a(ys_bs[i+1])
+                        yoy = (val_i/val_next-1)*100 if val_i and val_next and val_next>0 else None
+                        yr_comps.append((f"    → YoY Change {ys_bs[i+1][:4]}→{ys_bs[i][:4]}", f"{yoy:.2f} %" if yoy is not None else "—"))
+                return {"formula": f"(Shares[{ys_bs[0][:4]}] ÷ Shares[{ys_bs[n][:4]}])^(1/{n}) − 1 × 100\n< 0 = Buyback (gut), > 0 = Verwässerung",
                         "fields": [f"Balance_Sheet.{key_sc} — annual"],
                         "unit": "%",
-                        "components": yr_comps + [("── Berechnung ──",""), (f"({raw(v0)} ÷ {raw(vn)})^(1/{n})−1", f"{gr:.4f} %" if gr is not None else "—")],
+                        "components": yr_comps + [("── CAGR Berechnung ──",""), (f"({raw(v0)} ÷ {raw(vn)})^(1/{n})−1", f"{gr:.4f} %" if gr is not None else "—")],
                         "result": f"{gr:.4f} %" if gr is not None else "—"}
         return UNKNOWN
 
@@ -2933,10 +2960,17 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             if n and len(ys_gw)>=n+1:
                 v0=get_gw_a(ys_gw[0]); vn=get_gw_a(ys_gw[n])
                 gr=((v0/vn)**(1/n)-1)*100 if v0 and vn and vn>0 else None
-                yr_comps=[(f"  {ys_gw[i][:4]}",raw(get_gw_a(ys_gw[i]))) for i in range(n+1)]
-                return {"formula":f"(GW[{ys_gw[0][:4]}] ÷ GW[{ys_gw[n][:4]}])^(1/{n}) − 1 × 100",
+                yr_comps = []
+                for i in range(n+1):
+                    val_i = get_gw_a(ys_gw[i])
+                    yr_comps.append((f"  {ys_gw[i][:4]}  (Goodwill)", raw(val_i)))
+                    if i < n:
+                        val_next = get_gw_a(ys_gw[i+1])
+                        yoy = (val_i/val_next-1)*100 if val_i and val_next and val_next>0 else None
+                        yr_comps.append((f"    → YoY Change {ys_gw[i+1][:4]}→{ys_gw[i][:4]}", f"{yoy:.2f} %" if yoy is not None else "—"))
+                return {"formula":f"(GW[{ys_gw[0][:4]}] ÷ GW[{ys_gw[n][:4]}])^(1/{n}) − 1 × 100\nHohe CAGR = aggressiver M&A-Käufer",
                         "fields":["Balance_Sheet.goodWill — annual"],"unit":"%",
-                        "components":yr_comps+[("── Berechnung ──",""),(f"({raw(v0)} ÷ {raw(vn)})^(1/{n})−1",f"{gr:.4f} %" if gr is not None else "—")],
+                        "components":yr_comps+[("── CAGR Berechnung ──",""),(f"({raw(v0)} ÷ {raw(vn)})^(1/{n})−1",f"{gr:.4f} %" if gr is not None else "—")],
                         "result":f"{gr:.4f} %" if gr is not None else "—"}
         return UNKNOWN
 
