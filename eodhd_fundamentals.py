@@ -580,17 +580,20 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
     # ── Current Ratios ───────────────────────────────────────────────
     pe_fwd   = fv(val.get("ForwardPE"))
-    # P/E (Cur): TrailingPE → PERatio → self-calculated mcap/NI_TTM
+    # P/E (Cur): MCap/NI_common_TTM → MCap/NI_TTM → TrailingPE → PERatio
     _q_is_pe  = data["Financials"]["Income_Statement"].get("quarterly", {})
     _qs_pe    = sorted(_q_is_pe.keys(), reverse=True)
-    _ni_ttm_pe_vals = [
-        fv(_q_is_pe[q].get("netIncomeApplicableToCommonShares")) or fv(_q_is_pe[q].get("netIncome"))
-        for q in _qs_pe[:4]
-    ]
-    _ni_ttm_pe = sum(_ni_ttm_pe_vals) if len(_ni_ttm_pe_vals) == 4 and all(v is not None for v in _ni_ttm_pe_vals) else None
-    _pe_self   = (mcap / _ni_ttm_pe) if mcap and _ni_ttm_pe and _ni_ttm_pe > 0 else None
-    pe_cur   = _pe_self or fv(val.get("TrailingPE")) or fv(hl.get("PERatio"))
-    pe_yr    = (mcap / ni_yr)     if mcap and ni_yr  and ni_yr  > 0 else None
+    _nicom_pe = [fv(_q_is_pe[q].get("netIncomeApplicableToCommonShares")) for q in _qs_pe[:4]]
+    _ni_pe    = [fv(_q_is_pe[q].get("netIncome")) for q in _qs_pe[:4]]
+    _ni_common_ttm = sum(_nicom_pe) if len(_nicom_pe)==4 and all(v is not None for v in _nicom_pe) else None
+    _ni_ttm_pe     = sum(_ni_pe)    if len(_ni_pe)==4    and all(v is not None for v in _ni_pe)    else None
+    _pe_common = (mcap / _ni_common_ttm) if mcap and _ni_common_ttm and _ni_common_ttm > 0 else None
+    _pe_ni     = (mcap / _ni_ttm_pe)     if mcap and _ni_ttm_pe     and _ni_ttm_pe     > 0 else None
+    pe_cur   = _pe_common or _pe_ni or fv(val.get("TrailingPE")) or fv(hl.get("PERatio"))
+    # P/E (Year): MCap/NI_common_Year → MCap/NI_Year (no API fallback)
+    _ni_common_yr = fv(a_is[years_is[0]].get("netIncomeApplicableToCommonShares")) if years_is else None
+    pe_yr    = (mcap / _ni_common_yr) if mcap and _ni_common_yr and _ni_common_yr > 0 else \
+               (mcap / ni_yr)         if mcap and ni_yr          and ni_yr          > 0 else None
     ps_fwd   = None  # EODHD doesn't provide forward P/S
     # P/Sales (Cur): PriceSalesTTM → self-calculated mcap/rev_ttm
     _q_is_ps   = data["Financials"]["Income_Statement"].get("quarterly", {})
@@ -1117,43 +1120,64 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         pe  = safe(mcap, ni)
 
         if "Cur" in L:
-            # P/E (Cur): prefer Valuation.TrailingPE -> Highlights.PERatio -> self-calc mcap/NI_TTM
-            trailing = fv(val.get("TrailingPE"))
-            pe_ratio = fv(hl.get("PERatio"))
-            pe_cur_used = pe or trailing or pe_ratio
-            if pe:
-                source_label = "self-calculated: MarketCap / NI_TTM  (primary)"
-                source_val   = pe
+            # P/E (Cur): MCap/NI_common_TTM → MCap/NI_TTM → TrailingPE → PERatio
+            _q_is_dd    = data["Financials"]["Income_Statement"].get("quarterly", {})
+            _qs_dd      = sorted(_q_is_dd.keys(), reverse=True)
+            _nicom_dd   = [fv(_q_is_dd[q].get("netIncomeApplicableToCommonShares")) for q in _qs_dd[:4]]
+            _ni_dd      = [fv(_q_is_dd[q].get("netIncome")) for q in _qs_dd[:4]]
+            ni_common_ttm_dd = sum(_nicom_dd) if len(_nicom_dd)==4 and all(v is not None for v in _nicom_dd) else None
+            ni_ttm_dd        = sum(_ni_dd)    if len(_ni_dd)==4    and all(v is not None for v in _ni_dd)    else None
+            trailing    = fv(val.get("TrailingPE"))
+            pe_ratio    = fv(hl.get("PERatio"))
+            pe_common   = (mcap / ni_common_ttm_dd) if mcap and ni_common_ttm_dd and ni_common_ttm_dd > 0 else None
+            pe_ni_ttm   = (mcap / ni_ttm_dd)        if mcap and ni_ttm_dd        and ni_ttm_dd        > 0 else None
+            pe_cur_used = pe_common or pe_ni_ttm or trailing or pe_ratio
+            if pe_common:
+                source_label = "MCap / NI_common_TTM  (primary)"
+                source_val   = pe_common
+            elif pe_ni_ttm:
+                source_label = "MCap / NI_TTM  (fallback 1 — NI_common not available)"
+                source_val   = pe_ni_ttm
             elif trailing:
-                source_label = "Valuation.TrailingPE  (fallback 1 - NI TTM not available)"
+                source_label = "Valuation.TrailingPE  (fallback 2 — TTM NI not available)"
                 source_val   = trailing
             elif pe_ratio:
-                source_label = "Highlights.PERatio  (fallback 2 - TrailingPE also missing)"
+                source_label = "Highlights.PERatio  (fallback 3)"
                 source_val   = pe_ratio
             else:
                 source_label = "— (no data available)"
                 source_val   = None
-            ni_comps_cur = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome")
             return {
-                "formula": "Primary: MarketCap / NI_TTM (self-calculated)\nFallback 1: Valuation.TrailingPE\nFallback 2: Highlights.PERatio",
-                "fields":  ["Valuation.TrailingPE", "Highlights.PERatio",
-                            "Highlights.MarketCapitalization",
-                            "Income_Statement.netIncome (quarterly TTM - fallback only)",
+                "formula": (
+                    "MCap / netIncomeApplicableToCommonShares_TTM  [primary]\n"
+                    "MCap / netIncome_TTM                          [fallback 1]\n"
+                    "Valuation.TrailingPE                          [fallback 2]\n"
+                    "Highlights.PERatio                            [fallback 3]"
+                ),
+                "fields":  ["Highlights.MarketCapitalization",
+                            "Income_Statement.netIncomeApplicableToCommonShares (quarterly TTM — primary)",
+                            "Income_Statement.netIncome (quarterly TTM — fallback 1)",
+                            "Valuation.TrailingPE (fallback 2)",
+                            "Highlights.PERatio (fallback 3)",
                             "ℹ Market Cap / Price sourced from Finqube DB"],
                 "unit": "x",
                 "components": [
-                    ("Valuation.TrailingPE",          num(trailing, 4) if trailing else "- (not available)"),
-                    ("Highlights.PERatio",             num(pe_ratio, 4) if pe_ratio else "- (not available)"),
-                    ("-- Source used --",              ""),
-                    (source_label,                     num(source_val, 4) + " x"),
-                    ("-- Self-calc cross-check --",    ""),
+                    ("── Self-Calculated ──",              ""),
                     ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
-                    *ni_comps_cur,
-                    (f"MarketCap / NI_TTM  =  {raw(mcap)} / {raw(ni)}",  num(pe, 4) + " x"),
-                    ("-- Result --",                   ""),
-                    ("P/E (Cur)",                      num(pe_cur_used, 4) + " x"),
+                    ("NI_common_TTM  [netIncomeApplicableToCommonShares]", raw(ni_common_ttm_dd) if ni_common_ttm_dd else "— (not available)"),
+                    ("MCap / NI_common_TTM",           num(pe_common, 4) + " x" if pe_common else "—"),
+                    ("NI_TTM  [netIncome]",            raw(ni_ttm_dd) if ni_ttm_dd else "— (not available)"),
+                    ("MCap / NI_TTM",                  num(pe_ni_ttm, 4) + " x" if pe_ni_ttm else "—"),
+                    ("── API Values ──",                  ""),
+                    ("Valuation.TrailingPE",           num(trailing, 4) if trailing else "— (not available)"),
+                    ("Highlights.PERatio",             num(pe_ratio, 4) if pe_ratio else "— (not available)"),
+                    ("── Source used ──",                 ""),
+                    (source_label,                     num(source_val, 4) + " x" if source_val else "—"),
+                    ("── Result ──",                      ""),
+                    ("P/E (Cur)",                      num(pe_cur_used, 4) + " x" if pe_cur_used else "—"),
                 ],
-                "result": num(pe_cur_used, 2)}
+                "result": num(pe_cur_used, 2) if pe_cur_used else "—"}
+
 
         ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
