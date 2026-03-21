@@ -5226,7 +5226,15 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     rev_yr0_p = fv(a_is[y0_p].get("totalRevenue")) if y0_p else None
     cfo_yr0   = fv(a_cf.get(y0_p, {}).get("totalCashFromOperatingActivities")) if y0_p else None
     ni_yr0_p  = fv(a_is[y0_p].get("netIncome")) if y0_p else None
-    fcf_yr0_p = fcf_yr(y0_p) if y0_p else None
+    def _fcf_yr_p(y):
+        d = a_cf.get(y, {})
+        f = fv(d.get("freeCashFlow"))
+        if f is None:
+            cfo_  = fv(d.get("totalCashFromOperatingActivities"))
+            capex_= fv(d.get("capitalExpenditures"))
+            f = cfo_ - abs(capex_) if cfo_ and capex_ else None
+        return f
+    fcf_yr0_p = _fcf_yr_p(y0_p) if y0_p else None
 
     capex_ttm_p = abs(sum(fv(q_cf[q].get("capitalExpenditures")) or 0
                          for q in sorted(q_cf.keys(), reverse=True)[:4])) or None
@@ -5278,7 +5286,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         vals, all_yr = [], []
         for y in ys[:n]:
             yr = y[:4]
-            s = sbc_yr(y); fc = fcf_yr(y); r = fv(a_is[y].get("totalRevenue"))
+            s = sbc_yr(y); fc = _fcf_yr_p(y); r = fv(a_is[y].get("totalRevenue"))
             if s is None: all_yr.append((yr, None, "SBC fehlt")); continue
             if fc is None: all_yr.append((yr, None, "FCF fehlt")); continue
             if not r or r == 0: all_yr.append((yr, None, "Revenue fehlt")); continue
@@ -5317,7 +5325,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         vals, all_yr = [], []
         for y in ys[:n]:
             yr = y[:4]
-            fc = fcf_yr(y); ni = fv(a_is[y].get("netIncome"))
+            fc = _fcf_yr_p(y); ni = fv(a_is[y].get("netIncome"))
             if fc is None: all_yr.append((yr, None, "FCF fehlt")); continue
             if not ni or ni == 0: all_yr.append((yr, None, "NI fehlt/0")); continue
             v = fc/ni; vals.append(v); all_yr.append((yr, v, None))
