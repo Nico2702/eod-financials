@@ -208,7 +208,7 @@ def expand_rows_with_avgs(rows):
                 else:
                     css, lbl = "grade-na", "—"
                 expanded.append({
-                    "label":      f"  {base_label} ({suffix})",
+                    "label":      f"  ↳ {base_label} ({suffix})",
                     "fmt":        fmt_val,
                     "css":        css,
                     "lbl":        lbl,
@@ -4132,51 +4132,51 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         row("Revenue Growth (Ann)",          rev_gr_ann,    rev_3y,    rev_5y,    rev_10y,    REV_T),
         row("Revenue Growth (QoQ)",          rev_gr_qoq,    rev_3y,    rev_5y,    rev_10y,    REV_T),
         row("Revenue Growth (YoY)",          rev_gr_yoq,    rev_3y,    rev_5y,    rev_10y,    REV_T),
-        row("Revenue Growth (3Y CAGR)",      rev_3y,        None,      None,      None,       REV_CAGR_T),
-        row("Revenue Growth (5Y CAGR)",      rev_5y,        None,      None,      None,       REV_CAGR_T),
-        row("Revenue Growth (10Y CAGR)",     rev_10y,       None,      None,      None,       REV_CAGR_T),
+        row("  ↳ Revenue Growth (3Y CAGR)",      rev_3y,        None,      None,      None,       REV_CAGR_T),
+        row("  ↳ Revenue Growth (5Y CAGR)",      rev_5y,        None,      None,      None,       REV_CAGR_T),
+        row("  ↳ Revenue Growth (10Y CAGR)",     rev_10y,       None,      None,      None,       REV_CAGR_T),
         # Net Income
         row("Net Income Growth (Fwd)",       ni_gr_fwd,     ni_3y,     ni_5y,     ni_10y,     NI_T),
         row("Net Income Growth (TTM)",       ni_gr_ttm,     ni_3y,     ni_5y,     ni_10y,     NI_T),
         row("Net Income Growth (Ann)",       ni_gr_ann,     ni_3y,     ni_5y,     ni_10y,     NI_T),
         row("Net Income Growth (QoQ)",       ni_gr_qoq,     ni_3y,     ni_5y,     ni_10y,     NI_T),
         row("Net Income Growth (YoY)",       ni_gr_yoq,     ni_3y,     ni_5y,     ni_10y,     NI_T),
-        row("Net Income Growth (3Y CAGR)",   ni_3y,         None,      None,      None,       NI_CAGR_T),
-        row("Net Income Growth (5Y CAGR)",   ni_5y,         None,      None,      None,       NI_CAGR_T),
-        row("Net Income Growth (10Y CAGR)",  ni_10y,        None,      None,      None,       NI_CAGR_T),
+        row("  ↳ Net Income Growth (3Y CAGR)",   ni_3y,         None,      None,      None,       NI_CAGR_T),
+        row("  ↳ Net Income Growth (5Y CAGR)",   ni_5y,         None,      None,      None,       NI_CAGR_T),
+        row("  ↳ Net Income Growth (10Y CAGR)",  ni_10y,        None,      None,      None,       NI_CAGR_T),
         # EPS
         row("EPS Growth (Fwd)",              eps_gr_fwd,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
         row("EPS Growth (TTM)",              eps_gr_ttm,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
         row("EPS Growth (Ann)",              eps_gr_ann,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
         row("EPS Growth (QoQ)",              eps_gr_qoq,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
         row("EPS Growth (YoY)",              eps_gr_yoq,    eps_3y,    eps_5y,    eps_10y,    EPS_T),
-        row("EPS Growth (3Y CAGR)",          eps_3y,        None,      None,      None,       EPS_CAGR_T),
-        row("EPS Growth (5Y CAGR)",          eps_5y,        None,      None,      None,       EPS_CAGR_T),
-        row("EPS Growth (10Y CAGR)",         eps_10y,       None,      None,      None,       EPS_CAGR_T),
+        row("  ↳ EPS Growth (3Y CAGR)",          eps_3y,        None,      None,      None,       EPS_CAGR_T),
+        row("  ↳ EPS Growth (5Y CAGR)",          eps_5y,        None,      None,      None,       EPS_CAGR_T),
+        row("  ↳ EPS Growth (10Y CAGR)",         eps_10y,       None,      None,      None,       EPS_CAGR_T),
         # EBIT
         row("EBIT Growth (TTM)",             ebit_gr_ttm,   ebit_3y,   ebit_5y,   ebit_10y,   EBIT_T),
         row("EBIT Growth (Ann)",             ebit_gr_ann,   ebit_3y,   ebit_5y,   ebit_10y,   EBIT_T),
         row("EBIT Growth (QoQ)",             ebit_gr_qoq,   ebit_3y,   ebit_5y,   ebit_10y,   EBIT_T),
         row("EBIT Growth (YoY)",             ebit_gr_yoq,   ebit_3y,   ebit_5y,   ebit_10y,   EBIT_T),
-        row("EBIT Growth (3Y CAGR)",         ebit_3y,       None,      None,      None,       EBIT_CAGR_T),
-        row("EBIT Growth (5Y CAGR)",         ebit_5y,       None,      None,      None,       EBIT_CAGR_T),
-        row("EBIT Growth (10Y CAGR)",        ebit_10y,      None,      None,      None,       EBIT_CAGR_T),
+        row("  ↳ EBIT Growth (3Y CAGR)",         ebit_3y,       None,      None,      None,       EBIT_CAGR_T),
+        row("  ↳ EBIT Growth (5Y CAGR)",         ebit_5y,       None,      None,      None,       EBIT_CAGR_T),
+        row("  ↳ EBIT Growth (10Y CAGR)",        ebit_10y,      None,      None,      None,       EBIT_CAGR_T),
         # EBITDA
         row("EBITDA Growth (TTM)",           ebitda_gr_ttm, ebitda_3y, ebitda_5y, ebitda_10y, EBITDA_T),
         row("EBITDA Growth (Ann)",           ebitda_gr_ann, ebitda_3y, ebitda_5y, ebitda_10y, EBITDA_T),
         row("EBITDA Growth (QoQ)",           ebitda_gr_qoq, ebitda_3y, ebitda_5y, ebitda_10y, EBITDA_T),
         row("EBITDA Growth (YoY)",           ebitda_gr_yoq, ebitda_3y, ebitda_5y, ebitda_10y, EBITDA_T),
-        row("EBITDA Growth (3Y CAGR)",       ebitda_3y,     None,      None,      None,       EBITDA_CAGR_T),
-        row("EBITDA Growth (5Y CAGR)",       ebitda_5y,     None,      None,      None,       EBITDA_CAGR_T),
-        row("EBITDA Growth (10Y CAGR)",      ebitda_10y,    None,      None,      None,       EBITDA_CAGR_T),
+        row("  ↳ EBITDA Growth (3Y CAGR)",       ebitda_3y,     None,      None,      None,       EBITDA_CAGR_T),
+        row("  ↳ EBITDA Growth (5Y CAGR)",       ebitda_5y,     None,      None,      None,       EBITDA_CAGR_T),
+        row("  ↳ EBITDA Growth (10Y CAGR)",      ebitda_10y,    None,      None,      None,       EBITDA_CAGR_T),
         # FCF
         row("FCF Growth (TTM)",              fcf_gr_ttm_v,  fcf_3y,    fcf_5y,    fcf_10y,    FCF_T),
         row("FCF Growth (Ann)",              fcf_gr_ann,    fcf_3y,    fcf_5y,    fcf_10y,    FCF_T),
         row("FCF Growth (QoQ)",              fcf_gr_qoq,    fcf_3y,    fcf_5y,    fcf_10y,    FCF_T),
         row("FCF Growth (YoY)",              fcf_gr_yoq,    fcf_3y,    fcf_5y,    fcf_10y,    FCF_T),
-        row("FCF Growth (3Y CAGR)",          fcf_3y,        None,      None,      None,       FCF_CAGR_T),
-        row("FCF Growth (5Y CAGR)",          fcf_5y,        None,      None,      None,       FCF_CAGR_T),
-        row("FCF Growth (10Y CAGR)",         fcf_10y,       None,      None,      None,       FCF_CAGR_T),
+        row("  ↳ FCF Growth (3Y CAGR)",          fcf_3y,        None,      None,      None,       FCF_CAGR_T),
+        row("  ↳ FCF Growth (5Y CAGR)",          fcf_5y,        None,      None,      None,       FCF_CAGR_T),
+        row("  ↳ FCF Growth (10Y CAGR)",         fcf_10y,       None,      None,      None,       FCF_CAGR_T),
         # Rule of 40
         row("Rule of 40 (TTM)",              ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
         row("Rule of 40 (Year)",             ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
@@ -6079,8 +6079,12 @@ with tab2b:
 
         with col_tbl:
             # ── st.dataframe with row selection (checkbox) ────────────
+            def _row_label(r):
+                if r.get("is_avg_row") or "CAGR" in r["label"]:
+                    return "  ↳ " + r["label"]
+                return r["label"]
             df_all = pd.DataFrame([{
-                "Metric":  r["label"],
+                "Metric":  _row_label(r),
                 "Cat.":    r.get("tab", ""),
                 "Value":   r["fmt"],
                 "Grade":   r["lbl"],
@@ -6112,6 +6116,7 @@ with tab2b:
                 sel_rows = sel_event.selection.rows if sel_event and sel_event.selection else []
                 if sel_rows:
                     st.session_state["all_selected_metric"] = rows_expanded[sel_rows[0]]["label"]
+                    st.rerun()
 
             st.download_button(
                 label="⬇ Excel Download",
@@ -6135,17 +6140,59 @@ with tab2b:
                 # avg rows like "P/Earnings (3Y Avg)" → drilldown on "P/Earnings (Cur)"
                 # CAGR rows like "Revenue Growth (3Y CAGR)" → drilldown directly
                 import re as _re
-                _avg_match = _re.match(r"^(.+?)\s*\((\d+Y Avg)\)$", sel)
+                _avg_match = _re.match(r"^\s*↳\s*(.+?)\s*\((\d+Y) Avg\)$", sel)
+                _cagr_match = _re.match(r"^\s*↳\s*(.+?)\s*\((\d+Y CAGR)\)$", sel)
                 if _avg_match:
-                    # Find parent row (first non-avg row with same base label)
-                    _base = _avg_match.group(1).strip()
+                    # Avg row: show dedicated avg explanation + parent drilldown
+                    _base  = _avg_match.group(1).strip()   # e.g. "P/Earnings"
+                    _nyrs  = _avg_match.group(2).replace("Y","")  # e.g. "3"
                     _parent = next((r for r in rows_expanded
-                                   if not r.get("is_avg_row") and "CAGR" not in r["label"]
-                                   and r["label"].startswith(_base)), None)
+                                   if not r.get("is_avg_row") and "↳" not in r["label"]
+                                   and _re.sub(r"\s*\(.*?\)$","",r["label"]).strip() == _base), None)
                     drill_label = _parent["label"] if _parent else sel
+                    # Override dd with avg explanation
+                    _is_growth = "Growth" in sel
+                    _is_value  = any(x in sel for x in ["P/","EV/","PEG","Yield"])
+                    if _is_value:
+                        _method = (
+                            f"Average of the last {_nyrs} annual multiples\n"
+                            f"Each year: MCap (year-end price × shares) / Fundamental\n"
+                            f"Year-end prices sourced from Finqube DB\n"
+                            f"Then: sum(multiples) / {_nyrs}"
+                        )
+                    elif _is_growth:
+                        _method = (
+                            f"Average of {_nyrs} annual YoY growth rates\n"
+                            f"Each year: (V[y] / V[y-1] - 1) × 100\n"
+                            f"Then: sum(rates) / {_nyrs}"
+                        )
+                    else:
+                        _method = (
+                            f"Average of the last {_nyrs} annual values\n"
+                            f"Then: sum(values) / {_nyrs}"
+                        )
+                    drill_label = _parent["label"] if _parent else sel
+                    dd = {
+                        "formula": _method,
+                        "fields":  [f"Same fields as: {drill_label}",
+                                    "ℹ Historical year-end prices from Finqube DB (for value multiples)"],
+                        "unit":    "",
+                        "components": [
+                            (f"{_nyrs}Y Avg Value", row_data["fmt"] if row_data else "—"),
+                            ("── Based on same calculation as ──", ""),
+                            (f"→ See drilldown of: {drill_label}", "↓ below"),
+                        ],
+                        "result": row_data["fmt"] if row_data else "—",
+                        "_show_parent_dd": True,
+                        "_parent_label":   drill_label,
+                    }
+                elif _cagr_match:
+                    # Strip ↳ prefix — compute_drilldown uses label matching
+                    drill_label = _cagr_match.group(1).strip()  # "Revenue Growth (3Y CAGR)"
+                    dd = compute_drilldown(drill_label, data, hl, val, price_data)
                 else:
-                    drill_label = sel
-                dd = compute_drilldown(drill_label, data, hl, val, price_data)
+                    drill_label = sel.lstrip("  ↳ ").strip()
+                    dd = compute_drilldown(drill_label, data, hl, val, price_data)
 
                 # ── Drill-down card ───────────────────────────────────
                 card = (
@@ -6243,6 +6290,33 @@ with tab2b:
                     )
                 card += '</div>'
                 st.markdown(card, unsafe_allow_html=True)
+
+                # If avg row: also show parent metric drilldown below
+                if dd.get("_show_parent_dd"):
+                    _pdl = dd["_parent_label"]
+                    _pdd = compute_drilldown(_pdl, data, hl, val, price_data)
+                    st.markdown(
+                        f'<div style="margin-top:10px;font-size:11px;color:#64748b;"'
+                        f'> Berechnungsgrundlage: <b style="color:#93c5fd">{_pdl}</b></div>',
+                        unsafe_allow_html=True
+                    )
+                    # Render parent dd as compact card
+                    pcard = f'<div style="background:#0d1520;border:1px solid #1e3a5f;border-radius:8px;padding:14px;margin-top:4px;">'
+                    _pfml = _pdd["formula"].replace("\n", "<br>")
+                    pcard += (f'<div style="font-size:11px;color:#64748b;margin-bottom:6px;text-transform:uppercase;'
+                              f'letter-spacing:.05em;">Formel</div>'
+                              f'<div style="font-size:12px;color:#93c5fd;font-family:monospace;white-space:pre-wrap;margin-bottom:10px;">{_pfml}</div>')
+                    if _pdd.get("components"):
+                        pcard += '<table style="width:100%;border-collapse:collapse;font-size:11px;">'
+                        for _pn, _pv in _pdd["components"]:
+                            if not _pn: continue
+                            pcard += (f'<tr style="border-bottom:1px solid #1e2535;">'
+                                      f'<td style="padding:3px 2px;color:#94a3b8;">{_pn}</td>'
+                                      f'<td style="padding:3px 2px;text-align:right;color:#e2e8f0;">{_pv}</td></tr>')
+                        pcard += '</table>'
+                    pcard += '</div>'
+                    st.markdown(pcard, unsafe_allow_html=True)
+
             else:
                 st.info("← Zeile in der Tabelle anklicken für Drill-Down")
 
