@@ -647,9 +647,11 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     rev_yr   = yr(a_is, "totalRevenue")
     ebit_yr  = yr(a_is, "ebit")
     ebitda_yr= yr(a_is, "ebitda")
-    fcf_yr   = yr(a_cf, "freeCashFlow") or (
-        (yr(a_cf, "totalCashFromOperatingActivities") or 0) - abs(yr(a_cf, "capitalExpenditures") or 0)
-    )
+    _fcf_yr_raw  = yr(a_cf, "freeCashFlow")
+    _cfo_yr_vs   = yr(a_cf, "totalCashFromOperatingActivities")
+    _capex_yr_vs = yr(a_cf, "capitalExpenditures")
+    _fcf_yr_calc = (_cfo_yr_vs - abs(_capex_yr_vs)) if _cfo_yr_vs is not None and _capex_yr_vs is not None else None
+    fcf_yr   = _fcf_yr_raw if _fcf_yr_raw is not None else _fcf_yr_calc
     equity_yr= yr(a_bs, "totalStockholderEquity")
     lt_debt  = yr(a_bs, "longTermDebt")
     st_debt  = yr(a_bs, "shortLongTermDebt")
@@ -796,13 +798,30 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
     ev_rev_cur = fv(val.get("EnterpriseValueRevenue"))
     ev_rev_yr  = (ev / rev_yr)    if ev and rev_yr   and rev_yr  > 0 else None
-    ev_ebit_cur= (ev / ebit_yr)   if ev and ebit_yr  and ebit_yr > 0 else None
-    ev_ebit_yr = ev_ebit_cur  # same annual basis
-    ev_ebitda_cur = fv(val.get("EnterpriseValueEbitda"))
+    # EV/EBIT Cur: use TTM EBIT (4Q rolling) for more current picture
+    _q_is_ev = data["Financials"]["Income_Statement"].get("quarterly", {})
+    _qs_ev   = sorted(_q_is_ev.keys(), reverse=True)
+    _ebit_ttm_vs = None
+    if len(_qs_ev) >= 4:
+        _ebit_vals = [fv(_q_is_ev[q].get("ebit")) for q in _qs_ev[:4]]
+        if all(v is not None for v in _ebit_vals):
+            _ebit_ttm_vs = sum(_ebit_vals)
+    ev_ebit_cur = (ev / _ebit_ttm_vs) if ev and _ebit_ttm_vs and _ebit_ttm_vs > 0 else None
+    ev_ebit_yr  = (ev / ebit_yr)      if ev and ebit_yr        and ebit_yr       > 0 else None
+    # EV/EBITDA Cur: self-calculated with TTM EBITDA preferred over API field
+    _ebitda_ttm_vs = None
+    if len(_qs_ev) >= 4:
+        _ebitda_vals = [fv(_q_is_ev[q].get("ebitda")) for q in _qs_ev[:4]]
+        if all(v is not None for v in _ebitda_vals):
+            _ebitda_ttm_vs = sum(_ebitda_vals)
+    _ev_ebitda_calc = (ev / _ebitda_ttm_vs) if ev and _ebitda_ttm_vs and _ebitda_ttm_vs > 0 else None
+    ev_ebitda_cur = _ev_ebitda_calc or fv(val.get("EnterpriseValueEbitda"))
     ev_ebitda_yr  = (ev / ebitda_yr) if ev and ebitda_yr and ebitda_yr > 0 else None
 
-    earn_yield_cur = (1 / pe_cur * 100)      if pe_cur and pe_cur > 0 else None
-    earn_yield_yr  = (ni_yr / mcap * 100)    if ni_yr and mcap and mcap > 0 else None
+    # Earnings Yield: NI / MCap × 100 (consistent basis, not via P/E inversion)
+    earn_yield_cur = (_ni_ttm_sum / mcap * 100) if _ni_ttm_sum and mcap and mcap > 0 else (
+                     (1 / pe_cur * 100)          if pe_cur and pe_cur > 0 else None)
+    earn_yield_yr  = (ni_yr / mcap * 100)        if ni_yr  and mcap and mcap > 0 else None
     fcf_yield_ttm  = (fcf_ttm / mcap * 100)  if fcf_ttm and mcap and mcap > 0 else None
     fcf_yield_yr   = (fcf_yr  / mcap * 100)  if fcf_yr  and mcap and mcap > 0 else None
 
@@ -983,6 +1002,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
     # PEG historical averages: avg(P/E_year / EPS_growth_year) per rolling window
     def peg_hist_avg(n):
+        """PEG = P/E / EPS-Growth (consistent with peg_cur/peg_yr which use eps_gr_yr)"""
         years = sorted(a_is.keys(), reverse=True)
         vals   = []
         all_yr = []
@@ -990,28 +1010,27 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             y_cur  = years[i]
             y_prev = years[i + 1]
             yr_str = y_cur[:4]
-            ni_c = fv(a_is[y_cur].get("netIncome"))
-            ni_p = fv(a_is[y_prev].get("netIncome"))
-            if not ni_c or not ni_p or ni_p <= 0:
-                all_yr.append((yr_str, None, "NI fehlt oder neg. Basis"))
-                continue
-            gr = (ni_c / ni_p - 1) * 100
+            # EPS-based growth (consistent with spot PEG values)
+            ni_c  = fv(a_is[y_cur].get("netIncomeApplicableToCommonShares"))  or fv(a_is[y_cur].get("netIncome"))
+            ni_p  = fv(a_is[y_prev].get("netIncomeApplicableToCommonShares")) or fv(a_is[y_prev].get("netIncome"))
+            shs_c = fv(a_bs.get(y_cur,  {}).get("commonStockSharesOutstanding"))
+            shs_p = fv(a_bs.get(y_prev, {}).get("commonStockSharesOutstanding"))
+            if not ni_c or not ni_p or not shs_c or not shs_p:
+                all_yr.append((yr_str, None, "EPS-Daten fehlen")); continue
+            eps_c = ni_c / shs_c if shs_c > 0 else None
+            eps_p = ni_p / shs_p if shs_p > 0 else None
+            if not eps_c or not eps_p or eps_p <= 0:
+                all_yr.append((yr_str, None, "EPS nicht berechenbar")); continue
+            gr = (eps_c / eps_p - 1) * 100
             if gr <= 0:
-                all_yr.append((yr_str, None, f"neg. NI-Wachstum ({gr:.1f}%)"))
-                continue
+                all_yr.append((yr_str, None, f"neg. EPS-Wachstum ({gr:.1f}%)")); continue
             price = price_data.get(yr_str)
             if not price:
-                all_yr.append((yr_str, None, "kein Preis verfügbar"))
-                continue
-            shs = fv(a_bs.get(y_cur, {}).get("commonStockSharesOutstanding"))
-            if not shs:
-                all_yr.append((yr_str, None, "Shares fehlen"))
-                continue
-            pe_y = price * shs / ni_c if ni_c > 0 else None
+                all_yr.append((yr_str, None, "kein Preis verfügbar")); continue
+            pe_y = price * shs_c / ni_c if ni_c > 0 else None
             if pe_y:
                 peg = pe_y / gr
-                vals.append((yr_str, peg))
-                all_yr.append((yr_str, peg, None))
+                vals.append((yr_str, peg)); all_yr.append((yr_str, peg, None))
             else:
                 all_yr.append((yr_str, None, "P/E nicht berechenbar"))
         avg = sum(v for _, v in vals) / len(vals) if vals else None
@@ -4096,7 +4115,9 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     def yr_ic(i):
         is_d= a_is.get(years_bs[i], {}); bs= a_bs.get(years_bs[i], {})
         e   = fv(is_d.get("ebit")); ie = fv(is_d.get("interestExpense"))
-        return safe(e, abs(ie)) if ie else None
+        if ie is None: return None          # no data
+        if abs(ie) < 1: return 999.0 if e and e > 0 else None  # debt-free: very high coverage
+        return safe(e, abs(ie))
     def yr_cr(i):
         bs  = a_bs.get(years_bs[i], {})
         c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
@@ -4258,7 +4279,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         row("Cash/Debt (Year)",           cd_a,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T, hy3=hy(yr_cd,3), hy5=hy(yr_cd,5), hy10=hy(yr_cd,10)),
         row("Debt/Capital (Quarterly)",   dc_q,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T, hy3=hy(yr_dc,3), hy5=hy(yr_dc,5), hy10=hy(yr_dc,10)),
         row("Debt/Capital (Year)",        dc_a,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T, hy3=hy(yr_dc,3), hy5=hy(yr_dc,5), hy10=hy(yr_dc,10)),
-        row("FCF/Debt (Quarterly)",       fd_q,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T, hy3=hy(yr_fd,3), hy5=hy(yr_fd,5), hy10=hy(yr_fd,10)),
+        row("FCF/Debt (TTM Debt:Q)",      fd_q,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T, hy3=hy(yr_fd,3), hy5=hy(yr_fd,5), hy10=hy(yr_fd,10)),
         row("FCF/Debt (Year)",            fd_a,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T, hy3=hy(yr_fd,3), hy5=hy(yr_fd,5), hy10=hy(yr_fd,10)),
         row("Interest Coverage (TTM)",    ic_ttm,      h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T, hy3=hy(yr_ic,3), hy5=hy(yr_ic,5), hy10=hy(yr_ic,10)),
         row("Interest Coverage (Year)",   ic_a,        h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T, hy3=hy(yr_ic,3), hy5=hy(yr_ic,5), hy10=hy(yr_ic,10)),
@@ -5370,6 +5391,8 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         vals, all_yr = [], []
         for y in ys[:n]:
             yr = y[:4]
+            if y not in a_cf:
+                all_yr.append((yr, None, "Cash Flow fehlt")); continue
             s = sbc_yr(y); r = fv(a_is[y].get("totalRevenue"))
             if s is None: all_yr.append((yr, None, "SBC fehlt")); continue
             if not r or r == 0: all_yr.append((yr, None, "Revenue fehlt")); continue
@@ -5408,10 +5431,12 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         vals, all_yr = [], []
         for y in ys[:n]:
             yr = y[:4]
-            cx  = abs(fv(a_cf[y].get("capitalExpenditures")) or 0)
+            cx_raw = fv(a_cf[y].get("capitalExpenditures"))
+            cx  = abs(cx_raw) if cx_raw is not None else None
             cfo = fv(a_cf[y].get("totalCashFromOperatingActivities"))
-            if not cx: all_yr.append((yr, None, "CapEx fehlt")); continue
-            if not cfo or cfo == 0: all_yr.append((yr, None, "CFO fehlt")); continue
+            if cx is None: all_yr.append((yr, None, "CapEx fehlt")); continue
+            if not cfo or cfo == 0: all_yr.append((yr, None, "CFO fehlt/0")); continue
+            if cfo < 0: all_yr.append((yr, None, f"neg. CFO ({cfo:,.0f})")); continue
             v = cx/cfo; vals.append(v); all_yr.append((yr, v, None))
         avg = sum(vals)/len(vals) if vals else None
         return avg, all_yr
@@ -5423,7 +5448,9 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
             yr = y[:4]
             fc = _fcf_yr_p(y); ni = fv(a_is[y].get("netIncome"))
             if fc is None: all_yr.append((yr, None, "FCF fehlt")); continue
-            if not ni or ni == 0: all_yr.append((yr, None, "NI fehlt/0")); continue
+            if ni is None: all_yr.append((yr, None, "NI fehlt")); continue
+            if ni == 0: all_yr.append((yr, None, "NI = 0")); continue
+            if ni < 0: all_yr.append((yr, None, f"neg. NI ({ni:,.0f})")); continue
             v = fc/ni; vals.append(v); all_yr.append((yr, v, None))
         avg = sum(vals)/len(vals) if vals else None
         return avg, all_yr
@@ -5455,7 +5482,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     NM_T    = [(25,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm")]
     EBITM_T = [(35,"ap"),(25,"a"),(20,"am"),(15,"bp"),(10,"b"),(5,"bm"),(0,"cp")]
     EBITDAM_T=[(40,"ap"),(30,"a"),(25,"am"),(20,"bp"),(15,"b"),(10,"bm"),(0,"cp")]
-    FCFM_T  = [(25,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm")]
+    FCFM_T  = [(25,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-15,"c"),(-30,"cm")]
     AT_T    = [(2,"ap"),(1.5,"a"),(1,"am"),(0.7,"bp"),(0.4,"b"),(0.2,"bm"),(0,"cp")]
     # SBC/Revenue: lower = better (less dilution)
     SBC_REV_T      = [(0,"ap"),(0.01,"a"),(0.02,"am"),(0.05,"bp"),(0.08,"b"),(0.12,"bm"),(0.2,"cp")]
