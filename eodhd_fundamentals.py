@@ -164,11 +164,18 @@ def expand_rows_with_avgs(rows):
         ).strip()
 
     # Find last index per metric key (only rows that have avgs)
+    # Skip: already-expanded avg rows, CAGR rows (Growth uses explicit CAGR rows instead)
+    CAGR_KEYWORDS = ("CAGR", "Fwd", "TTM", "Ann", "QoQ", "YoY")
+    def is_growth_variant(label):
+        """Returns True if label is a period-variant that already has explicit CAGR rows below it."""
+        # Growth metrics: Revenue/Net Income/EPS/EBIT/EBITDA/FCF Growth
+        return "Growth" in label and any(k in label for k in CAGR_KEYWORDS)
+
     group_last = {}
     for i, r in enumerate(rows):
         avg_vals = [r.get("avg3","—"), r.get("avg5","—"), r.get("avg10","—")]
         has_avgs = any(v not in ("—", None, "") for v in avg_vals)
-        if has_avgs and not r.get("is_avg_row", False):
+        if has_avgs and not r.get("is_avg_row", False) and not is_growth_variant(r["label"]):
             mk = metric_key(r["label"])
             group_last[mk] = i
 
