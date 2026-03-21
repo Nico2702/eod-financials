@@ -5047,8 +5047,20 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     roce_ttm  = safe_div(ebit_ttm, cap_emp_ttm)
     roce_yr   = safe_div(ebit_yr,  cap_emp_yr)
     # ROIC = EBIT*(1-tax_rate) / Invested Capital — simplified: NI / (Equity + Debt)
-    roic_ttm  = safe_div(ni_ttm, (equity_ttm or 0) + debt_ttm)
-    roic_yr   = safe_div(ni_yr,  (equity_yr  or 0) + debt_yr)
+    # ROIC = NOPAT / IC; NOPAT = EBIT*(1-tax_rate)
+    _ebit_ttm_roic = ttm_sum(q_is, "ebit")
+    _tax_ttm  = ttm_sum(q_is, "incomeTaxExpense")
+    _pre_ttm  = ttm_sum(q_is, "incomeBeforeTax") or ttm_sum(q_is, "totalOtherIncomeExpenseNet")
+    _eff_tax_ttm = min(max(_tax_ttm / _pre_ttm, 0), 0.50) if _tax_ttm and _pre_ttm and _pre_ttm > 0 else 0.21
+    _nopat_ttm = _ebit_ttm_roic * (1 - _eff_tax_ttm) if _ebit_ttm_roic is not None else None
+    roic_ttm  = safe_div(_nopat_ttm, (equity_ttm or 0) + debt_ttm)
+
+    _ebit_yr_roic = fv(a_is[years_is[0]].get("ebit")) if years_is else None
+    _tax_yr  = fv(a_is[years_is[0]].get("incomeTaxExpense")) if years_is else None
+    _pre_yr  = fv(a_is[years_is[0]].get("incomeBeforeTax")) if years_is else None
+    _eff_tax_yr = min(max(_tax_yr / _pre_yr, 0), 0.50) if _tax_yr and _pre_yr and _pre_yr > 0 else 0.21
+    _nopat_yr = _ebit_yr_roic * (1 - _eff_tax_yr) if _ebit_yr_roic is not None else None
+    roic_yr   = safe_div(_nopat_yr, (equity_yr or 0) + debt_yr)
 
     gm_ttm    = safe_div(gp_ttm,     rev_ttm)
     gm_yr     = safe_div(gp_yr,      rev_yr)
@@ -5210,7 +5222,40 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     roe_10y, _hy_roe_10 = return_hist("netIncome","totalStockholderEquity",10,use_avg=True)
     roc_3y,  _hy_roc_3  = roc_hist(3);  roc_5y,  _hy_roc_5  = roc_hist(5);  roc_10y, _hy_roc_10  = roc_hist(10)
     roce_3y, _hy_roce_3 = roce_hist(3); roce_5y, _hy_roce_5 = roce_hist(5); roce_10y,_hy_roce_10 = roce_hist(10)
-    roic_3y, _hy_roic_3 = roc_hist(3);  roic_5y, _hy_roic_5 = roc_hist(5);  roic_10y,_hy_roic_10 = roc_hist(10)
+
+    def roic_hist(n):
+        """ROIC = NOPAT / Invested Capital
+        NOPAT = EBIT * (1 - effective_tax_rate)
+        IC = Equity + LT Debt + ST Debt (- Cash optional, using gross IC here for simplicity)
+        Effective tax rate = income_tax_expense / pretax_income, capped at 0-50%"""
+        ys  = sorted(a_is.keys(), reverse=True)
+        vals, all_yr = [], []
+        for y in ys[:n]:
+            yr    = y[:4]
+            ebit  = fv(a_is[y].get("ebit"))
+            tax   = fv(a_is[y].get("incomeTaxExpense"))
+            pre   = fv(a_is[y].get("totalOtherIncomeExpenseNet")) or fv(a_is[y].get("incomeBeforeTax"))
+            # Effective tax rate: use actual if available, else fallback to 21%
+            if tax is not None and pre and pre > 0:
+                eff_tax = min(max(tax / pre, 0), 0.50)
+            else:
+                eff_tax = 0.21  # standard fallback
+            bs    = a_bs.get(y, {})
+            eq    = fv(bs.get("totalStockholderEquity")) or 0
+            ltd   = fv(bs.get("longTermDebt")) or 0
+            std   = fv(bs.get("shortLongTermDebt")) or 0
+            ic    = eq + ltd + std
+            if ebit is None:
+                all_yr.append((yr, None, "EBIT fehlt")); continue
+            if ic <= 0:
+                all_yr.append((yr, None, f"Inv.Capital ≤ 0")); continue
+            nopat = ebit * (1 - eff_tax)
+            v     = nopat / ic
+            vals.append(v); all_yr.append((yr, v, None))
+        avg = sum(vals)/len(vals) if vals else None
+        return avg, all_yr
+
+    roic_3y, _hy_roic_3 = roic_hist(3); roic_5y, _hy_roic_5 = roic_hist(5); roic_10y,_hy_roic_10 = roic_hist(10)
 
     gm_3y,   _hy_gm_3   = margin_hist("grossProfit",    "totalRevenue",3)
     gm_5y,   _hy_gm_5   = margin_hist("grossProfit",    "totalRevenue",5)
@@ -5234,7 +5279,11 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     def sbc_ttm_sum():
         qs = sorted(q_cf.keys(), reverse=True)[:4]
         vals = [fv(q_cf[q].get("stockBasedCompensation")) for q in qs]
-        return sum(v for v in vals if v is not None) if any(v is not None for v in vals) else None
+        # Require all 4 quarters — partial sum would understate TTM SBC
+        return sum(vals) if len(vals) == 4 and all(v is not None for v in vals) else (
+            # Fallback: accept if at least 3 quarters available (common for recent filings)
+            sum(v for v in vals if v is not None) if sum(1 for v in vals if v is not None) >= 3 else None
+        )
 
     def sbc_yr(y):
         return fv(a_cf.get(y, {}).get("stockBasedCompensation"))
@@ -5272,7 +5321,8 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
 
     capex_ttm_p = abs(sum(fv(q_cf[q].get("capitalExpenditures")) or 0
                          for q in sorted(q_cf.keys(), reverse=True)[:4])) or None
-    capex_yr0_p = abs(fv(a_cf.get(y0_p, {}).get("capitalExpenditures")) or 0) if y0_p else None
+    _capex_yr0_raw = fv(a_cf.get(y0_p, {}).get("capitalExpenditures")) if y0_p else None
+    capex_yr0_p = abs(_capex_yr0_raw) if _capex_yr0_raw is not None else None
     def _fcf_ttm_sum_p():
         qs = sorted(q_cf.keys(), reverse=True)
         vals = []
@@ -5305,13 +5355,14 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     capex_rev_ttm = safe(capex_ttm_p, rev_ttm_p)
     capex_rev_yr  = safe(capex_yr0_p, rev_yr0_p)
 
-    # CapEx / Operating Cash Flow (%)
-    capex_ocf_ttm = safe(capex_ttm_p, cfo_ttm)
-    capex_ocf_yr  = safe(capex_yr0_p, cfo_yr0)
+    # CapEx / Operating Cash Flow (%) — only meaningful when CFO > 0
+    capex_ocf_ttm = safe(capex_ttm_p, cfo_ttm)  if cfo_ttm  and cfo_ttm  > 0 else None
+    capex_ocf_yr  = safe(capex_yr0_p, cfo_yr0)  if cfo_yr0  and cfo_yr0  > 0 else None
 
-    # FCF Conversion = FCF / Net Income
-    fcf_conv_ttm = safe(fcf_ttm_p,   ni_ttm_p)
-    fcf_conv_yr  = safe(fcf_yr0_p,   ni_yr0_p)
+    # FCF Conversion = FCF / Net Income — only meaningful when NI > 0
+    # Negative NI would invert the ratio and make it uninterpretable
+    fcf_conv_ttm = safe(fcf_ttm_p, ni_ttm_p) if ni_ttm_p and ni_ttm_p > 0 else None
+    fcf_conv_yr  = safe(fcf_yr0_p, ni_yr0_p) if ni_yr0_p and ni_yr0_p > 0 else None
 
     # Historical averages for new metrics
     def sbc_rev_hist(n):
