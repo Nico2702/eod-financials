@@ -319,7 +319,7 @@ def compute_kennzahlen(data, hl, val, tech):
     cur_ass  = latest(ttm_bs, "totalCurrentAssets")
     cur_lia  = latest(ttm_bs, "totalCurrentLiabilities")
     inv      = latest(ttm_bs, "inventory")
-    total_debt = (lt_debt or 0) + (st_debt or 0) if lt_debt or st_debt else None
+    total_debt = (lt_debt or 0) + (st_debt or 0)  # 0 for debt-free companies, not None
 
     # EV: use Highlights value, fallback to MarketCap + Debt - Cash
     if not ev and mcap:
@@ -330,12 +330,19 @@ def compute_kennzahlen(data, hl, val, tech):
     ev_ebit_c  = ev   / ebit        if ev and ebit and ebit > 0       else None
     earn_yield = (1/pe * 100)        if pe and pe > 0                  else None
     fcf_yield  = (fcf / mcap * 100)  if fcf and mcap and mcap > 0     else None
-    gross_mar  = (gp  / rev_ttm * 100) if gp and rev_ttm              else None
-    ebit_mar   = (ebit / rev_ttm * 100) if ebit and rev_ttm           else None
-    ebitda_mar = (ebitda / rev_ttm * 100) if ebitda and rev_ttm       else None
-    fcf_mar    = (fcf / rev_ttm * 100) if fcf and rev_ttm             else None
-    roce       = (ebit / (assets - cur_lia) * 100) if ebit and assets and cur_lia else None
-    roic       = (ni / (equity + (total_debt or 0)) * 100) if ni and equity else None
+    gross_mar  = (gp  / rev_ttm * 100) if gp  is not None and rev_ttm else None
+    ebit_mar   = (ebit / rev_ttm * 100) if ebit is not None and rev_ttm else None
+    ebitda_mar = (ebitda / rev_ttm * 100) if ebitda is not None and rev_ttm else None
+    fcf_mar    = (fcf / rev_ttm * 100) if fcf is not None and rev_ttm else None
+    roce       = (ebit / (assets - cur_lia) * 100) if ebit is not None and assets and cur_lia and (assets - cur_lia) > 0 else None
+    # ROIC: NOPAT / IC — consistent with compute_profitability_score
+    _ebit_kz = latest(ttm_is, "ebit") or latest(ttm_is, "operatingIncome")
+    _tax_kz  = latest(ttm_is, "incomeTaxExpense")
+    _pre_kz  = latest(ttm_is, "incomeBeforeTax")
+    _etax_kz = min(max(_tax_kz / _pre_kz, 0), 0.50) if _tax_kz and _pre_kz and _pre_kz > 0 else 0.21
+    _nopat_kz = _ebit_kz * (1 - _etax_kz) if _ebit_kz is not None else None
+    _ic_kz    = (equity or 0) + (total_debt or 0)
+    roic       = (_nopat_kz / _ic_kz * 100) if _nopat_kz is not None and _ic_kz and _ic_kz > 0 else None
     # ROE: NI TTM / avg(equity now, equity 1Y ago) — fallback to EOD value
     try:
         eq_series = ttm_bs["totalStockholderEquity"].dropna()
@@ -362,7 +369,7 @@ def compute_kennzahlen(data, hl, val, tech):
         import math
         try:
             s = df[col].dropna()
-            if len(s) >= 5 and s.iloc[4] != 0:
+            if len(s) >= 5 and s.iloc[4] > 0:
                 r = (s.iloc[0] / s.iloc[4] - 1) * 100
                 return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
@@ -373,7 +380,7 @@ def compute_kennzahlen(data, hl, val, tech):
         import math
         try:
             s = df[col].dropna()
-            if len(s) >= 2 and s.iloc[1] != 0:
+            if len(s) >= 2 and s.iloc[1] > 0:
                 r = (s.iloc[0] / s.iloc[1] - 1) * 100
                 return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
@@ -385,7 +392,7 @@ def compute_kennzahlen(data, hl, val, tech):
         import math
         try:
             s = df[col].dropna()
-            if len(s) >= 5 and s.iloc[4] != 0:
+            if len(s) >= 5 and s.iloc[4] > 0:
                 r = (s.iloc[0] / s.iloc[4] - 1) * 100
                 return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
@@ -418,8 +425,21 @@ def compute_kennzahlen(data, hl, val, tech):
     # QoQ growth — from raw quarterly data
     rev_gr_qoq    = qoq_growth(q_is, "totalRevenue")
     earn_gr_qoq   = qoq_growth(q_is, "netIncome")
-    eps_gr_qoq    = (qoq_growth(q_is, "netIncomeApplicableToCommonShares")
-                     or qoq_growth(q_is, "netIncome"))
+    # EPS QoQ/YoY: use NI/shares per quarter for consistency with eps_gr_ttm
+    def _eps_q_kz(q_idx):
+        """EPS for quarter at index q_idx from raw quarterly IS+BS data."""
+        _q_is_raw = data["Financials"]["Income_Statement"].get("quarterly", {})
+        _q_bs_raw = data["Financials"]["Balance_Sheet"].get("quarterly", {})
+        _qs_raw = sorted(_q_is_raw.keys(), reverse=True)
+        _qbs_raw = sorted(_q_bs_raw.keys(), reverse=True)
+        if q_idx >= len(_qs_raw) or q_idx >= len(_qbs_raw): return None
+        q, qb = _qs_raw[q_idx], _qbs_raw[q_idx]
+        ni  = fv(_q_is_raw[q].get("netIncomeApplicableToCommonShares")) or fv(_q_is_raw[q].get("netIncome"))
+        shs = (fv(_q_bs_raw[qb].get("commonStockSharesOutstanding")) or fv(_q_bs_raw[qb].get("weightedAverageShsOutDil")))
+        return (ni / shs) if ni and shs and shs > 0 else None
+    import math as _math_kz
+    _eps0_kz = _eps_q_kz(0); _eps1_kz = _eps_q_kz(1); _eps4_kz = _eps_q_kz(4)
+    eps_gr_qoq = ((_eps0_kz / _eps1_kz - 1) * 100) if (_eps0_kz and _eps1_kz and _eps1_kz > 0 and not _math_kz.isnan(_eps0_kz / _eps1_kz - 1)) else None
     ebit_gr_qoq   = qoq_growth(q_is, "ebit")
     ebitda_gr_qoq = qoq_growth(q_is, "ebitda")
     fcf_gr_qoq    = (qoq_growth(q_cf, "freeCashFlow")
@@ -428,8 +448,7 @@ def compute_kennzahlen(data, hl, val, tech):
     # YoY growth — from raw quarterly data (Q[0] vs Q[4])
     rev_gr_yoy    = yoy_growth(q_is, "totalRevenue")
     earn_gr_yoy   = yoy_growth(q_is, "netIncome")
-    eps_gr_yoy    = (yoy_growth(q_is, "netIncomeApplicableToCommonShares")
-                     or yoy_growth(q_is, "netIncome"))
+    eps_gr_yoy    = ((_eps0_kz / _eps4_kz - 1) * 100) if (_eps0_kz and _eps4_kz and _eps4_kz > 0 and not _math_kz.isnan(_eps0_kz / _eps4_kz - 1)) else None
     ebit_gr_yoy   = yoy_growth(q_is, "ebit")
     ebitda_gr_yoy = yoy_growth(q_is, "ebitda")
     fcf_gr_yoy    = (yoy_growth(q_cf, "freeCashFlow")
@@ -4031,7 +4050,6 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return 1.2*x1 + 1.4*x2 + 3.3*x3 + 0.6*x4 + 1.0*x5
 
     az_cur = altman_z(ta_q, ca_q, cl_q, re_q, ebit_ttm, rev_ttm, tl_q, mcap)
-    az_q   = altman_z(ta_q, ca_q, cl_q, re_q, ebit_ttm, rev_ttm, tl_q, mcap)
     az_a   = altman_z(ta_a, ca_a, cl_a, re_a, ebit_a,   rev_a,   tl_a, mcap)
 
     # ── Piotroski F-Score ─────────────────────────────────────────────
@@ -4070,17 +4088,19 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
             if ni_p and ta_avg_p and ta_avg_p != 0 and roa_c > ni_p/ta_avg_p: score += 1
         # F4: CFO > NI (accrual)
         if cfo and ni and cfo > ni: score += 1
-        # F5: Δleverage < 0 (lower debt ratio)
+        # F5: Δleverage < 0 (lower debt ratio) — use total debt (ltd + std)
+        std  = fv(bs_d.get("shortLongTermDebt")) or fv(bs_d.get("shortTermDebt")) or 0
+        std_p= (fv(bs_prev.get("shortLongTermDebt")) or fv(bs_prev.get("shortTermDebt")) or 0) if bs_prev else 0
         if ta and ta_p:
-            lev_c = ltd/ta; lev_p = ltd_p/ta_p
+            lev_c = (ltd + std) / ta; lev_p = (ltd_p + std_p) / ta_p
             if lev_c < lev_p: score += 1
         # F6: Δliquidity > 0 (current ratio improved)
         if ca and cl and ca_p and cl_p:
             if (ca/cl) > (ca_p/cl_p): score += 1
         # F7: No new shares issued
         if shares and shares_p and shares <= shares_p: score += 1
-        # F8: Δgross margin > 0
-        if rev and gp and rev_p and gp_p:
+        # F8: Δgross margin > 0 — allow negative gp (gross loss)
+        if rev and rev != 0 and gp is not None and rev_p and rev_p != 0 and gp_p is not None:
             if (gp/rev) > (gp_p/rev_p): score += 1
         # F9: Δasset turnover > 0 — use avg assets for both periods
         ta_pp2 = fv(a_bs.get(years_bs[2], {}).get("totalAssets")) if len(years_bs) > 2 else None
