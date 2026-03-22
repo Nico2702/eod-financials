@@ -480,7 +480,7 @@ def compute_kennzahlen(data, hl, val, tech):
         if idx >= len(_ys_hl): return None
         y   = _ys_hl[idx]
         ni  = fv(_a_is_hl[y].get("netIncomeApplicableToCommonShares")) or fv(_a_is_hl[y].get("netIncome"))
-        shs = fv(_a_bs_hl.get(y, {}).get("commonStockSharesOutstanding"))
+        shs = (fv(_a_bs_hl.get(y, {}).get("commonStockSharesOutstanding")) or fv(_a_bs_hl.get(y, {}).get("weightedAverageShsOutDil")))
         return (ni / shs) if ni and shs and shs > 0 else None
     _ea0 = _eps_ann_hl(0); _ea1 = _eps_ann_hl(1)
     eps_gr_ann = ((_ea0 / _ea1 - 1) * 100) if _ea0 and _ea1 and _ea1 > 0 else None
@@ -562,7 +562,6 @@ def compute_kennzahlen(data, hl, val, tech):
         "ebit_gr_ann":   (ebit_gr_ann,   fmt_p(ebit_gr_ann),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "ebitda_gr_ann": (ebitda_gr_ann, fmt_p(ebitda_gr_ann), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "fcf_gr_ann":    (fcf_gr_ann,    fmt_p(fcf_gr_ann),    [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
-        "ni_gr_ann":     (earn_gr_ann,   fmt_p(earn_gr_ann),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         # aliases for Key Facts
         "ebit_gr":       (ebit_gr_yoy,   fmt_p(ebit_gr_yoy),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "ebitda_gr":     (ebitda_gr_yoy, fmt_p(ebitda_gr_yoy), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
@@ -858,7 +857,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         if idx >= len(_ys_peg): return None
         y   = _ys_peg[idx]
         ni  = fv(_a_is_peg[y].get("netIncomeApplicableToCommonShares")) or fv(_a_is_peg[y].get("netIncome"))
-        shs = fv(_a_bs_peg.get(y, {}).get("commonStockSharesOutstanding"))
+        shs = (fv(_a_bs_peg.get(y, {}).get("commonStockSharesOutstanding")) or fv(_a_bs_peg.get(y, {}).get("weightedAverageShsOutDil")))
         return (ni / shs) if ni and shs and shs > 0 else None
     _eps0_peg = _get_eps_peg(0)
     _eps1_peg = _get_eps_peg(1)
@@ -926,7 +925,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
                 vals.append((yr_str, mult))
                 all_yr.append((yr_str, mult, None))
             else:
-                shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+                shs = (fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+                       or fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("weightedAverageShsOutDil")))
                 if not shs:
                     all_yr.append((yr_str, None, "Shares fehlen"))
                     continue
@@ -958,7 +958,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             if f <= 0:
                 all_yr.append((yr_str, None, "neg. FCF"))
                 continue
-            shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+            shs = (fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+                   or fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("weightedAverageShsOutDil")))
             if not shs:
                 all_yr.append((yr_str, None, "Shares fehlen"))
                 continue
@@ -982,7 +983,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             if not fund:
                 all_yr.append((yr_str, None, "Fundamental-Wert fehlt"))
                 continue
-            shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+            shs = (fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+                   or fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("weightedAverageShsOutDil")))
             if not shs:
                 all_yr.append((yr_str, None, "Shares fehlen"))
                 continue
@@ -1037,8 +1039,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             # EPS-based growth (consistent with spot PEG values)
             ni_c  = fv(a_is[y_cur].get("netIncomeApplicableToCommonShares"))  or fv(a_is[y_cur].get("netIncome"))
             ni_p  = fv(a_is[y_prev].get("netIncomeApplicableToCommonShares")) or fv(a_is[y_prev].get("netIncome"))
-            shs_c = fv(a_bs.get(y_cur,  {}).get("commonStockSharesOutstanding"))
-            shs_p = fv(a_bs.get(y_prev, {}).get("commonStockSharesOutstanding"))
+            shs_c = (fv(a_bs.get(y_cur,  {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y_cur,  {}).get("weightedAverageShsOutDil")))
+            shs_p = (fv(a_bs.get(y_prev, {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y_prev, {}).get("weightedAverageShsOutDil")))
             if not ni_c or not ni_p or not shs_c or not shs_p:
                 all_yr.append((yr_str, None, "EPS-Daten fehlen")); continue
             eps_c = ni_c / shs_c if shs_c > 0 else None
@@ -1863,7 +1865,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 if idx >= len(_ys_fb2): return None
                 y   = _ys_fb2[idx]
                 ni  = fv(_a_is_fb2[y].get("netIncomeApplicableToCommonShares")) or fv(_a_is_fb2[y].get("netIncome"))
-                shs = fv(_a_bs_fb2.get(y, {}).get("commonStockSharesOutstanding"))
+                shs = (fv(_a_bs_fb2.get(y, {}).get("commonStockSharesOutstanding")) or fv(_a_bs_fb2.get(y, {}).get("weightedAverageShsOutDil")))
                 return (ni / shs) if ni and shs and shs > 0 else None
             _ea0 = _eps_ann(0); _ea1 = _eps_ann(1)
             gr_yoy_fb  = ((_ea0 / _ea1 - 1) * 100) if _ea0 and _ea1 and _ea1 > 0 else None
@@ -1922,14 +1924,14 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             if idx >= len(years): return None
             y   = years[idx]
             ni  = fv(a_is.get(y, {}).get("netIncomeApplicableToCommonShares")) or fv(a_is.get(y, {}).get("netIncome"))
-            shs = fv(a_bs_dd.get(y, {}).get("commonStockSharesOutstanding"))
+            shs = (fv(a_bs_dd.get(y, {}).get("commonStockSharesOutstanding")) or fv(a_bs_dd.get(y, {}).get("weightedAverageShsOutDil")))
             return (ni / shs) if ni and shs and shs > 0 else None
         eps0_dd    = _eps_peg_dd(0)
         eps1_dd    = _eps_peg_dd(1)
         ni0_dd     = fv(a_is.get(y0, {}).get("netIncomeApplicableToCommonShares")) or fv(a_is.get(y0, {}).get("netIncome"))
         ni1_dd     = fv(a_is.get(y1, {}).get("netIncomeApplicableToCommonShares")) or fv(a_is.get(y1, {}).get("netIncome"))
-        shs0_dd    = fv(a_bs_dd.get(y0, {}).get("commonStockSharesOutstanding"))
-        shs1_dd    = fv(a_bs_dd.get(y1, {}).get("commonStockSharesOutstanding"))
+        shs0_dd    = (fv(a_bs_dd.get(y0, {}).get("commonStockSharesOutstanding")) or fv(a_bs_dd.get(y0, {}).get("weightedAverageShsOutDil")))
+        shs1_dd    = (fv(a_bs_dd.get(y1, {}).get("commonStockSharesOutstanding")) or fv(a_bs_dd.get(y1, {}).get("weightedAverageShsOutDil")))
         eps_gr_pct = ((eps0_dd / eps1_dd - 1) * 100) if eps0_dd and eps1_dd and eps1_dd > 0 else None
         ni_cur_yr  = fv(a_is.get(y0, {}).get("netIncome")) if years else None
 
@@ -2650,7 +2652,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                         "result": "—"}
             def get_eps_dd(y):
                 ni  = fv(a_is[y].get("netIncomeApplicableToCommonShares")) or fv(a_is[y].get("netIncome"))
-                shs = fv(a_bs.get(y, {}).get("commonStockSharesOutstanding"))
+                shs = (fv(a_bs.get(y, {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y, {}).get("weightedAverageShsOutDil")))
                 return ni, shs, (ni / shs) if ni is not None and shs and shs > 0 else None
             y0 = ys[0]; yn = ys[n]
             ni0, shs0, eps0 = get_eps_dd(y0)
@@ -2746,8 +2748,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             y0 = ys[0]; y1 = ys[1]
             ni0 = fv(a_is[y0].get("netIncomeApplicableToCommonShares")) or fv(a_is[y0].get("netIncome"))
             ni1 = fv(a_is[y1].get("netIncomeApplicableToCommonShares")) or fv(a_is[y1].get("netIncome"))
-            shs0 = fv(a_bs.get(y0, {}).get("commonStockSharesOutstanding"))
-            shs1 = fv(a_bs.get(y1, {}).get("commonStockSharesOutstanding"))
+            shs0 = (fv(a_bs.get(y0, {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y0, {}).get("weightedAverageShsOutDil")))
+            shs1 = (fv(a_bs.get(y1, {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y1, {}).get("weightedAverageShsOutDil")))
             eps0 = (ni0 / shs0) if ni0 and shs0 and shs0 > 0 else None
             eps1 = (ni1 / shs1) if ni1 and shs1 and shs1 > 0 else None
             if eps1 is not None and eps1 <= 0:
@@ -5012,7 +5014,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         def gr(stmt, key):
             v0 = fv(stmt.get(y, {}).get(key))
             v1 = fv(stmt.get(y_prev, {}).get(key))
-            return (v0/v1 - 1) if v0 and v1 and v1 > 0 else None
+            return (v0/v1 - 1) if v0 is not None and v1 and v1 > 0 else None
         rev_g = gr(a_is, "totalRevenue")
         ni_g  = gr(a_is, "netIncome")
         ocf_g = gr(a_cf, "totalCashFromOperatingActivities")
