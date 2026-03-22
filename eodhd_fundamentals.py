@@ -3837,8 +3837,14 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
         ltd  = fv(bs_d.get("longTermDebt")) or 0
         std  = (fv(bs_d.get("shortLongTermDebt")) or fv(bs_d.get("shortTermDebt")) or 0)
         ic   = (eq or 0) + ltd + std
-        roic = ni/ic if ni and ic and ic != 0 else None
-        gm   = gp/rev if gp and rev and rev != 0 else None
+        # ROIC: NOPAT/IC — consistent with profitability score
+        _ebit_c1 = (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome")))
+        _tax_c1  = fv(is_d.get("incomeTaxExpense"))
+        _pre_c1  = fv(is_d.get("incomeBeforeTax"))
+        _etax_c1 = min(max(_tax_c1 / _pre_c1, 0), 0.50) if _tax_c1 and _pre_c1 and _pre_c1 > 0 else 0.21
+        _nopat_c1= _ebit_c1 * (1 - _etax_c1) if _ebit_c1 is not None else None
+        roic = _nopat_c1/ic if _nopat_c1 is not None and ic and ic != 0 else None
+        gm   = gp/rev if gp is not None and rev and rev != 0 else None
         fcfm = fcf/rev if fcf is not None and rev and rev != 0 else None
         if rev:
             chart1.append({
@@ -3859,8 +3865,8 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
         ca   = fv(bs_d.get("totalCurrentAssets"))
         cl   = fv(bs_d.get("totalCurrentLiabilities"))
         cash = (fv(bs_d.get("cash")) or fv(bs_d.get("cashAndEquivalents")) or 0) + (fv(bs_d.get("shortTermInvestments")) or 0)
-        de   = debt/eq   if eq   and eq   != 0 else None
-        cr   = cash/cl   if cl   and cl   != 0 and cash is not None else None
+        de   = debt/eq   if eq is not None and eq != 0 else None
+        cr   = cash/cl   if cl is not None and cl  != 0 else None
         if de is not None or cr is not None:
             chart2.append({
                 "Year":         y[:4],
@@ -5705,9 +5711,9 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         if r and r > 0:
             chart_rows.append({
                 "Year":         y[:4],
-                "Gross Margin": round(gp/r*100, 2) if gp else None,
-                "Net Margin":   round(ni/r*100, 2) if ni else None,
-                "FCF Margin":   round(fc/r*100, 2) if fc else None,
+                "Gross Margin": round(gp/r*100, 2) if gp is not None else None,
+                "Net Margin":   round(ni/r*100, 2) if ni is not None else None,
+                "FCF Margin":   round(fc/r*100, 2) if fc is not None else None,
             })
 
     return {
@@ -5819,7 +5825,7 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
         "interestExpense", "interestIncome", "totalOtherIncomeExpenseNet",
         "incomeBeforeTax", "incomeTaxExpense", "netIncome",
         "netIncomeApplicableToCommonShares", "netIncomeFromContinuingOps",
-        "depreciation", "depreciationAndAmortization",
+        "depreciation", "depreciationAndAmortization", "depreciationAmortization",
         "totalCashFromOperatingActivities", "capitalExpenditures",
         "freeCashFlow", "dividendsPaid",
         "totalCashflowsFromInvestingActivities", "totalCashFromFinancingActivities",
@@ -5900,12 +5906,12 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
             equity = ttm_row.get("totalStockholderEquity")
             debt   = ttm_row.get("longTermDebt")
 
-            ttm_row["grossMargin"]      = gp  / rev    if rev and gp     else None
-            ttm_row["operatingMargin"]  = oi  / rev    if rev and oi     else None
-            ttm_row["netMargin"]        = ni  / rev    if rev and ni     else None
-            ttm_row["ebitdaMargin"]     = ebitda / rev if rev and ebitda else None
-            ttm_row["roa"]              = ni / assets  if assets and ni  else None
-            ttm_row["roe"]              = ni / equity  if equity and ni  else None
+            ttm_row["grossMargin"]      = gp  / rev    if rev and gp     is not None else None
+            ttm_row["operatingMargin"]  = oi  / rev    if rev and oi     is not None else None
+            ttm_row["netMargin"]        = ni  / rev    if rev and ni     is not None else None
+            ttm_row["ebitdaMargin"]     = ebitda / rev if rev and ebitda is not None else None
+            ttm_row["roa"]              = ni / assets  if assets and ni  is not None else None
+            ttm_row["roe"]              = ni / equity  if equity and ni  is not None else None
             fcf = ttm_row.get("freeCashFlow")
             if not fcf:
                 if cfo is not None and capex is not None:
@@ -5923,7 +5929,8 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
             share_vals = []
             for q in window:
                 try:
-                    s = bs_quarterly.get(q, {}).get("commonStockSharesOutstanding")
+                    bs_q = bs_quarterly.get(q, {})
+                    s = bs_q.get("commonStockSharesOutstanding") or bs_q.get("weightedAverageShsOutDil")
                     if s: share_vals.append(float(s))
                 except: pass
             shares = sum(share_vals) / len(share_vals) if share_vals else None
