@@ -314,7 +314,7 @@ def compute_kennzahlen(data, hl, val, tech):
     assets   = latest(ttm_bs, "totalAssets")
     equity   = latest(ttm_bs, "totalStockholderEquity")
     lt_debt  = latest(ttm_bs, "longTermDebt")
-    st_debt  = latest(ttm_bs, "shortLongTermDebt")
+    st_debt  = (latest(ttm_bs, "shortLongTermDebt") or latest(ttm_bs, "shortTermDebt"))
     cash     = (latest(ttm_bs, "cash") or latest(ttm_bs, "cashAndEquivalents") or 0) + (latest(ttm_bs, "shortTermInvestments") or 0)
     cur_ass  = latest(ttm_bs, "totalCurrentAssets")
     cur_lia  = latest(ttm_bs, "totalCurrentLiabilities")
@@ -406,8 +406,8 @@ def compute_kennzahlen(data, hl, val, tech):
         return sum(vals) if all(v is not None for v in vals) else None
     _ni_now_eg  = _ni_ttm_eg(0)
     _ni_ago_eg  = _ni_ttm_eg(4)
-    _sh_now_eg  = fv(_q_bs_eg[_qbs_eg[0]].get("commonStockSharesOutstanding")) if _qbs_eg else None
-    _sh_ago_eg  = fv(_q_bs_eg[_qbs_eg[4]].get("commonStockSharesOutstanding")) if len(_qbs_eg) > 4 else _sh_now_eg
+    _sh_now_eg  = (fv(_q_bs_eg[_qbs_eg[0]].get("commonStockSharesOutstanding")) or fv(_q_bs_eg[_qbs_eg[0]].get("weightedAverageShsOutDil"))) if _qbs_eg else None
+    _sh_ago_eg  = (fv(_q_bs_eg[_qbs_eg[4]].get("commonStockSharesOutstanding")) or fv(_q_bs_eg[_qbs_eg[4]].get("weightedAverageShsOutDil"))) if len(_qbs_eg) > 4 else _sh_now_eg
     _eps_now_eg = (_ni_now_eg / _sh_now_eg) if _ni_now_eg and _sh_now_eg and _sh_now_eg > 0 else None
     _eps_ago_eg = (_ni_ago_eg / _sh_ago_eg) if _ni_ago_eg and _sh_ago_eg and _sh_ago_eg > 0 else None
     eps_gr_ttm  = ((_eps_now_eg / _eps_ago_eg - 1) * 100) if _eps_now_eg and _eps_ago_eg and _eps_ago_eg > 0 else None
@@ -652,7 +652,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     fcf_yr   = _fcf_yr_raw if _fcf_yr_raw is not None else _fcf_yr_calc
     equity_yr= yr(a_bs, "totalStockholderEquity")
     lt_debt  = yr(a_bs, "longTermDebt")
-    st_debt  = yr(a_bs, "shortLongTermDebt")
+    st_debt  = (yr(a_bs, "shortLongTermDebt") or yr(a_bs, "shortTermDebt"))
     cash_yr  = (yr(a_bs, "cash") or yr(a_bs, "cashAndEquivalents") or 0) + (yr(a_bs, "shortTermInvestments") or 0)
     total_debt = (lt_debt or 0) + (st_debt or 0)
 
@@ -672,7 +672,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         _v = fv(_q_is_vs[_q].get("netIncomeApplicableToCommonShares")) or fv(_q_is_vs[_q].get("netIncome"))
         if _v is not None: _ni_ttm_vals.append(_v)
     _ni_ttm_sum = sum(_ni_ttm_vals) if len(_ni_ttm_vals) == 4 else None
-    _shs_latest = fv(_q_bs_vs[_qbs_vs[0]].get("commonStockSharesOutstanding")) if _qbs_vs else None
+    _shs_latest = (fv(_q_bs_vs[_qbs_vs[0]].get("commonStockSharesOutstanding")) or fv(_q_bs_vs[_qbs_vs[0]].get("weightedAverageShsOutDil"))) if _qbs_vs else None
     eps_ttm = (_ni_ttm_sum / _shs_latest) if _ni_ttm_sum and _shs_latest and _shs_latest > 0 else None
 
     # ── Current Ratios ───────────────────────────────────────────────
@@ -699,7 +699,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     ]
     _rev_ttm_ps = sum(_rev_ttm_ps_vals) if len(_rev_ttm_ps_vals) == 4 and all(v is not None for v in _rev_ttm_ps_vals) else None
     _ps_calc   = (mcap / _rev_ttm_ps) if mcap and _rev_ttm_ps and _rev_ttm_ps > 0 else None
-    ps_cur     = fv(val.get("PriceSalesTTM")) or _ps_calc
+    ps_cur     = _ps_calc or fv(val.get("PriceSalesTTM"))
 
     # P/S (Fwd): estimated as MCap / (Revenue_TTM * (1 + revenueEstimateGrowth))
     _trends_ps  = data.get("Earnings", {}).get("Trend", {})
@@ -758,7 +758,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             gw     = fv(bs_y.get("goodWill")) or fv(bs_y.get("goodwill")) or 0
             ia     = fv(bs_y.get("intangibleAssets")) or 0
             tbv    = eq - gw - ia
-            shs    = fv(bs_y.get("commonStockSharesOutstanding"))
+            shs    = (fv(bs_y.get("commonStockSharesOutstanding")) or fv(bs_y.get("weightedAverageShsOutDil")))
             if price is None:
                 all_yr.append((yr_str, None, "kein Preis verfügbar")); continue
             if not shs:
@@ -801,7 +801,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     _qs_ev   = sorted(_q_is_ev.keys(), reverse=True)
     _ebit_ttm_vs = None
     if len(_qs_ev) >= 4:
-        _ebit_vals = [fv(_q_is_ev[q].get("ebit")) for q in _qs_ev[:4]]
+        _ebit_vals = [(fv(_q_is_ev[q].get("ebit")) or fv(_q_is_ev[q].get("operatingIncome"))) for q in _qs_ev[:4]]
         if all(v is not None for v in _ebit_vals):
             _ebit_ttm_vs = sum(_ebit_vals)
     ev_ebit_cur = (ev / _ebit_ttm_vs) if ev and _ebit_ttm_vs and _ebit_ttm_vs > 0 else None
@@ -809,7 +809,14 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     # EV/EBITDA Cur: self-calculated with TTM EBITDA preferred over API field
     _ebitda_ttm_vs = None
     if len(_qs_ev) >= 4:
-        _ebitda_vals = [fv(_q_is_ev[q].get("ebitda")) for q in _qs_ev[:4]]
+        def _get_ebitda_q(q):
+            v = fv(_q_is_ev[q].get("ebitda"))
+            if v is None:
+                _eb = (fv(_q_is_ev[q].get("ebit")) or fv(_q_is_ev[q].get("operatingIncome")))
+                _da = fv(_q_is_ev[q].get("depreciationAmortization")) or fv(_q_is_ev[q].get("depreciation"))
+                v = _eb + abs(_da) if _eb is not None and _da is not None else None
+            return v
+        _ebitda_vals = [_get_ebitda_q(q) for q in _qs_ev[:4]]
         if all(v is not None for v in _ebitda_vals):
             _ebitda_ttm_vs = sum(_ebitda_vals)
     _ev_ebitda_calc = (ev / _ebitda_ttm_vs) if ev and _ebitda_ttm_vs and _ebitda_ttm_vs > 0 else None
@@ -853,8 +860,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         vs = [fv(_qis_sc[q].get("netIncomeApplicableToCommonShares")) or fv(_qis_sc[q].get("netIncome")) for q in _qs_sc[st:st+4]]
         return sum(vs) if len(vs)==4 and all(v is not None for v in vs) else None
     _ni0_sc  = _ni_ttm_sc(0); _ni4_sc = _ni_ttm_sc(4)
-    _sh0_sc  = fv(_qbs_sc[_qbss[0]].get("commonStockSharesOutstanding")) if _qbss else None
-    _sh4_sc  = fv(_qbs_sc[_qbss[4]].get("commonStockSharesOutstanding")) if len(_qbss)>4 else None
+    _sh0_sc  = (fv(_qbs_sc[_qbss[0]].get("commonStockSharesOutstanding")) or fv(_qbs_sc[_qbss[0]].get("weightedAverageShsOutDil"))) if _qbss else None
+    _sh4_sc  = (fv(_qbs_sc[_qbss[4]].get("commonStockSharesOutstanding")) or fv(_qbs_sc[_qbss[4]].get("weightedAverageShsOutDil"))) if len(_qbss)>4 else None
     _ep0_sc  = (_ni0_sc/_sh0_sc) if _ni0_sc and _sh0_sc and _sh0_sc>0 else None
     _ep4_sc  = (_ni4_sc/_sh4_sc) if _ni4_sc and _sh4_sc and _sh4_sc>0 else None
     _eg_ttm  = ((_ep0_sc/_ep4_sc-1)*100) if _ep0_sc and _ep4_sc and _ep4_sc>0 else None
@@ -889,9 +896,9 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             if use_ev:
                 bs_y   = data["Financials"]["Balance_Sheet"]["yearly"].get(y, {})
                 ltd    = fv(bs_y.get("longTermDebt")) or 0
-                std    = fv(bs_y.get("shortLongTermDebt")) or 0
+                std    = (fv(bs_y.get("shortLongTermDebt")) or fv(bs_y.get("shortTermDebt")) or 0)
                 csh    = (fv(bs_y.get("cash")) or fv(bs_y.get("cashAndEquivalents")) or 0) + (fv(bs_y.get("shortTermInvestments")) or 0)
-                shs    = fv(bs_y.get("commonStockSharesOutstanding"))
+                shs    = (fv(bs_y.get("commonStockSharesOutstanding")) or fv(bs_y.get("weightedAverageShsOutDil")))
                 if not shs:
                     all_yr.append((yr_str, None, "Shares fehlen"))
                     continue
@@ -1284,7 +1291,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             return None, cfo, cx, False, [y]
 
     mcap   = fv(hl.get("MarketCapitalization"))
-    shares = fv(hl.get("SharesOutstanding")) or (fv(q_bs[qbs_s[0]].get("commonStockSharesOutstanding")) if qbs_s else None)
+    shares = fv(hl.get("SharesOutstanding")) or ((fv(q_bs[qbs_s[0]].get("commonStockSharesOutstanding")) or fv(q_bs[qbs_s[0]].get("weightedAverageShsOutDil"))) if qbs_s else None)
     ev     = fv(val.get("EnterpriseValue"))
     bsQ    = q_bs.get(qbs_s[0], {}) if qbs_s else {}
     bsQ_dt = qbs_s[0] if qbs_s else "—"
@@ -1309,8 +1316,11 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     # ── Annual values ─────────────────────────────────────────────────
     rev_a    = fv(isA.get("totalRevenue"))
     ni_a     = fv(isA.get("netIncome"))
-    ebit_a   = fv(isA.get("ebit"))
+    ebit_a   = (fv(isA.get("ebit")) or fv(isA.get("operatingIncome")))
     ebitda_a = fv(isA.get("ebitda"))
+    if ebitda_a is None:  # ebitda fallback: ebit + D&A
+        _da_a = fv(isA.get("depreciationAmortization")) or fv(isA.get("depreciation"))
+        if ebit_a is not None and _da_a is not None: ebitda_a = ebit_a + abs(_da_a)
     gp_a     = fv(isA.get("grossProfit"))
     oi_a     = fv(isA.get("operatingIncome"))
     int_a    = fv(isA.get("interestExpense"))
@@ -1319,7 +1329,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     # ── BS quarterly ──────────────────────────────────────────────────
     cash_q = (fv(bsQ.get("cash")) or fv(bsQ.get("cashAndEquivalents")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
     ltd_q  = fv(bsQ.get("longTermDebt")) or 0
-    std_q  = fv(bsQ.get("shortLongTermDebt")) or 0
+    std_q  = (fv(bsQ.get("shortLongTermDebt")) or fv(bsQ.get("shortTermDebt")) or 0)
     debt_q = ltd_q + std_q
     eq_q   = fv(bsQ.get("totalStockholderEquity"))
     ta_q   = fv(bsQ.get("totalAssets"))
@@ -1328,12 +1338,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     tl_q   = fv(bsQ.get("totalLiab"))
     inv_q  = fv(bsQ.get("inventory")) or 0
     re_q   = fv(bsQ.get("retainedEarnings"))
-    sh_q   = fv(bsQ.get("commonStockSharesOutstanding"))
+    sh_q   = (fv(bsQ.get("commonStockSharesOutstanding")) or fv(bsQ.get("weightedAverageShsOutDil")))
 
     # ── BS annual ─────────────────────────────────────────────────────
     cash_a = (fv(bsA.get("cash")) or fv(bsA.get("cashAndEquivalents")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
     ltd_a  = fv(bsA.get("longTermDebt")) or 0
-    std_a  = fv(bsA.get("shortLongTermDebt")) or 0
+    std_a  = (fv(bsA.get("shortLongTermDebt")) or fv(bsA.get("shortTermDebt")) or 0)
     debt_a = ltd_a + std_a
     eq_a   = fv(bsA.get("totalStockholderEquity"))
     ta_a   = fv(bsA.get("totalAssets"))
@@ -1341,7 +1351,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     cl_a   = fv(bsA.get("totalCurrentLiabilities"))
     tl_a   = fv(bsA.get("totalLiab"))
     inv_a  = fv(bsA.get("inventory")) or 0
-    sh_a   = fv(bsA.get("commonStockSharesOutstanding"))
+    sh_a   = (fv(bsA.get("commonStockSharesOutstanding")) or fv(bsA.get("weightedAverageShsOutDil")))
 
     # ── Prior-year BS (for averages) ──────────────────────────────────
     bsA1   = a_bs.get(years_bs[1], {}) if len(years_bs) > 1 else {}
@@ -1821,8 +1831,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 return sum(vals) if len(vals) == 4 else None
             _ni_now    = _ni_eps_ttm(0)
             _ni_1yago  = _ni_eps_ttm(4)
-            _shs_q0    = fv(_q_bs_fb[_qbs_fb[0]].get("commonStockSharesOutstanding")) if _qbs_fb else None
-            _shs_q4    = fv(_q_bs_fb[_qbs_fb[4]].get("commonStockSharesOutstanding")) if len(_qbs_fb) > 4 else None
+            _shs_q0    = (fv(_q_bs_fb[_qbs_fb[0]].get("commonStockSharesOutstanding")) or fv(_q_bs_fb[_qbs_fb[0]].get("weightedAverageShsOutDil"))) if _qbs_fb else None
+            _shs_q4    = (fv(_q_bs_fb[_qbs_fb[4]].get("commonStockSharesOutstanding")) or fv(_q_bs_fb[_qbs_fb[4]].get("weightedAverageShsOutDil"))) if len(_qbs_fb) > 4 else None
             _eps_now   = (_ni_now   / _shs_q0) if _ni_now   and _shs_q0 and _shs_q0 > 0 else None
             _eps_1yago = (_ni_1yago / _shs_q4) if _ni_1yago and _shs_q4 and _shs_q4 > 0 else None
             gr_ttm_fb  = ((_eps_now / _eps_1yago - 1) * 100) if _eps_now and _eps_1yago and _eps_1yago > 0 else None
@@ -2668,8 +2678,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 return rows, (total if sum(1 for _, v in rows if v is not None)==4 else None)
             t0_rows, ni0 = ttm_ni_rows(0)
             t4_rows, ni4 = ttm_ni_rows(4)
-            shs0 = fv(q_bs[qbs[0]].get("commonStockSharesOutstanding")) if qbs else None
-            shs4 = fv(q_bs[qbs[4]].get("commonStockSharesOutstanding")) if len(qbs)>4 else shs0
+            shs0 = (fv(q_bs[qbs[0]].get("commonStockSharesOutstanding")) or fv(q_bs[qbs[0]].get("weightedAverageShsOutDil"))) if qbs else None
+            shs4 = (fv(q_bs[qbs[4]].get("commonStockSharesOutstanding")) or fv(q_bs[qbs[4]].get("weightedAverageShsOutDil"))) if len(qbs)>4 else shs0
             eps0 = (ni0 / shs0) if ni0 and shs0 and shs0 > 0 else None
             eps4 = (ni4 / shs4) if ni4 and shs4 and shs4 > 0 else None
             if eps4 is not None and eps4 <= 0:
@@ -2759,8 +2769,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             q0b = qs_bs[0]; q1b = qs_bs[1]
             ni0 = fv(q_is[q0i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q0i].get("netIncome"))
             ni1 = fv(q_is[q1i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q1i].get("netIncome"))
-            shs0 = fv(q_bs[q0b].get("commonStockSharesOutstanding"))
-            shs1 = fv(q_bs[q1b].get("commonStockSharesOutstanding"))
+            shs0 = (fv(q_bs[q0b].get("commonStockSharesOutstanding")) or fv(q_bs[q0b].get("weightedAverageShsOutDil")))
+            shs1 = (fv(q_bs[q1b].get("commonStockSharesOutstanding")) or fv(q_bs[q1b].get("weightedAverageShsOutDil")))
             eps0 = (ni0 / shs0) if ni0 and shs0 and shs0 > 0 else None
             eps1 = (ni1 / shs1) if ni1 and shs1 and shs1 > 0 else None
             if eps1 is not None and eps1 <= 0:
@@ -2801,8 +2811,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             q0b = qs_bs[0]; q4b = qs_bs[4]
             ni0 = fv(q_is[q0i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q0i].get("netIncome"))
             ni4 = fv(q_is[q4i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q4i].get("netIncome"))
-            shs0 = fv(q_bs[q0b].get("commonStockSharesOutstanding"))
-            shs4 = fv(q_bs[q4b].get("commonStockSharesOutstanding"))
+            shs0 = (fv(q_bs[q0b].get("commonStockSharesOutstanding")) or fv(q_bs[q0b].get("weightedAverageShsOutDil")))
+            shs4 = (fv(q_bs[q4b].get("commonStockSharesOutstanding")) or fv(q_bs[q4b].get("weightedAverageShsOutDil")))
             eps0 = (ni0 / shs0) if ni0 and shs0 and shs0 > 0 else None
             eps4 = (ni4 / shs4) if ni4 and shs4 and shs4 > 0 else None
             if eps4 is not None and eps4 <= 0:
@@ -3175,7 +3185,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         gw  = fv(bs.get("goodWill")) or fv(bs.get("goodwill")) or 0
         ia  = fv(bs.get("intangibleAssets")) or 0
         tbv = eq - gw - ia
-        shs = fv(bs.get("commonStockSharesOutstanding"))
+        shs = (fv(bs.get("commonStockSharesOutstanding")) or fv(bs.get("weightedAverageShsOutDil")))
         mc  = fv(hl.get("MarketCapitalization"))
         v   = mc/tbv if mc and tbv and tbv>0 else None
         return {"formula":"MCap ÷ Tangible Book Value\nTBV = Equity − Goodwill − Intangible Assets\nP/TBV zeigt was man für 'materielles' Eigenkapital bezahlt",
@@ -3806,7 +3816,7 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
             fcf  = cfo - abs(capex) if cfo and capex else None
         eq   = fv(bs_d.get("totalStockholderEquity"))
         ltd  = fv(bs_d.get("longTermDebt")) or 0
-        std  = fv(bs_d.get("shortLongTermDebt")) or 0
+        std  = (fv(bs_d.get("shortLongTermDebt")) or fv(bs_d.get("shortTermDebt")) or 0)
         ic   = (eq or 0) + ltd + std
         roic = ni/ic if ni and ic and ic != 0 else None
         gm   = gp/rev if gp and rev and rev != 0 else None
@@ -3825,7 +3835,7 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
         bs_d = a_bs[y]; cf_d = a_cf.get(y, {}); is_d = a_is.get(y, {})
         eq   = fv(bs_d.get("totalStockholderEquity"))
         ltd  = fv(bs_d.get("longTermDebt")) or 0
-        std  = fv(bs_d.get("shortLongTermDebt")) or 0
+        std  = (fv(bs_d.get("shortLongTermDebt")) or fv(bs_d.get("shortTermDebt")) or 0)
         debt = ltd + std
         ca   = fv(bs_d.get("totalCurrentAssets"))
         cl   = fv(bs_d.get("totalCurrentLiabilities"))
@@ -3881,7 +3891,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     bsQ  = q_bs.get(qbs[0], {}) if qbs else {}
     cash_q  = (fv(bsQ.get("cash")) or fv(bsQ.get("cashAndEquivalents")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
     ltd_q   = fv(bsQ.get("longTermDebt"))  or 0
-    std_q   = fv(bsQ.get("shortLongTermDebt")) or 0
+    std_q   = (fv(bsQ.get("shortLongTermDebt")) or fv(bsQ.get("shortTermDebt")) or 0)
     debt_q  = ltd_q + std_q
     eq_q    = fv(bsQ.get("totalStockholderEquity"))
     ta_q    = fv(bsQ.get("totalAssets"))
@@ -3899,7 +3909,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     cfA  = a_cf.get(years[0], {}) if years else {}
     cash_a  = (fv(bsA.get("cash")) or fv(bsA.get("cashAndEquivalents")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
     ltd_a   = fv(bsA.get("longTermDebt"))  or 0
-    std_a   = fv(bsA.get("shortLongTermDebt")) or 0
+    std_a   = (fv(bsA.get("shortLongTermDebt")) or fv(bsA.get("shortTermDebt")) or 0)
     debt_a  = ltd_a + std_a
     eq_a    = fv(bsA.get("totalStockholderEquity"))
     ta_a    = fv(bsA.get("totalAssets"))
@@ -3937,8 +3947,11 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     fcf_a   = get_fcf_annual(years[0]) if years else None
 
     # Annual income
-    ebit_a   = fv(isA.get("ebit"))
+    ebit_a   = (fv(isA.get("ebit")) or fv(isA.get("operatingIncome")))
     ebitda_a = fv(isA.get("ebitda"))
+    if ebitda_a is None:  # ebitda fallback: ebit + D&A
+        _da_ha = fv(isA.get("depreciationAmortization")) or fv(isA.get("depreciation"))
+        if ebit_a is not None and _da_ha is not None: ebitda_a = ebit_a + abs(_da_ha)
     int_a    = fv(isA.get("interestExpense"))
     ni_a     = fv(isA.get("netIncome"))
     rev_a    = fv(isA.get("totalRevenue"))
@@ -3947,6 +3960,9 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     # TTM income
     ebit_ttm   = ttm_sum(q_is, "ebit")
     ebitda_ttm = ttm_sum(q_is, "ebitda")
+    if ebitda_ttm is None:  # ebitda TTM fallback: ebit_ttm + D&A_ttm
+        _da_ttm = ttm_sum(q_is, "depreciationAmortization") or ttm_sum(q_is, "depreciation")
+        if ebit_ttm is not None and _da_ttm is not None: ebitda_ttm = ebit_ttm + abs(_da_ttm)
     int_ttm    = ttm_sum(q_is, "interestExpense")
     ni_ttm     = ttm_sum(q_is, "netIncome")
     rev_ttm    = ttm_sum(q_is, "totalRevenue")
@@ -4039,8 +4055,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         gp  = fv(is_d.get("grossProfit"))
         rev_p= fv(a_is.get(years[1], {}).get("totalRevenue")) if len(years)>1 else None
         gp_p = fv(a_is.get(years[1], {}).get("grossProfit")) if len(years)>1 else None
-        shares = fv(bs_d.get("commonStockSharesOutstanding"))
-        shares_p = fv(bs_prev.get("commonStockSharesOutstanding")) if bs_prev else None
+        shares = (fv(bs_d.get("commonStockSharesOutstanding")) or fv(bs_d.get("weightedAverageShsOutDil")))
+        shares_p = (fv(bs_prev.get("commonStockSharesOutstanding")) or fv(bs_prev.get("weightedAverageShsOutDil"))) if bs_prev else None
         # F1: ROA > 0
         if ni and ta_avg and ta_avg != 0 and ni/ta_avg > 0: score += 1
         # F2: CFO > 0
@@ -4102,22 +4118,22 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     def yr_cd(i):
         bs = a_bs.get(years_bs[i], {}); cf = a_cf.get(years_bs[i], {})
         c = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d = (fv(bs.get("longTermDebt")) or 0) + (fv(bs.get("shortLongTermDebt")) or 0)
+        d = (fv(bs.get("longTermDebt")) or 0) + ((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
         return safe(c, d)
     def yr_dc(i):
         bs = a_bs.get(years_bs[i], {})
-        d = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
         e = fv(bs.get("totalStockholderEquity"))
         denom = d + (e or 0)
         return safe(d, denom) if e and denom > 0 else None
     def yr_fd(i):
         bs = a_bs.get(years_bs[i], {})
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
         fc = get_fcf_annual(years_bs[i])
         return safe(fc, d)
     def yr_ic(i):
         is_d= a_is.get(years_bs[i], {}); bs= a_bs.get(years_bs[i], {})
-        e   = fv(is_d.get("ebit")); ie = fv(is_d.get("interestExpense"))
+        e   = (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome"))); ie = fv(is_d.get("interestExpense"))
         if ie is None: return None          # no data
         if abs(ie) < 1: return 999.0 if e and e > 0 else None  # debt-free: very high coverage
         return safe(e, abs(ie))
@@ -4128,13 +4144,13 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(c, cl)
     def yr_de(i):
         bs  = a_bs.get(years_bs[i], {})
-        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d   = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
         e   = fv(bs.get("totalStockholderEquity"))
         return safe(d, e) if e and e > 0 else None
     def yr_nde(i):
         bs  = a_bs.get(years_bs[i], {})
         c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d   = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
         e   = fv(bs.get("totalStockholderEquity"))
         return safe(d-(c or 0), e) if e and e > 0 else None
     def yr_ea(i):
@@ -4142,33 +4158,33 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(fv(bs.get("totalStockholderEquity")), fv(bs.get("totalAssets")))
     def yr_da(i):
         bs  = a_bs.get(years_bs[i], {})
-        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d   = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
         return safe(d, fv(bs.get("totalAssets")))
     def yr_nda(i):
         bs  = a_bs.get(years_bs[i], {})
         c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d   = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
         return safe(d-(c or 0), fv(bs.get("totalAssets")))
     def yr_debit(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
-        e  = fv(is_d.get("ebit"))
+        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
+        e  = (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome")))
         return safe(d, e) if e and e > 0 else None
     def yr_ndebit(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
-        e  = fv(is_d.get("ebit"))
+        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
+        e  = (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome")))
         return safe(d-(c or 0), e) if e and e > 0 else None
     def yr_debitda(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
         eb = fv(is_d.get("ebitda"))
         return safe(d, eb) if eb and eb > 0 else None
     def yr_ndebitda(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
         eb = fv(is_d.get("ebitda"))
         return safe(d-(c or 0), eb) if eb and eb > 0 else None
     def yr_cur(i):
@@ -4184,7 +4200,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return altman_z(
             fv(bs.get("totalAssets")), fv(bs.get("totalCurrentAssets")),
             fv(bs.get("totalCurrentLiabilities")), fv(bs.get("retainedEarnings")),
-            fv(is_d.get("ebit")), fv(is_d.get("totalRevenue")),
+            (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome"))), fv(is_d.get("totalRevenue")),
             fv(bs.get("totalLiab")), mcap)
 
     def h(fn, n): return hist_avg(fn, n)
@@ -4455,8 +4471,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
                     or fv(q_is[qs[i]].get("netIncome")) for i in range(start, start+4)]
             return sum(vals) if all(v is not None for v in vals) else None
         ni0 = ttm_ni(qs_is, 0); ni4 = ttm_ni(qs_is, 4)
-        shs0 = fv(q_bs[common_qs[0]].get("commonStockSharesOutstanding"))
-        shs4 = fv(q_bs[common_qs[4]].get("commonStockSharesOutstanding")) if len(common_qs) > 4 else None
+        shs0 = (fv(q_bs[common_qs[0]].get("commonStockSharesOutstanding")) or fv(q_bs[common_qs[0]].get("weightedAverageShsOutDil")))
+        shs4 = (fv(q_bs[common_qs[4]].get("commonStockSharesOutstanding")) or fv(q_bs[common_qs[4]].get("weightedAverageShsOutDil"))) if len(common_qs) > 4 else None
         if not ni0 or not ni4 or not shs0 or shs0 <= 0 or not shs4 or shs4 <= 0: return None
         eps0 = ni0 / shs0; eps4 = ni4 / shs4
         if eps4 <= 0: return None
@@ -4588,7 +4604,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         def get_eps_q(i):
             q   = common_qs[i]
             ni  = fv(q_is[q].get("netIncomeApplicableToCommonShares")) or fv(q_is[q].get("netIncome"))
-            shs = fv(q_bs[q].get("commonStockSharesOutstanding"))
+            shs = (fv(q_bs[q].get("commonStockSharesOutstanding")) or fv(q_bs[q].get("weightedAverageShsOutDil")))
             return (ni / shs) if ni and shs and shs > 0 else None
         eps0 = get_eps_q(0); eps1 = get_eps_q(1)
         if eps0 is None or not eps1 or eps1 <= 0: return None
@@ -4638,7 +4654,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         def get_eps_q(i):
             q   = common_qs[i]
             ni  = fv(q_is[q].get("netIncomeApplicableToCommonShares")) or fv(q_is[q].get("netIncome"))
-            shs = fv(q_bs[q].get("commonStockSharesOutstanding"))
+            shs = (fv(q_bs[q].get("commonStockSharesOutstanding")) or fv(q_bs[q].get("weightedAverageShsOutDil")))
             return (ni / shs) if ni and shs and shs > 0 else None
         eps0 = get_eps_q(0); eps4 = get_eps_q(4)
         if eps0 is None or not eps4 or eps4 <= 0: return None
@@ -4698,8 +4714,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         import math
         ys = sorted(a_bs.keys(), reverse=True)
         if len(ys) < 2: return None
-        v0 = fv(a_bs[ys[0]].get("commonStockSharesOutstanding"))
-        v1 = fv(a_bs[ys[1]].get("commonStockSharesOutstanding"))
+        v0 = (fv(a_bs[ys[0]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[0]].get("weightedAverageShsOutDil")))
+        v1 = (fv(a_bs[ys[1]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[1]].get("weightedAverageShsOutDil")))
         if v0 is None or not v1 or v1 <= 0: return None
         r = (v0 / v1 - 1) * 100
         return None if (__import__("math").isnan(r) or __import__("math").isinf(r)) else r
@@ -4708,8 +4724,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         import math
         qs = sorted(q_bs.keys(), reverse=True)
         if len(qs) < 2: return None
-        v0 = fv(q_bs[qs[0]].get("commonStockSharesOutstanding"))
-        v1 = fv(q_bs[qs[1]].get("commonStockSharesOutstanding"))
+        v0 = (fv(q_bs[qs[0]].get("commonStockSharesOutstanding")) or fv(q_bs[qs[0]].get("weightedAverageShsOutDil")))
+        v1 = (fv(q_bs[qs[1]].get("commonStockSharesOutstanding")) or fv(q_bs[qs[1]].get("weightedAverageShsOutDil")))
         if v0 is None or not v1 or v1 <= 0: return None
         r = (v0 / v1 - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
@@ -4718,8 +4734,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         import math
         qs = sorted(q_bs.keys(), reverse=True)
         if len(qs) < 5: return None
-        v0 = fv(q_bs[qs[0]].get("commonStockSharesOutstanding"))
-        v4 = fv(q_bs[qs[4]].get("commonStockSharesOutstanding"))
+        v0 = (fv(q_bs[qs[0]].get("commonStockSharesOutstanding")) or fv(q_bs[qs[0]].get("weightedAverageShsOutDil")))
+        v4 = (fv(q_bs[qs[4]].get("commonStockSharesOutstanding")) or fv(q_bs[qs[4]].get("weightedAverageShsOutDil")))
         if v0 is None or not v4 or v4 <= 0: return None
         r = (v0 / v4 - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
@@ -4728,8 +4744,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         import math
         ys = sorted(a_bs.keys(), reverse=True)
         if len(ys) < n + 1: return None
-        v0 = fv(a_bs[ys[0]].get("commonStockSharesOutstanding"))
-        vn = fv(a_bs[ys[n]].get("commonStockSharesOutstanding"))
+        v0 = (fv(a_bs[ys[0]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[0]].get("weightedAverageShsOutDil")))
+        vn = (fv(a_bs[ys[n]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[n]].get("weightedAverageShsOutDil")))
         if v0 is None or not vn or vn <= 0: return None
         ratio = v0 / vn
         if ratio < 0: return None
@@ -4742,8 +4758,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         vals, all_yr = [], []
         for i in range(min(n, len(ys) - 1)):
             yr = ys[i][:4]
-            v0 = fv(a_bs[ys[i]].get("commonStockSharesOutstanding"))
-            v1 = fv(a_bs[ys[i+1]].get("commonStockSharesOutstanding"))
+            v0 = (fv(a_bs[ys[i]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[i]].get("weightedAverageShsOutDil")))
+            v1 = (fv(a_bs[ys[i+1]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[i+1]].get("weightedAverageShsOutDil")))
             if v0 is None or not v1 or v1 <= 0:
                 all_yr.append((yr, None, "Shares fehlen")); continue
             r = (v0 / v1 - 1) * 100
@@ -5036,6 +5052,9 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     oi_ttm     = ttm_sum(q_is, "operatingIncome")
     ebit_ttm   = ttm_sum(q_is, "ebit")
     ebitda_ttm = ttm_sum(q_is, "ebitda")
+    if ebitda_ttm is None:  # ebitda TTM fallback: ebit_ttm + D&A_ttm
+        _da_ttm = ttm_sum(q_is, "depreciationAmortization") or ttm_sum(q_is, "depreciation")
+        if ebit_ttm is not None and _da_ttm is not None: ebitda_ttm = ebit_ttm + abs(_da_ttm)
     cfo_ttm    = ttm_sum(q_cf, "totalCashFromOperatingActivities")
     capex_ttm  = ttm_sum(q_cf, "capitalExpenditures")
     fcf_ttm_raw= ttm_sum(q_cf, "freeCashFlow")
@@ -5050,7 +5069,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     equity_ttm  = fv(q_bs[qbs_sorted[0]].get("totalStockholderEquity")) if qbs_sorted else None
     cur_lia_ttm = fv(q_bs[qbs_sorted[0]].get("totalCurrentLiabilities")) if qbs_sorted else None
     ltd_ttm     = fv(q_bs[qbs_sorted[0]].get("longTermDebt"))     if qbs_sorted else None
-    std_ttm     = fv(q_bs[qbs_sorted[0]].get("shortLongTermDebt")) if qbs_sorted else None
+    std_ttm     = (fv(q_bs[qbs_sorted[0]].get("shortLongTermDebt")) or fv(q_bs[qbs_sorted[0]].get("shortTermDebt"))) if qbs_sorted else None
     debt_ttm    = (ltd_ttm or 0) + (std_ttm or 0)
 
     # ── Annual values ─────────────────────────────────────────────────
@@ -5099,7 +5118,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     # Return on Capital = NI / (Equity + Debt) — use avg(Q0,Q4) for TTM consistency
     _equity_q4_roc = fv(q_bs[qbs_sorted_roa[4]].get("totalStockholderEquity")) if len(qbs_sorted_roa) > 4 else None
     _debt_q4_roc   = ((fv(q_bs[qbs_sorted_roa[4]].get("longTermDebt")) or 0) +
-                      (fv(q_bs[qbs_sorted_roa[4]].get("shortLongTermDebt")) or 0)) if len(qbs_sorted_roa) > 4 else None
+                      ((fv(q_bs[qbs_sorted_roa[4]].get("shortLongTermDebt")) or fv(q_bs[qbs_sorted_roa[4]].get("shortTermDebt")) or 0))) if len(qbs_sorted_roa) > 4 else None
     _ic_ttm   = (equity_ttm or 0) + debt_ttm
     if _equity_q4_roc is not None and _debt_q4_roc is not None:
         _ic_q4  = (_equity_q4_roc or 0) + _debt_q4_roc
@@ -5127,7 +5146,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     _nopat_ttm = _ebit_ttm_roic * (1 - _eff_tax_ttm) if _ebit_ttm_roic is not None else None
     roic_ttm  = safe_div(_nopat_ttm, _ic_avg)  # use same avg IC as roc_ttm for consistency
 
-    _ebit_yr_roic = fv(a_is[years_is[0]].get("ebit")) if years_is else None
+    _ebit_yr_roic = (fv(a_is[years_is[0]].get("ebit")) or fv(a_is[years_is[0]].get("operatingIncome"))) if years_is else None
     _tax_yr  = fv(a_is[years_is[0]].get("incomeTaxExpense")) if years_is else None
     _pre_yr  = fv(a_is[years_is[0]].get("incomeBeforeTax")) if years_is else None
     _eff_tax_yr = min(max(_tax_yr / _pre_yr, 0), 0.50) if _tax_yr and _pre_yr and _pre_yr > 0 else 0.21
@@ -5217,7 +5236,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         vals, all_yr = [], []
         for y in ys[:n]:
             yr = y[:4]
-            e  = fv(a_is[y].get("ebit"))
+            e  = (fv(a_is[y].get("ebit")) or fv(a_is[y].get("operatingIncome")))
             bs = a_bs.get(y, {})
             ta = fv(bs.get("totalAssets"))
             cl = fv(bs.get("totalCurrentLiabilities"))
@@ -5280,7 +5299,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
             bs  = a_bs.get(y, {})
             eq  = fv(bs.get("totalStockholderEquity"))
             ltd = fv(bs.get("longTermDebt")) or 0
-            std = fv(bs.get("shortLongTermDebt")) or 0
+            std = (fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0)
             ic  = (eq or 0) + ltd + std
             if ni is None:
                 all_yr.append((yr, None, "NI fehlt")); continue
@@ -5310,7 +5329,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         vals, all_yr = [], []
         for y in ys[:n]:
             yr    = y[:4]
-            ebit  = fv(a_is[y].get("ebit"))
+            ebit  = (fv(a_is[y].get("ebit")) or fv(a_is[y].get("operatingIncome")))
             tax   = fv(a_is[y].get("incomeTaxExpense"))
             # incomeBeforeTax is correct pretax income field
             pre   = fv(a_is[y].get("incomeBeforeTax")) or fv(a_is[y].get("totalOtherIncomeExpenseNet"))
@@ -5321,7 +5340,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
             bs    = a_bs.get(y, {})
             eq    = fv(bs.get("totalStockholderEquity")) or 0
             ltd   = fv(bs.get("longTermDebt")) or 0
-            std   = fv(bs.get("shortLongTermDebt")) or 0
+            std   = (fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0)
             ic    = eq + ltd + std
             if ebit is None:
                 all_yr.append((yr, None, "EBIT fehlt")); continue
