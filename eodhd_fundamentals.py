@@ -169,16 +169,7 @@ def expand_rows_with_avgs(rows):
     CAGR_KEYWORDS = ("CAGR", "Fwd", "TTM", "Ann", "QoQ", "YoY")
     def is_growth_variant(label):
         """Returns True if label is a period-variant that already has explicit CAGR rows below it."""
-        has_cagr_kw = any(k in label for k in CAGR_KEYWORDS)
-        # Standard growth metrics with CAGR sub-rows
-        if "Growth" in label and has_cagr_kw:
-            return True
-        # Share Count Change and Goodwill Growth also have CAGR sub-rows
-        if "Share Count Change" in label and has_cagr_kw:
-            return True
-        if "Goodwill Growth" in label and has_cagr_kw:
-            return True
-        return False
+        return "Growth" in label and any(k in label for k in CAGR_KEYWORDS)
 
     # Use (tab, metric_key) as group key so rows from different tabs don't interfere
     group_last = {}
@@ -199,10 +190,10 @@ def expand_rows_with_avgs(rows):
             higher  = r.get("higher", True)
             pct     = r.get("pct", False)
             base_label = metric_key(r["label"])  # e.g. "P/Earnings", "Gross Margin"
-            for suffix, raw_key, fmt_key, hy_key in [
-                ("3Y Avg",  "avg3_raw",  "avg3",  "hy3"),
-                ("5Y Avg",  "avg5_raw",  "avg5",  "hy5"),
-                ("10Y Avg", "avg10_raw", "avg10", "hy10"),
+            for suffix, raw_key, fmt_key in [
+                ("3Y Avg",  "avg3_raw",  "avg3"),
+                ("5Y Avg",  "avg5_raw",  "avg5"),
+                ("10Y Avg", "avg10_raw", "avg10"),
             ]:
                 raw_val = r.get(raw_key)
                 fmt_val = r.get(fmt_key, "—")
@@ -228,8 +219,6 @@ def expand_rows_with_avgs(rows):
                     "group":      r.get("group", ""),
                     "tab":        r.get("tab", ""),
                     "is_avg_row": True,
-                    "hy_vals":    r.get(hy_key, []),   # [(year, fmt_val), ...]
-                    "hy_n":       suffix,               # "3Y Avg" / "5Y Avg" / "10Y Avg"
                 })
     return expanded
 
@@ -314,12 +303,12 @@ def compute_kennzahlen(data, hl, val, tech):
     assets   = latest(ttm_bs, "totalAssets")
     equity   = latest(ttm_bs, "totalStockholderEquity")
     lt_debt  = latest(ttm_bs, "longTermDebt")
-    st_debt  = (latest(ttm_bs, "shortLongTermDebt") or latest(ttm_bs, "shortTermDebt"))
+    st_debt  = latest(ttm_bs, "shortLongTermDebt")
     cash     = (latest(ttm_bs, "cash") or latest(ttm_bs, "cashAndEquivalents") or 0) + (latest(ttm_bs, "shortTermInvestments") or 0)
     cur_ass  = latest(ttm_bs, "totalCurrentAssets")
     cur_lia  = latest(ttm_bs, "totalCurrentLiabilities")
     inv      = latest(ttm_bs, "inventory")
-    total_debt = (lt_debt or 0) + (st_debt or 0)  # 0 for debt-free companies, not None
+    total_debt = (lt_debt or 0) + (st_debt or 0) if lt_debt or st_debt else None
 
     # EV: use Highlights value, fallback to MarketCap + Debt - Cash
     if not ev and mcap:
@@ -330,19 +319,12 @@ def compute_kennzahlen(data, hl, val, tech):
     ev_ebit_c  = ev   / ebit        if ev and ebit and ebit > 0       else None
     earn_yield = (1/pe * 100)        if pe and pe > 0                  else None
     fcf_yield  = (fcf / mcap * 100)  if fcf and mcap and mcap > 0     else None
-    gross_mar  = (gp  / rev_ttm * 100) if gp  is not None and rev_ttm else None
-    ebit_mar   = (ebit / rev_ttm * 100) if ebit is not None and rev_ttm else None
-    ebitda_mar = (ebitda / rev_ttm * 100) if ebitda is not None and rev_ttm else None
-    fcf_mar    = (fcf / rev_ttm * 100) if fcf is not None and rev_ttm else None
-    roce       = (ebit / (assets - cur_lia) * 100) if ebit is not None and assets and cur_lia and (assets - cur_lia) > 0 else None
-    # ROIC: NOPAT / IC — consistent with compute_profitability_score
-    _ebit_kz = latest(ttm_is, "ebit") or latest(ttm_is, "operatingIncome")
-    _tax_kz  = latest(ttm_is, "incomeTaxExpense")
-    _pre_kz  = latest(ttm_is, "incomeBeforeTax")
-    _etax_kz = min(max(_tax_kz / _pre_kz, 0), 0.50) if _tax_kz and _pre_kz and _pre_kz > 0 else 0.21
-    _nopat_kz = _ebit_kz * (1 - _etax_kz) if _ebit_kz is not None else None
-    _ic_kz    = (equity or 0) + (total_debt or 0)
-    roic       = (_nopat_kz / _ic_kz * 100) if _nopat_kz is not None and _ic_kz and _ic_kz > 0 else None
+    gross_mar  = (gp  / rev_ttm * 100) if gp and rev_ttm              else None
+    ebit_mar   = (ebit / rev_ttm * 100) if ebit and rev_ttm           else None
+    ebitda_mar = (ebitda / rev_ttm * 100) if ebitda and rev_ttm       else None
+    fcf_mar    = (fcf / rev_ttm * 100) if fcf and rev_ttm             else None
+    roce       = (ebit / (assets - cur_lia) * 100) if ebit and assets and cur_lia else None
+    roic       = (ni / (equity + (total_debt or 0)) * 100) if ni and equity else None
     # ROE: NI TTM / avg(equity now, equity 1Y ago) — fallback to EOD value
     try:
         eq_series = ttm_bs["totalStockholderEquity"].dropna()
@@ -363,14 +345,15 @@ def compute_kennzahlen(data, hl, val, tech):
 
     # Growth helpers
     def ttm_growth(df, col):
-        """TTM YoY growth: TTM[0] vs TTM[4] (rolling 4Q sum now vs 1 year ago).
-        Requires 5 TTM windows (8 quarters of data). No fallback — incorrect period
-        would misrepresent YoY as QoQ."""
+        """TTM: TTM[0] vs TTM[4] (same quarter last year), fallback TTM[1]"""
         import math
         try:
             s = df[col].dropna()
-            if len(s) >= 5 and s.iloc[4] > 0:
+            if len(s) >= 5 and s.iloc[4] != 0:
                 r = (s.iloc[0] / s.iloc[4] - 1) * 100
+                return None if (math.isnan(r) or math.isinf(r)) else r
+            elif len(s) >= 2 and s.iloc[1] != 0:
+                r = (s.iloc[0] / s.iloc[1] - 1) * 100
                 return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
         return None
@@ -380,20 +363,22 @@ def compute_kennzahlen(data, hl, val, tech):
         import math
         try:
             s = df[col].dropna()
-            if len(s) >= 2 and s.iloc[1] > 0:
+            if len(s) >= 2 and s.iloc[1] != 0:
                 r = (s.iloc[0] / s.iloc[1] - 1) * 100
                 return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
         return None
 
     def yoy_growth(df, col):
-        """YoY: Q[0] vs Q[4] (same quarter prior year). No fallback — Q[1] would
-        be QoQ not YoY and would misrepresent the metric."""
+        """YoY: Q[0] vs Q[4] if available, fallback to Q[1]"""
         import math
         try:
             s = df[col].dropna()
-            if len(s) >= 5 and s.iloc[4] > 0:
+            if len(s) >= 5 and s.iloc[4] != 0:
                 r = (s.iloc[0] / s.iloc[4] - 1) * 100
+                return None if (math.isnan(r) or math.isinf(r)) else r
+            elif len(s) >= 2 and s.iloc[1] != 0:
+                r = (s.iloc[0] / s.iloc[1] - 1) * 100
                 return None if (math.isnan(r) or math.isinf(r)) else r
         except: pass
         return None
@@ -413,8 +398,8 @@ def compute_kennzahlen(data, hl, val, tech):
         return sum(vals) if all(v is not None for v in vals) else None
     _ni_now_eg  = _ni_ttm_eg(0)
     _ni_ago_eg  = _ni_ttm_eg(4)
-    _sh_now_eg  = (fv(_q_bs_eg[_qbs_eg[0]].get("commonStockSharesOutstanding")) or fv(_q_bs_eg[_qbs_eg[0]].get("weightedAverageShsOutDil"))) if _qbs_eg else None
-    _sh_ago_eg  = (fv(_q_bs_eg[_qbs_eg[4]].get("commonStockSharesOutstanding")) or fv(_q_bs_eg[_qbs_eg[4]].get("weightedAverageShsOutDil"))) if len(_qbs_eg) > 4 else _sh_now_eg
+    _sh_now_eg  = fv(_q_bs_eg[_qbs_eg[0]].get("commonStockSharesOutstanding")) if _qbs_eg else None
+    _sh_ago_eg  = fv(_q_bs_eg[_qbs_eg[4]].get("commonStockSharesOutstanding")) if len(_qbs_eg) > 4 else _sh_now_eg
     _eps_now_eg = (_ni_now_eg / _sh_now_eg) if _ni_now_eg and _sh_now_eg and _sh_now_eg > 0 else None
     _eps_ago_eg = (_ni_ago_eg / _sh_ago_eg) if _ni_ago_eg and _sh_ago_eg and _sh_ago_eg > 0 else None
     eps_gr_ttm  = ((_eps_now_eg / _eps_ago_eg - 1) * 100) if _eps_now_eg and _eps_ago_eg and _eps_ago_eg > 0 else None
@@ -425,21 +410,8 @@ def compute_kennzahlen(data, hl, val, tech):
     # QoQ growth — from raw quarterly data
     rev_gr_qoq    = qoq_growth(q_is, "totalRevenue")
     earn_gr_qoq   = qoq_growth(q_is, "netIncome")
-    # EPS QoQ/YoY: use NI/shares per quarter for consistency with eps_gr_ttm
-    def _eps_q_kz(q_idx):
-        """EPS for quarter at index q_idx from raw quarterly IS+BS data."""
-        _q_is_raw = data["Financials"]["Income_Statement"].get("quarterly", {})
-        _q_bs_raw = data["Financials"]["Balance_Sheet"].get("quarterly", {})
-        _qs_raw = sorted(_q_is_raw.keys(), reverse=True)
-        _qbs_raw = sorted(_q_bs_raw.keys(), reverse=True)
-        if q_idx >= len(_qs_raw) or q_idx >= len(_qbs_raw): return None
-        q, qb = _qs_raw[q_idx], _qbs_raw[q_idx]
-        ni  = fv(_q_is_raw[q].get("netIncomeApplicableToCommonShares")) or fv(_q_is_raw[q].get("netIncome"))
-        shs = (fv(_q_bs_raw[qb].get("commonStockSharesOutstanding")) or fv(_q_bs_raw[qb].get("weightedAverageShsOutDil")))
-        return (ni / shs) if ni and shs and shs > 0 else None
-    import math as _math_kz
-    _eps0_kz = _eps_q_kz(0); _eps1_kz = _eps_q_kz(1); _eps4_kz = _eps_q_kz(4)
-    eps_gr_qoq = ((_eps0_kz / _eps1_kz - 1) * 100) if (_eps0_kz and _eps1_kz and _eps1_kz > 0 and not _math_kz.isnan(_eps0_kz / _eps1_kz - 1)) else None
+    eps_gr_qoq    = (qoq_growth(q_is, "netIncomeApplicableToCommonShares")
+                     or qoq_growth(q_is, "netIncome"))
     ebit_gr_qoq   = qoq_growth(q_is, "ebit")
     ebitda_gr_qoq = qoq_growth(q_is, "ebitda")
     fcf_gr_qoq    = (qoq_growth(q_cf, "freeCashFlow")
@@ -448,7 +420,8 @@ def compute_kennzahlen(data, hl, val, tech):
     # YoY growth — from raw quarterly data (Q[0] vs Q[4])
     rev_gr_yoy    = yoy_growth(q_is, "totalRevenue")
     earn_gr_yoy   = yoy_growth(q_is, "netIncome")
-    eps_gr_yoy    = ((_eps0_kz / _eps4_kz - 1) * 100) if (_eps0_kz and _eps4_kz and _eps4_kz > 0 and not _math_kz.isnan(_eps0_kz / _eps4_kz - 1)) else None
+    eps_gr_yoy    = (yoy_growth(q_is, "netIncomeApplicableToCommonShares")
+                     or yoy_growth(q_is, "netIncome"))
     ebit_gr_yoy   = yoy_growth(q_is, "ebit")
     ebitda_gr_yoy = yoy_growth(q_is, "ebitda")
     fcf_gr_yoy    = (yoy_growth(q_cf, "freeCashFlow")
@@ -474,13 +447,12 @@ def compute_kennzahlen(data, hl, val, tech):
     ebitda_gr_ann = ann_growth(_a_is_hl, "ebitda")
     # EPS annual: NI/shares Y0 vs Y1
     _a_bs_hl = data["Financials"]["Balance_Sheet"].get("yearly", {})
-    # Use intersection of IS and BS keys to ensure shares match the correct fiscal year
-    _ys_hl   = sorted(set(_a_is_hl.keys()) & set(_a_bs_hl.keys()), reverse=True)
+    _ys_hl   = sorted(_a_is_hl.keys(), reverse=True)
     def _eps_ann_hl(idx):
         if idx >= len(_ys_hl): return None
         y   = _ys_hl[idx]
         ni  = fv(_a_is_hl[y].get("netIncomeApplicableToCommonShares")) or fv(_a_is_hl[y].get("netIncome"))
-        shs = (fv(_a_bs_hl.get(y, {}).get("commonStockSharesOutstanding")) or fv(_a_bs_hl.get(y, {}).get("weightedAverageShsOutDil")))
+        shs = fv(_a_bs_hl.get(y, {}).get("commonStockSharesOutstanding"))
         return (ni / shs) if ni and shs and shs > 0 else None
     _ea0 = _eps_ann_hl(0); _ea1 = _eps_ann_hl(1)
     eps_gr_ann = ((_ea0 / _ea1 - 1) * 100) if _ea0 and _ea1 and _ea1 > 0 else None
@@ -562,6 +534,7 @@ def compute_kennzahlen(data, hl, val, tech):
         "ebit_gr_ann":   (ebit_gr_ann,   fmt_p(ebit_gr_ann),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "ebitda_gr_ann": (ebitda_gr_ann, fmt_p(ebitda_gr_ann), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "fcf_gr_ann":    (fcf_gr_ann,    fmt_p(fcf_gr_ann),    [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
+        "ni_gr_ann":     (earn_gr_ann,   fmt_p(earn_gr_ann),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         # aliases for Key Facts
         "ebit_gr":       (ebit_gr_yoy,   fmt_p(ebit_gr_yoy),   [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
         "ebitda_gr":     (ebitda_gr_yoy, fmt_p(ebitda_gr_yoy), [(50,"ap"),(30,"a"),(20,"am"),(10,"bp"),(0,"b"),(-10,"bm")],         True),
@@ -663,20 +636,17 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     rev_yr   = yr(a_is, "totalRevenue")
     ebit_yr  = yr(a_is, "ebit")
     ebitda_yr= yr(a_is, "ebitda")
-    _fcf_yr_raw  = yr(a_cf, "freeCashFlow")
-    _cfo_yr_vs   = yr(a_cf, "totalCashFromOperatingActivities")
-    _capex_yr_vs = yr(a_cf, "capitalExpenditures")
-    _fcf_yr_calc = (_cfo_yr_vs - abs(_capex_yr_vs)) if _cfo_yr_vs is not None and _capex_yr_vs is not None else None
-    fcf_yr   = _fcf_yr_raw if _fcf_yr_raw is not None else _fcf_yr_calc
+    fcf_yr   = yr(a_cf, "freeCashFlow") or (
+        (yr(a_cf, "totalCashFromOperatingActivities") or 0) - abs(yr(a_cf, "capitalExpenditures") or 0)
+    )
     equity_yr= yr(a_bs, "totalStockholderEquity")
     lt_debt  = yr(a_bs, "longTermDebt")
-    st_debt  = (yr(a_bs, "shortLongTermDebt") or yr(a_bs, "shortTermDebt"))
+    st_debt  = yr(a_bs, "shortLongTermDebt")
     cash_yr  = (yr(a_bs, "cash") or yr(a_bs, "cashAndEquivalents") or 0) + (yr(a_bs, "shortTermInvestments") or 0)
     total_debt = (lt_debt or 0) + (st_debt or 0)
 
     # EV: from Valuation, fallback calculated
-    _ev_calc = (mcap + total_debt - (cash_yr or 0)) if mcap else None
-    ev = ev_raw if ev_raw is not None else _ev_calc
+    ev = ev_raw or (mcap + total_debt - (cash_yr or 0) if mcap else None)
 
     # TTM from Highlights
     rev_ttm = fv(hl.get("RevenueTTM"))
@@ -690,7 +660,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         _v = fv(_q_is_vs[_q].get("netIncomeApplicableToCommonShares")) or fv(_q_is_vs[_q].get("netIncome"))
         if _v is not None: _ni_ttm_vals.append(_v)
     _ni_ttm_sum = sum(_ni_ttm_vals) if len(_ni_ttm_vals) == 4 else None
-    _shs_latest = (fv(_q_bs_vs[_qbs_vs[0]].get("commonStockSharesOutstanding")) or fv(_q_bs_vs[_qbs_vs[0]].get("weightedAverageShsOutDil"))) if _qbs_vs else None
+    _shs_latest = fv(_q_bs_vs[_qbs_vs[0]].get("commonStockSharesOutstanding")) if _qbs_vs else None
     eps_ttm = (_ni_ttm_sum / _shs_latest) if _ni_ttm_sum and _shs_latest and _shs_latest > 0 else None
 
     # ── Current Ratios ───────────────────────────────────────────────
@@ -709,7 +679,21 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     _ni_common_yr = fv(a_is[years_is[0]].get("netIncomeApplicableToCommonShares")) if years_is else None
     pe_yr    = (mcap / _ni_common_yr) if mcap and _ni_common_yr and _ni_common_yr > 0 else \
                (mcap / ni_yr)         if mcap and ni_yr          and ni_yr          > 0 else None
-    # P/Sales TTM revenue (strict 4Q) — used by both P/S Cur and P/S Fwd
+    # P/S (Fwd): estimated as MCap / (Revenue_TTM * (1 + revenueEstimateGrowth))
+    _trends_ps  = data.get("Earnings", {}).get("Trend", {})
+    _p1y_ps     = next((v for v in _trends_ps.values() if v.get("period") == "+1y"), {})
+    _rev_gr_est = fv(_p1y_ps.get("revenueEstimateGrowth"))  # raw decimal e.g. 0.08
+    _rev_ttm_ps_fwd = sum(
+        fv(data["Financials"]["Income_Statement"].get("quarterly", {}).get(q, {}).get("totalRevenue")) or 0
+        for q in sorted(data["Financials"]["Income_Statement"].get("quarterly", {}).keys(), reverse=True)[:4]
+    ) or None
+    if _rev_gr_est is not None and _rev_ttm_ps_fwd:
+        _fwd_rev = _rev_ttm_ps_fwd * (1 + _rev_gr_est)
+        ps_fwd   = (mcap / _fwd_rev) if mcap and _fwd_rev and _fwd_rev > 0 else None
+    else:
+        ps_fwd   = None
+
+    # P/Sales (Cur): PriceSalesTTM → self-calculated mcap/rev_ttm
     _q_is_ps   = data["Financials"]["Income_Statement"].get("quarterly", {})
     _qs_ps     = sorted(_q_is_ps.keys(), reverse=True)
     _rev_ttm_ps_vals = [
@@ -717,82 +701,14 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     ]
     _rev_ttm_ps = sum(_rev_ttm_ps_vals) if len(_rev_ttm_ps_vals) == 4 and all(v is not None for v in _rev_ttm_ps_vals) else None
     _ps_calc   = (mcap / _rev_ttm_ps) if mcap and _rev_ttm_ps and _rev_ttm_ps > 0 else None
-    ps_cur     = _ps_calc or fv(val.get("PriceSalesTTM"))
-
-    # P/S (Fwd): estimated as MCap / (Revenue_TTM * (1 + revenueEstimateGrowth))
-    _trends_ps  = data.get("Earnings", {}).get("Trend", {})
-    _p1y_ps     = next((v for v in _trends_ps.values() if v.get("period") == "+1y"), {})
-    _rev_gr_est = fv(_p1y_ps.get("revenueEstimateGrowth"))  # raw decimal e.g. 0.08
-    if _rev_gr_est is not None and _rev_ttm_ps and _rev_ttm_ps > 0:
-        _fwd_rev = _rev_ttm_ps * (1 + _rev_gr_est)
-        ps_fwd   = (mcap / _fwd_rev) if mcap and _fwd_rev and _fwd_rev > 0 else None
-    else:
-        ps_fwd   = None
+    ps_cur     = fv(val.get("PriceSalesTTM")) or _ps_calc
     ps_yr      = (mcap / rev_yr)    if mcap and rev_yr and rev_yr > 0 else None
     _q_bs_pb  = data["Financials"]["Balance_Sheet"].get("quarterly", {})
     _qbs_pb   = sorted(_q_bs_pb.keys(), reverse=True)
     _equity_q_pb = fv(_q_bs_pb[_qbs_pb[0]].get("totalStockholderEquity")) if _qbs_pb else None
     _pb_self  = (mcap / _equity_q_pb) if mcap and _equity_q_pb and _equity_q_pb > 0 else None
-    _pb_api   = fv(val.get("PriceBookMRQ"))
-    pb_cur    = (_pb_api if _pb_api and _pb_api > 0 else None) or _pb_self
+    pb_cur    = fv(val.get("PriceBookMRQ")) or _pb_self
     pb_yr     = (mcap / equity_yr) if mcap and equity_yr and equity_yr > 0 else None
-
-    # P/Tangible Book = MCap / (Equity - Goodwill - Intangibles)
-    _gw_q     = fv(_q_bs_pb[_qbs_pb[0]].get("goodWill")) or fv(_q_bs_pb[_qbs_pb[0]].get("goodwill")) or 0 if _qbs_pb else 0
-    _ia_q     = fv(_q_bs_pb[_qbs_pb[0]].get("intangibleAssets")) or 0 if _qbs_pb else 0
-    _tbv_q    = (_equity_q_pb or 0) - _gw_q - _ia_q
-    ptbv_cur  = (mcap / _tbv_q) if mcap and _tbv_q and _tbv_q > 0 else None
-
-    _a_bs_ptbv = data["Financials"]["Balance_Sheet"].get("yearly", {})
-    _years_ptbv = sorted(_a_bs_ptbv.keys(), reverse=True)
-    if _years_ptbv:
-        _bs_yr0   = _a_bs_ptbv[_years_ptbv[0]]
-        _eq_yr0   = fv(_bs_yr0.get("totalStockholderEquity")) or 0
-        _gw_yr0   = fv(_bs_yr0.get("goodWill")) or fv(_bs_yr0.get("goodwill")) or 0
-        _ia_yr0   = fv(_bs_yr0.get("intangibleAssets")) or 0
-        _tbv_yr0  = _eq_yr0 - _gw_yr0 - _ia_yr0
-        ptbv_yr   = (mcap / _tbv_yr0) if mcap and _tbv_yr0 and _tbv_yr0 > 0 else None
-    else:
-        ptbv_yr = None
-
-    def ptbv_hist_multiple(n):
-        """P/TBV historical: starts with current (MCap/TBV_Q), then year-end values"""
-        ys = sorted(_a_bs_ptbv.keys(), reverse=True)
-        vals, all_yr = [], []
-        # First entry: current P/TBV using live MCap and latest quarterly TBV
-        if ptbv_cur is not None and _tbv_q > 0:
-            all_yr.append(("aktuell", ptbv_cur, None))
-            vals.append(("aktuell", ptbv_cur))
-        elif _tbv_q <= 0:
-            all_yr.append(("aktuell", None, f"TBV ≤ 0 ({_tbv_q:,.0f})"))
-        else:
-            all_yr.append(("aktuell", None, "MCap fehlt"))
-        # Historical year-end entries
-        for y in ys[:n]:
-            yr_str = y[:4]
-            price  = price_data.get(yr_str)
-            bs_y   = _a_bs_ptbv.get(y, {})
-            eq     = fv(bs_y.get("totalStockholderEquity")) or 0
-            gw     = fv(bs_y.get("goodWill")) or fv(bs_y.get("goodwill")) or 0
-            ia     = fv(bs_y.get("intangibleAssets")) or 0
-            tbv    = eq - gw - ia
-            shs    = (fv(bs_y.get("commonStockSharesOutstanding")) or fv(bs_y.get("weightedAverageShsOutDil")))
-            if price is None:
-                all_yr.append((yr_str, None, "kein Preis verfügbar")); continue
-            if not shs:
-                all_yr.append((yr_str, None, "Shares fehlen")); continue
-            if tbv <= 0:
-                all_yr.append((yr_str, None, f"TBV ≤ 0 ({tbv:,.0f})")); continue
-            mult = price * shs / tbv
-            vals.append((yr_str, mult)); all_yr.append((yr_str, mult, None))
-        # Avg only from historical year-end values (exclude "aktuell")
-        hist_vals = [v for yr, v in vals if yr != "aktuell"]
-        avg = sum(hist_vals) / len(hist_vals) if hist_vals else None
-        return avg, all_yr
-
-    ptbv_3y,  _hy_ptbv_3  = ptbv_hist_multiple(3)
-    ptbv_5y,  _hy_ptbv_5  = ptbv_hist_multiple(5)
-    ptbv_10y, _hy_ptbv_10 = ptbv_hist_multiple(10)
 
     # P/FCF (Cur) — TTM FCF from latest 4 quarters
     q_cf_data = data["Financials"]["Cash_Flow"].get("quarterly", {})
@@ -810,41 +726,15 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     pfcf_cur = (mcap / fcf_ttm) if mcap and fcf_ttm and fcf_ttm > 0 else None
     pfcf_yr  = (mcap / fcf_yr)  if mcap and fcf_yr  and fcf_yr  > 0 else None
 
-    # EV/Revenue Cur: self-calculated with TTM revenue preferred over stale API field
-    _ev_rev_calc = (ev / _rev_ttm_ps) if ev and _rev_ttm_ps and _rev_ttm_ps > 0 else None
-    ev_rev_cur = _ev_rev_calc or fv(val.get("EnterpriseValueRevenue"))
+    ev_rev_cur = fv(val.get("EnterpriseValueRevenue"))
     ev_rev_yr  = (ev / rev_yr)    if ev and rev_yr   and rev_yr  > 0 else None
-    # EV/EBIT Cur: use TTM EBIT (4Q rolling) for more current picture
-    _q_is_ev = data["Financials"]["Income_Statement"].get("quarterly", {})
-    _qs_ev   = sorted(_q_is_ev.keys(), reverse=True)
-    _ebit_ttm_vs = None
-    if len(_qs_ev) >= 4:
-        _ebit_vals = [(fv(_q_is_ev[q].get("ebit")) or fv(_q_is_ev[q].get("operatingIncome"))) for q in _qs_ev[:4]]
-        if all(v is not None for v in _ebit_vals):
-            _ebit_ttm_vs = sum(_ebit_vals)
-    ev_ebit_cur = (ev / _ebit_ttm_vs) if ev and _ebit_ttm_vs and _ebit_ttm_vs > 0 else None
-    ev_ebit_yr  = (ev / ebit_yr)      if ev and ebit_yr        and ebit_yr       > 0 else None
-    # EV/EBITDA Cur: self-calculated with TTM EBITDA preferred over API field
-    _ebitda_ttm_vs = None
-    if len(_qs_ev) >= 4:
-        def _get_ebitda_q(q):
-            v = fv(_q_is_ev[q].get("ebitda"))
-            if v is None:
-                _eb = (fv(_q_is_ev[q].get("ebit")) or fv(_q_is_ev[q].get("operatingIncome")))
-                _da = fv(_q_is_ev[q].get("depreciationAmortization")) or fv(_q_is_ev[q].get("depreciation"))
-                v = _eb + abs(_da) if _eb is not None and _da is not None else None
-            return v
-        _ebitda_vals = [_get_ebitda_q(q) for q in _qs_ev[:4]]
-        if all(v is not None for v in _ebitda_vals):
-            _ebitda_ttm_vs = sum(_ebitda_vals)
-    _ev_ebitda_calc = (ev / _ebitda_ttm_vs) if ev and _ebitda_ttm_vs and _ebitda_ttm_vs > 0 else None
-    ev_ebitda_cur = _ev_ebitda_calc or fv(val.get("EnterpriseValueEbitda"))
+    ev_ebit_cur= (ev / ebit_yr)   if ev and ebit_yr  and ebit_yr > 0 else None
+    ev_ebit_yr = ev_ebit_cur  # same annual basis
+    ev_ebitda_cur = fv(val.get("EnterpriseValueEbitda"))
     ev_ebitda_yr  = (ev / ebitda_yr) if ev and ebitda_yr and ebitda_yr > 0 else None
 
-    # Earnings Yield: NI / MCap × 100 (consistent basis, not via P/E inversion)
-    earn_yield_cur = (_ni_ttm_sum / mcap * 100) if _ni_ttm_sum and mcap and mcap > 0 else (
-                     (1 / pe_cur * 100)          if pe_cur and pe_cur > 0 else None)
-    earn_yield_yr  = (ni_yr / mcap * 100)        if ni_yr  and mcap and mcap > 0 else None
+    earn_yield_cur = (1 / pe_cur * 100)      if pe_cur and pe_cur > 0 else None
+    earn_yield_yr  = (ni_yr / mcap * 100)    if ni_yr and mcap and mcap > 0 else None
     fcf_yield_ttm  = (fcf_ttm / mcap * 100)  if fcf_ttm and mcap and mcap > 0 else None
     fcf_yield_yr   = (fcf_yr  / mcap * 100)  if fcf_yr  and mcap and mcap > 0 else None
 
@@ -857,7 +747,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         if idx >= len(_ys_peg): return None
         y   = _ys_peg[idx]
         ni  = fv(_a_is_peg[y].get("netIncomeApplicableToCommonShares")) or fv(_a_is_peg[y].get("netIncome"))
-        shs = (fv(_a_bs_peg.get(y, {}).get("commonStockSharesOutstanding")) or fv(_a_bs_peg.get(y, {}).get("weightedAverageShsOutDil")))
+        shs = fv(_a_bs_peg.get(y, {}).get("commonStockSharesOutstanding"))
         return (ni / shs) if ni and shs and shs > 0 else None
     _eps0_peg = _get_eps_peg(0)
     _eps1_peg = _get_eps_peg(1)
@@ -878,8 +768,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         vs = [fv(_qis_sc[q].get("netIncomeApplicableToCommonShares")) or fv(_qis_sc[q].get("netIncome")) for q in _qs_sc[st:st+4]]
         return sum(vs) if len(vs)==4 and all(v is not None for v in vs) else None
     _ni0_sc  = _ni_ttm_sc(0); _ni4_sc = _ni_ttm_sc(4)
-    _sh0_sc  = (fv(_qbs_sc[_qbss[0]].get("commonStockSharesOutstanding")) or fv(_qbs_sc[_qbss[0]].get("weightedAverageShsOutDil"))) if _qbss else None
-    _sh4_sc  = (fv(_qbs_sc[_qbss[4]].get("commonStockSharesOutstanding")) or fv(_qbs_sc[_qbss[4]].get("weightedAverageShsOutDil"))) if len(_qbss)>4 else None
+    _sh0_sc  = fv(_qbs_sc[_qbss[0]].get("commonStockSharesOutstanding")) if _qbss else None
+    _sh4_sc  = fv(_qbs_sc[_qbss[4]].get("commonStockSharesOutstanding")) if len(_qbss)>4 else None
     _ep0_sc  = (_ni0_sc/_sh0_sc) if _ni0_sc and _sh0_sc and _sh0_sc>0 else None
     _ep4_sc  = (_ni4_sc/_sh4_sc) if _ni4_sc and _sh4_sc and _sh4_sc>0 else None
     _eg_ttm  = ((_ep0_sc/_ep4_sc-1)*100) if _ep0_sc and _ep4_sc and _ep4_sc>0 else None
@@ -893,178 +783,114 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     # ── Historical averages using real year-end prices ────────────────
     # price_data: {YYYY: adjusted_close} — last trading day of each year
     def hist_multiple(statement, key, n, use_ev=False, invert_fcf=False):
-        """Return (avg, [(year, val_or_skip_reason)]) using real year-end prices.
-        Skipped years are included as (year, None, reason_str) tuples for display."""
+        """Return n-year average multiple using real year-end prices."""
         years = sorted(statement.keys(), reverse=True)
-        vals   = []   # (year, float) — used for avg
-        all_yr = []   # (year, float|None, reason|None) — full display list
+        vals = []
         for y in years[:n]:
             yr_str = y[:4]
             price  = price_data.get(yr_str)
             fund   = fv(statement[y].get(key))
-            if price is None:
-                all_yr.append((yr_str, None, "kein Preis verfügbar"))
-                continue
-            if not fund:
-                all_yr.append((yr_str, None, "Fundamental-Wert fehlt"))
-                continue
-            if fund <= 0:
-                all_yr.append((yr_str, None, f"neg. Basis ({key})"))
+            if price is None or not fund or fund <= 0:
                 continue
             if use_ev:
+                # For EV multiples: approximate EV per year as price * shares + debt - cash
                 bs_y   = data["Financials"]["Balance_Sheet"]["yearly"].get(y, {})
                 ltd    = fv(bs_y.get("longTermDebt")) or 0
-                std    = (fv(bs_y.get("shortLongTermDebt")) or fv(bs_y.get("shortTermDebt")) or 0)
+                std    = fv(bs_y.get("shortLongTermDebt")) or 0
                 csh    = (fv(bs_y.get("cash")) or fv(bs_y.get("cashAndEquivalents")) or 0) + (fv(bs_y.get("shortTermInvestments")) or 0)
-                shs    = (fv(bs_y.get("commonStockSharesOutstanding")) or fv(bs_y.get("weightedAverageShsOutDil")))
-                if not shs:
-                    all_yr.append((yr_str, None, "Shares fehlen"))
-                    continue
-                ev_y  = price * shs + ltd + std - csh
-                mult  = ev_y / fund
-                vals.append((yr_str, mult))
-                all_yr.append((yr_str, mult, None))
+                shs    = fv(bs_y.get("commonStockSharesOutstanding"))
+                if not shs: continue
+                ev_y   = price * shs + ltd + std - csh
+                vals.append(ev_y / fund)
             else:
-                shs = (fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
-                       or fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("weightedAverageShsOutDil")))
-                if not shs:
-                    all_yr.append((yr_str, None, "Shares fehlen"))
-                    continue
+                shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+                if not shs: continue
                 mcap_y = price * shs
-                mult   = mcap_y / fund
-                vals.append((yr_str, mult))
-                all_yr.append((yr_str, mult, None))
-        avg = sum(v for _, v in vals) / len(vals) if vals else None
-        return avg, all_yr
+                vals.append(mcap_y / fund)
+        return sum(vals) / len(vals) if vals else None
 
     def fcf_hist_real(n):
         years = sorted(a_cf.keys(), reverse=True)
-        vals   = []
-        all_yr = []
+        vals = []
         for y in years[:n]:
             yr_str = y[:4]
             price  = price_data.get(yr_str)
-            if price is None:
-                all_yr.append((yr_str, None, "kein Preis verfügbar"))
-                continue
             f = fv(a_cf[y].get("freeCashFlow"))
             if not f:
                 cfo   = fv(a_cf[y].get("totalCashFromOperatingActivities"))
                 capex = fv(a_cf[y].get("capitalExpenditures"))
                 f = cfo - abs(capex) if cfo and capex else None
-            if not f:
-                all_yr.append((yr_str, None, "FCF-Wert fehlt"))
-                continue
-            if f <= 0:
-                all_yr.append((yr_str, None, "neg. FCF"))
-                continue
-            shs = (fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
-                   or fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("weightedAverageShsOutDil")))
-            if not shs:
-                all_yr.append((yr_str, None, "Shares fehlen"))
-                continue
-            mult = price * shs / f
-            vals.append((yr_str, mult))
-            all_yr.append((yr_str, mult, None))
-        avg = sum(v for _, v in vals) / len(vals) if vals else None
-        return avg, all_yr
+            if price is None or not f or f <= 0: continue
+            shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+            if not shs: continue
+            vals.append(price * shs / f)
+        return sum(vals) / len(vals) if vals else None
 
     def yield_hist_real(statement, key, n):
         years = sorted(statement.keys(), reverse=True)
-        vals   = []
-        all_yr = []
+        vals = []
         for y in years[:n]:
             yr_str = y[:4]
             price  = price_data.get(yr_str)
-            if price is None:
-                all_yr.append((yr_str, None, "kein Preis verfügbar"))
-                continue
-            fund = fv(statement[y].get(key))
-            if not fund:
-                all_yr.append((yr_str, None, "Fundamental-Wert fehlt"))
-                continue
-            shs = (fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
-                   or fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("weightedAverageShsOutDil")))
-            if not shs:
-                all_yr.append((yr_str, None, "Shares fehlen"))
-                continue
+            fund   = fv(statement[y].get(key))
+            if price is None or not fund: continue
+            shs = fv(data["Financials"]["Balance_Sheet"]["yearly"].get(y, {}).get("commonStockSharesOutstanding"))
+            if not shs: continue
             mcap_y = price * shs
-            if mcap_y > 0:
-                yld = fund / mcap_y * 100
-                vals.append((yr_str, yld))
-                all_yr.append((yr_str, yld, None))
-            else:
-                all_yr.append((yr_str, None, "MCap ≤ 0"))
-        avg = sum(v for _, v in vals) / len(vals) if vals else None
-        return avg, all_yr
+            if mcap_y > 0: vals.append(fund / mcap_y * 100)
+        return sum(vals) / len(vals) if vals else None
 
-    pe_3y,   _hy_pe_3   = hist_multiple(a_is, "netIncome",             3)
-    pe_5y,   _hy_pe_5   = hist_multiple(a_is, "netIncome",             5)
-    pe_10y,  _hy_pe_10  = hist_multiple(a_is, "netIncome",            10)
-    ps_3y,   _hy_ps_3   = hist_multiple(a_is, "totalRevenue",          3)
-    ps_5y,   _hy_ps_5   = hist_multiple(a_is, "totalRevenue",          5)
-    ps_10y,  _hy_ps_10  = hist_multiple(a_is, "totalRevenue",         10)
-    pb_3y,   _hy_pb_3   = hist_multiple(a_bs, "totalStockholderEquity",3)
-    pb_5y,   _hy_pb_5   = hist_multiple(a_bs, "totalStockholderEquity",5)
-    pb_10y,  _hy_pb_10  = hist_multiple(a_bs, "totalStockholderEquity",10)
-    pfcf_3y, _hy_pfcf_3 = fcf_hist_real(3)
-    pfcf_5y, _hy_pfcf_5 = fcf_hist_real(5)
-    pfcf_10y,_hy_pfcf_10= fcf_hist_real(10)
-    ev_rev_3y,  _hy_evr_3   = hist_multiple(a_is, "totalRevenue", 3,  use_ev=True)
-    ev_rev_5y,  _hy_evr_5   = hist_multiple(a_is, "totalRevenue", 5,  use_ev=True)
-    ev_rev_10y, _hy_evr_10  = hist_multiple(a_is, "totalRevenue", 10, use_ev=True)
-    ev_ebit_3y, _hy_eveb_3  = hist_multiple(a_is, "ebit",         3,  use_ev=True)
-    ev_ebit_5y, _hy_eveb_5  = hist_multiple(a_is, "ebit",         5,  use_ev=True)
-    ev_ebit_10y,_hy_eveb_10 = hist_multiple(a_is, "ebit",         10, use_ev=True)
-    ev_ebitda_3y, _hy_evda_3  = hist_multiple(a_is, "ebitda",      3,  use_ev=True)
-    ev_ebitda_5y, _hy_evda_5  = hist_multiple(a_is, "ebitda",      5,  use_ev=True)
-    ev_ebitda_10y,_hy_evda_10 = hist_multiple(a_is, "ebitda",      10, use_ev=True)
-    earn_yield_3y, _hy_ey_3  = yield_hist_real(a_is, "netIncome",    3)
-    earn_yield_5y, _hy_ey_5  = yield_hist_real(a_is, "netIncome",    5)
-    earn_yield_10y,_hy_ey_10 = yield_hist_real(a_is, "netIncome",   10)
-    fcf_yield_3y,  _hy_fy_3  = yield_hist_real(a_cf, "freeCashFlow", 3)
-    fcf_yield_5y,  _hy_fy_5  = yield_hist_real(a_cf, "freeCashFlow", 5)
-    fcf_yield_10y, _hy_fy_10 = yield_hist_real(a_cf, "freeCashFlow",10)
+    pe_3y   = hist_multiple(a_is, "netIncome",             3)
+    pe_5y   = hist_multiple(a_is, "netIncome",             5)
+    pe_10y  = hist_multiple(a_is, "netIncome",            10)
+    ps_3y   = hist_multiple(a_is, "totalRevenue",          3)
+    ps_5y   = hist_multiple(a_is, "totalRevenue",          5)
+    ps_10y  = hist_multiple(a_is, "totalRevenue",         10)
+    pb_3y   = hist_multiple(a_bs, "totalStockholderEquity",3)
+    pb_5y   = hist_multiple(a_bs, "totalStockholderEquity",5)
+    pb_10y  = hist_multiple(a_bs, "totalStockholderEquity",10)
+    pfcf_3y = fcf_hist_real(3)
+    pfcf_5y = fcf_hist_real(5)
+    pfcf_10y= fcf_hist_real(10)
+    ev_rev_3y   = hist_multiple(a_is, "totalRevenue", 3,  use_ev=True)
+    ev_rev_5y   = hist_multiple(a_is, "totalRevenue", 5,  use_ev=True)
+    ev_rev_10y  = hist_multiple(a_is, "totalRevenue", 10, use_ev=True)
+    ev_ebit_3y  = hist_multiple(a_is, "ebit",         3,  use_ev=True)
+    ev_ebit_5y  = hist_multiple(a_is, "ebit",         5,  use_ev=True)
+    ev_ebit_10y = hist_multiple(a_is, "ebit",         10, use_ev=True)
+    ev_ebitda_3y = hist_multiple(a_is, "ebitda",      3,  use_ev=True)
+    ev_ebitda_5y = hist_multiple(a_is, "ebitda",      5,  use_ev=True)
+    ev_ebitda_10y= hist_multiple(a_is, "ebitda",      10, use_ev=True)
+    earn_yield_3y = yield_hist_real(a_is, "netIncome",    3)
+    earn_yield_5y = yield_hist_real(a_is, "netIncome",    5)
+    earn_yield_10y= yield_hist_real(a_is, "netIncome",   10)
+    fcf_yield_3y  = yield_hist_real(a_cf, "freeCashFlow", 3)
+    fcf_yield_5y  = yield_hist_real(a_cf, "freeCashFlow", 5)
+    fcf_yield_10y = yield_hist_real(a_cf, "freeCashFlow",10)
 
     # PEG historical averages: avg(P/E_year / EPS_growth_year) per rolling window
     def peg_hist_avg(n):
-        """PEG = P/E / EPS-Growth (consistent with peg_cur/peg_yr which use eps_gr_yr)"""
         years = sorted(a_is.keys(), reverse=True)
-        vals   = []
-        all_yr = []
+        vals = []
         for i in range(min(n, len(years) - 1)):
             y_cur  = years[i]
             y_prev = years[i + 1]
+            ni_c = fv(a_is[y_cur].get("netIncome"))
+            ni_p = fv(a_is[y_prev].get("netIncome"))
+            if not ni_c or not ni_p or ni_p <= 0: continue
+            gr = (ni_c / ni_p - 1) * 100
+            if gr <= 0: continue
             yr_str = y_cur[:4]
-            # EPS-based growth (consistent with spot PEG values)
-            ni_c  = fv(a_is[y_cur].get("netIncomeApplicableToCommonShares"))  or fv(a_is[y_cur].get("netIncome"))
-            ni_p  = fv(a_is[y_prev].get("netIncomeApplicableToCommonShares")) or fv(a_is[y_prev].get("netIncome"))
-            shs_c = (fv(a_bs.get(y_cur,  {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y_cur,  {}).get("weightedAverageShsOutDil")))
-            shs_p = (fv(a_bs.get(y_prev, {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y_prev, {}).get("weightedAverageShsOutDil")))
-            if not ni_c or not ni_p or not shs_c or not shs_p:
-                all_yr.append((yr_str, None, "EPS-Daten fehlen")); continue
-            eps_c = ni_c / shs_c if shs_c > 0 else None
-            eps_p = ni_p / shs_p if shs_p > 0 else None
-            if not eps_c or not eps_p or eps_p <= 0:
-                all_yr.append((yr_str, None, "EPS nicht berechenbar")); continue
-            gr = (eps_c / eps_p - 1) * 100
-            if gr <= 0:
-                all_yr.append((yr_str, None, f"neg. EPS-Wachstum ({gr:.1f}%)")); continue
-            price = price_data.get(yr_str)
-            if not price:
-                all_yr.append((yr_str, None, "kein Preis verfügbar")); continue
-            pe_y = price * shs_c / ni_c if ni_c > 0 else None
-            if pe_y:
-                peg = pe_y / gr
-                vals.append((yr_str, peg)); all_yr.append((yr_str, peg, None))
-            else:
-                all_yr.append((yr_str, None, "P/E nicht berechenbar"))
-        avg = sum(v for _, v in vals) / len(vals) if vals else None
-        return avg, all_yr
+            price  = price_data.get(yr_str)
+            shs    = fv(a_bs.get(y_cur, {}).get("commonStockSharesOutstanding"))
+            if not price or not shs: continue
+            pe_y = price * shs / ni_c if ni_c > 0 else None
+            if pe_y: vals.append(pe_y / gr)
+        return sum(vals) / len(vals) if vals else None
 
-    peg_3y,  _hy_peg_3  = peg_hist_avg(3)
-    peg_5y,  _hy_peg_5  = peg_hist_avg(5)
-    peg_10y, _hy_peg_10 = peg_hist_avg(10)
+    peg_3y  = peg_hist_avg(3)
+    peg_5y  = peg_hist_avg(5)
+    peg_10y = peg_hist_avg(10)
 
     # ── Grade thresholds ─────────────────────────────────────────────
     PE_T    = [(0,"ap"),(10,"a"),(15,"am"),(20,"bp"),(25,"b"),(30,"bm"),(40,"cp"),(50,"c")]
@@ -1084,21 +910,8 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
 
     # ── Build rows ───────────────────────────────────────────────────
     # Each row: (label, cur_val, cur_fmt, grade_css, grade_lbl, avg3y, avg5y, avg10y, thresholds, higher)
-    def row(label, cur, avg3, avg5, avg10, T, higher=False, pct=False,
-            hy3=None, hy5=None, hy10=None):
+    def row(label, cur, avg3, avg5, avg10, T, higher=False, pct=False):
         css, lbl = ratio_grade(cur, T, higher_is_better=higher)
-        def fmtv(v): return (f"{v:.2f} %" if pct else f"{v:.2f}") if v is not None else None
-        def conv(hy):
-            # accepts [(y, val, reason)] or [(y, val)] — normalise to 3-tuple
-            if not hy: return []
-            result = []
-            for item in hy:
-                if len(item) == 3:
-                    yr, v, reason = item
-                else:
-                    yr, v = item; reason = None
-                result.append((yr, fmtv(v), reason))
-            return result
         return {
             "label":  label,
             "cur":    cur,
@@ -1111,40 +924,34 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
             "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
             "T": T, "higher": higher, "pct": pct,
             "group":  label.split(" ")[0],
-            "hy3":  conv(hy3),
-            "hy5":  conv(hy5),
-            "hy10": conv(hy10),
         }
 
     PEG_T   = [(0,"ap"),(0.5,"a"),(1,"am"),(1.5,"bp"),(2,"b"),(3,"bm"),(4,"cp"),(5,"c")]
-    PTBV_T  = [(0,"ap"),(1,"a"),(2,"am"),(4,"bp"),(7,"b"),(12,"bm"),(20,"cp")]
 
     rows = [
-        row("P/Earnings (Fwd)",      pe_fwd,         None,          None,          None,           PE_T),
-        row("P/Earnings (Cur)",      pe_cur,         pe_3y,         pe_5y,         pe_10y,         PE_T,  hy3=_hy_pe_3,   hy5=_hy_pe_5,   hy10=_hy_pe_10),
-        row("P/Earnings (Year)",     pe_yr,          pe_3y,         pe_5y,         pe_10y,         PE_T,  hy3=_hy_pe_3,   hy5=_hy_pe_5,   hy10=_hy_pe_10),
-        row("P/Sales (Fwd)",         ps_fwd,         None,          None,          None,           PS_T),
-        row("P/Sales (Cur)",         ps_cur,         ps_3y,         ps_5y,         ps_10y,         PS_T,  hy3=_hy_ps_3,   hy5=_hy_ps_5,   hy10=_hy_ps_10),
-        row("P/Sales (Year)",        ps_yr,          ps_3y,         ps_5y,         ps_10y,         PS_T,  hy3=_hy_ps_3,   hy5=_hy_ps_5,   hy10=_hy_ps_10),
-        row("P/Book (Cur)",          pb_cur,         pb_3y,         pb_5y,         pb_10y,         PB_T,  hy3=_hy_pb_3,   hy5=_hy_pb_5,   hy10=_hy_pb_10),
-        row("P/Book (Year)",         pb_yr,          pb_3y,         pb_5y,         pb_10y,         PB_T,  hy3=_hy_pb_3,   hy5=_hy_pb_5,   hy10=_hy_pb_10),
-        row("P/Tangible Book (Cur)", ptbv_cur,       ptbv_3y,       ptbv_5y,       ptbv_10y,       PTBV_T, hy3=_hy_ptbv_3, hy5=_hy_ptbv_5, hy10=_hy_ptbv_10),
-        row("P/Tangible Book (Year)",ptbv_yr,        ptbv_3y,       ptbv_5y,       ptbv_10y,       PTBV_T, hy3=_hy_ptbv_3, hy5=_hy_ptbv_5, hy10=_hy_ptbv_10),
-        row("P/FCF (Cur)",           pfcf_cur,       pfcf_3y,       pfcf_5y,       pfcf_10y,       PFCF_T, hy3=_hy_pfcf_3, hy5=_hy_pfcf_5, hy10=_hy_pfcf_10),
-        row("P/FCF (Year)",          pfcf_yr,        pfcf_3y,       pfcf_5y,       pfcf_10y,       PFCF_T, hy3=_hy_pfcf_3, hy5=_hy_pfcf_5, hy10=_hy_pfcf_10),
-        row("PEG Ratio (Fwd)",       peg_fwd,        peg_3y,        peg_5y,        peg_10y,        PEG_T),
-        row("PEG Ratio (Cur)",       peg_cur,        peg_3y,        peg_5y,        peg_10y,        PEG_T, hy3=_hy_peg_3, hy5=_hy_peg_5, hy10=_hy_peg_10),
-        row("PEG Ratio (Year)",      peg_yr,         peg_3y,        peg_5y,        peg_10y,        PEG_T, hy3=_hy_peg_3, hy5=_hy_peg_5, hy10=_hy_peg_10),
-        row("EV/Revenue (Cur)",      ev_rev_cur,     ev_rev_3y,     ev_rev_5y,     ev_rev_10y,     EVR_T,   hy3=_hy_evr_3,  hy5=_hy_evr_5,  hy10=_hy_evr_10),
-        row("EV/Revenue (Year)",     ev_rev_yr,      ev_rev_3y,     ev_rev_5y,     ev_rev_10y,     EVR_T,   hy3=_hy_evr_3,  hy5=_hy_evr_5,  hy10=_hy_evr_10),
-        row("EV/EBIT (Cur)",         ev_ebit_cur,    ev_ebit_3y,    ev_ebit_5y,    ev_ebit_10y,    EVEBIT_T, hy3=_hy_eveb_3, hy5=_hy_eveb_5, hy10=_hy_eveb_10),
-        row("EV/EBIT (Year)",        ev_ebit_yr,     ev_ebit_3y,    ev_ebit_5y,    ev_ebit_10y,    EVEBIT_T, hy3=_hy_eveb_3, hy5=_hy_eveb_5, hy10=_hy_eveb_10),
-        row("EV/EBITDA (Cur)",       ev_ebitda_cur,  ev_ebitda_3y,  ev_ebitda_5y,  ev_ebitda_10y,  EVEBDA_T, hy3=_hy_evda_3, hy5=_hy_evda_5, hy10=_hy_evda_10),
-        row("EV/EBITDA (Year)",      ev_ebitda_yr,   ev_ebitda_3y,  ev_ebitda_5y,  ev_ebitda_10y,  EVEBDA_T, hy3=_hy_evda_3, hy5=_hy_evda_5, hy10=_hy_evda_10),
-        row("Earnings Yield (Cur)",  earn_yield_cur, earn_yield_3y, earn_yield_5y, earn_yield_10y, EY_T,   higher=True, pct=True, hy3=_hy_ey_3, hy5=_hy_ey_5, hy10=_hy_ey_10),
-        row("Earnings Yield (Year)", earn_yield_yr,  earn_yield_3y, earn_yield_5y, earn_yield_10y, EY_T,   higher=True, pct=True, hy3=_hy_ey_3, hy5=_hy_ey_5, hy10=_hy_ey_10),
-        row("FCF Yield (TTM)",       fcf_yield_ttm,  fcf_yield_3y,  fcf_yield_5y,  fcf_yield_10y,  FCFY_T, higher=True, pct=True, hy3=_hy_fy_3, hy5=_hy_fy_5, hy10=_hy_fy_10),
-        row("FCF Yield (Year)",      fcf_yield_yr,   fcf_yield_3y,  fcf_yield_5y,  fcf_yield_10y,  FCFY_T, higher=True, pct=True, hy3=_hy_fy_3, hy5=_hy_fy_5, hy10=_hy_fy_10),
+        row("P/Earnings (Fwd)",      pe_fwd,         None,         None,         None,          PE_T),
+        row("P/Earnings (Cur)",      pe_cur,         pe_3y,        pe_5y,        pe_10y,        PE_T),
+        row("P/Earnings (Year)",     pe_yr,          pe_3y,        pe_5y,        pe_10y,        PE_T),
+        row("P/Sales (Fwd)",         ps_fwd,         None,         None,         None,          PS_T),
+        row("P/Sales (Cur)",         ps_cur,         ps_3y,        ps_5y,        ps_10y,        PS_T),
+        row("P/Sales (Year)",        ps_yr,          ps_3y,        ps_5y,        ps_10y,        PS_T),
+        row("P/Book (Cur)",          pb_cur,         pb_3y,        pb_5y,        pb_10y,        PB_T),
+        row("P/Book (Year)",         pb_yr,          pb_3y,        pb_5y,        pb_10y,        PB_T),
+        row("P/FCF (Cur)",           pfcf_cur,       pfcf_3y,      pfcf_5y,      pfcf_10y,      PFCF_T),
+        row("P/FCF (Year)",          pfcf_yr,        pfcf_3y,      pfcf_5y,      pfcf_10y,      PFCF_T),
+        row("PEG Ratio (Fwd)",       peg_fwd,        peg_3y,       peg_5y,       peg_10y,       PEG_T),
+        row("PEG Ratio (Cur)",       peg_cur,        peg_3y,       peg_5y,       peg_10y,       PEG_T),
+        row("PEG Ratio (Year)",      peg_yr,         peg_3y,       peg_5y,       peg_10y,       PEG_T),
+        row("EV/Revenue (Cur)",      ev_rev_cur,     ev_rev_3y,    ev_rev_5y,    ev_rev_10y,    EVR_T),
+        row("EV/Revenue (Year)",     ev_rev_yr,      ev_rev_3y,    ev_rev_5y,    ev_rev_10y,    EVR_T),
+        row("EV/EBIT (Cur)",         ev_ebit_cur,    ev_ebit_3y,   ev_ebit_5y,   ev_ebit_10y,   EVEBIT_T),
+        row("EV/EBIT (Year)",        ev_ebit_yr,     ev_ebit_3y,   ev_ebit_5y,   ev_ebit_10y,   EVEBIT_T),
+        row("EV/EBITDA (Cur)",       ev_ebitda_cur,  ev_ebitda_3y, ev_ebitda_5y, ev_ebitda_10y, EVEBDA_T),
+        row("EV/EBITDA (Year)",      ev_ebitda_yr,   ev_ebitda_3y, ev_ebitda_5y, ev_ebitda_10y, EVEBDA_T),
+        row("Earnings Yield (Cur)",  earn_yield_cur, earn_yield_3y,earn_yield_5y,earn_yield_10y, EY_T,   higher=True, pct=True),
+        row("Earnings Yield (Year)", earn_yield_yr,  earn_yield_3y,earn_yield_5y,earn_yield_10y, EY_T,   higher=True, pct=True),
+        row("FCF Yield (TTM)",       fcf_yield_ttm,  fcf_yield_3y, fcf_yield_5y, fcf_yield_10y,  FCFY_T, higher=True, pct=True),
+        row("FCF Yield (Year)",      fcf_yield_yr,   fcf_yield_3y, fcf_yield_5y, fcf_yield_10y,  FCFY_T, higher=True, pct=True),
     ]
 
     # ── Overall Score ────────────────────────────────────────────────
@@ -1312,7 +1119,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             return None, cfo, cx, False, [y]
 
     mcap   = fv(hl.get("MarketCapitalization"))
-    shares = fv(hl.get("SharesOutstanding")) or ((fv(q_bs[qbs_s[0]].get("commonStockSharesOutstanding")) or fv(q_bs[qbs_s[0]].get("weightedAverageShsOutDil"))) if qbs_s else None)
+    shares = fv(hl.get("SharesOutstanding")) or (fv(q_bs[qbs_s[0]].get("commonStockSharesOutstanding")) if qbs_s else None)
     ev     = fv(val.get("EnterpriseValue"))
     bsQ    = q_bs.get(qbs_s[0], {}) if qbs_s else {}
     bsQ_dt = qbs_s[0] if qbs_s else "—"
@@ -1337,11 +1144,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     # ── Annual values ─────────────────────────────────────────────────
     rev_a    = fv(isA.get("totalRevenue"))
     ni_a     = fv(isA.get("netIncome"))
-    ebit_a   = (fv(isA.get("ebit")) or fv(isA.get("operatingIncome")))
+    ebit_a   = fv(isA.get("ebit"))
     ebitda_a = fv(isA.get("ebitda"))
-    if ebitda_a is None:  # ebitda fallback: ebit + D&A
-        _da_a = fv(isA.get("depreciationAmortization")) or fv(isA.get("depreciation"))
-        if ebit_a is not None and _da_a is not None: ebitda_a = ebit_a + abs(_da_a)
     gp_a     = fv(isA.get("grossProfit"))
     oi_a     = fv(isA.get("operatingIncome"))
     int_a    = fv(isA.get("interestExpense"))
@@ -1350,7 +1154,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     # ── BS quarterly ──────────────────────────────────────────────────
     cash_q = (fv(bsQ.get("cash")) or fv(bsQ.get("cashAndEquivalents")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
     ltd_q  = fv(bsQ.get("longTermDebt")) or 0
-    std_q  = (fv(bsQ.get("shortLongTermDebt")) or fv(bsQ.get("shortTermDebt")) or 0)
+    std_q  = fv(bsQ.get("shortLongTermDebt")) or 0
     debt_q = ltd_q + std_q
     eq_q   = fv(bsQ.get("totalStockholderEquity"))
     ta_q   = fv(bsQ.get("totalAssets"))
@@ -1359,12 +1163,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     tl_q   = fv(bsQ.get("totalLiab"))
     inv_q  = fv(bsQ.get("inventory")) or 0
     re_q   = fv(bsQ.get("retainedEarnings"))
-    sh_q   = (fv(bsQ.get("commonStockSharesOutstanding")) or fv(bsQ.get("weightedAverageShsOutDil")))
+    sh_q   = fv(bsQ.get("commonStockSharesOutstanding"))
 
     # ── BS annual ─────────────────────────────────────────────────────
     cash_a = (fv(bsA.get("cash")) or fv(bsA.get("cashAndEquivalents")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
     ltd_a  = fv(bsA.get("longTermDebt")) or 0
-    std_a  = (fv(bsA.get("shortLongTermDebt")) or fv(bsA.get("shortTermDebt")) or 0)
+    std_a  = fv(bsA.get("shortLongTermDebt")) or 0
     debt_a = ltd_a + std_a
     eq_a   = fv(bsA.get("totalStockholderEquity"))
     ta_a   = fv(bsA.get("totalAssets"))
@@ -1372,7 +1176,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     cl_a   = fv(bsA.get("totalCurrentLiabilities"))
     tl_a   = fv(bsA.get("totalLiab"))
     inv_a  = fv(bsA.get("inventory")) or 0
-    sh_a   = (fv(bsA.get("commonStockSharesOutstanding")) or fv(bsA.get("weightedAverageShsOutDil")))
+    sh_a   = fv(bsA.get("commonStockSharesOutstanding"))
 
     # ── Prior-year BS (for averages) ──────────────────────────────────
     bsA1   = a_bs.get(years_bs[1], {}) if len(years_bs) > 1 else {}
@@ -1852,8 +1656,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 return sum(vals) if len(vals) == 4 else None
             _ni_now    = _ni_eps_ttm(0)
             _ni_1yago  = _ni_eps_ttm(4)
-            _shs_q0    = (fv(_q_bs_fb[_qbs_fb[0]].get("commonStockSharesOutstanding")) or fv(_q_bs_fb[_qbs_fb[0]].get("weightedAverageShsOutDil"))) if _qbs_fb else None
-            _shs_q4    = (fv(_q_bs_fb[_qbs_fb[4]].get("commonStockSharesOutstanding")) or fv(_q_bs_fb[_qbs_fb[4]].get("weightedAverageShsOutDil"))) if len(_qbs_fb) > 4 else None
+            _shs_q0    = fv(_q_bs_fb[_qbs_fb[0]].get("commonStockSharesOutstanding")) if _qbs_fb else None
+            _shs_q4    = fv(_q_bs_fb[_qbs_fb[4]].get("commonStockSharesOutstanding")) if len(_qbs_fb) > 4 else None
             _eps_now   = (_ni_now   / _shs_q0) if _ni_now   and _shs_q0 and _shs_q0 > 0 else None
             _eps_1yago = (_ni_1yago / _shs_q4) if _ni_1yago and _shs_q4 and _shs_q4 > 0 else None
             gr_ttm_fb  = ((_eps_now / _eps_1yago - 1) * 100) if _eps_now and _eps_1yago and _eps_1yago > 0 else None
@@ -1865,7 +1669,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 if idx >= len(_ys_fb2): return None
                 y   = _ys_fb2[idx]
                 ni  = fv(_a_is_fb2[y].get("netIncomeApplicableToCommonShares")) or fv(_a_is_fb2[y].get("netIncome"))
-                shs = (fv(_a_bs_fb2.get(y, {}).get("commonStockSharesOutstanding")) or fv(_a_bs_fb2.get(y, {}).get("weightedAverageShsOutDil")))
+                shs = fv(_a_bs_fb2.get(y, {}).get("commonStockSharesOutstanding"))
                 return (ni / shs) if ni and shs and shs > 0 else None
             _ea0 = _eps_ann(0); _ea1 = _eps_ann(1)
             gr_yoy_fb  = ((_ea0 / _ea1 - 1) * 100) if _ea0 and _ea1 and _ea1 > 0 else None
@@ -1924,14 +1728,14 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             if idx >= len(years): return None
             y   = years[idx]
             ni  = fv(a_is.get(y, {}).get("netIncomeApplicableToCommonShares")) or fv(a_is.get(y, {}).get("netIncome"))
-            shs = (fv(a_bs_dd.get(y, {}).get("commonStockSharesOutstanding")) or fv(a_bs_dd.get(y, {}).get("weightedAverageShsOutDil")))
+            shs = fv(a_bs_dd.get(y, {}).get("commonStockSharesOutstanding"))
             return (ni / shs) if ni and shs and shs > 0 else None
         eps0_dd    = _eps_peg_dd(0)
         eps1_dd    = _eps_peg_dd(1)
         ni0_dd     = fv(a_is.get(y0, {}).get("netIncomeApplicableToCommonShares")) or fv(a_is.get(y0, {}).get("netIncome"))
         ni1_dd     = fv(a_is.get(y1, {}).get("netIncomeApplicableToCommonShares")) or fv(a_is.get(y1, {}).get("netIncome"))
-        shs0_dd    = (fv(a_bs_dd.get(y0, {}).get("commonStockSharesOutstanding")) or fv(a_bs_dd.get(y0, {}).get("weightedAverageShsOutDil")))
-        shs1_dd    = (fv(a_bs_dd.get(y1, {}).get("commonStockSharesOutstanding")) or fv(a_bs_dd.get(y1, {}).get("weightedAverageShsOutDil")))
+        shs0_dd    = fv(a_bs_dd.get(y0, {}).get("commonStockSharesOutstanding"))
+        shs1_dd    = fv(a_bs_dd.get(y1, {}).get("commonStockSharesOutstanding"))
         eps_gr_pct = ((eps0_dd / eps1_dd - 1) * 100) if eps0_dd and eps1_dd and eps1_dd > 0 else None
         ni_cur_yr  = fv(a_is.get(y0, {}).get("netIncome")) if years else None
 
@@ -2568,29 +2372,19 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             else:
                 gr = ((v0 / vn) ** (1 / n) - 1) * 100
             fcf_note = "\n⚠ FCF = freeCashFlow; fallback CFO−|CapEx| if null" if is_fcf else ""
-            # Build per-year value table (all n+1 years used in CAGR span)
-            yr_comps = []
-            for i, y in enumerate(ys[:n + 1]):
-                if is_fcf:
-                    yv, _ = get_fcf_a(y)
-                else:
-                    yv = fv(stmt_a[y].get(api_key))
-                label_suffix = "  ← recent" if i == 0 else (f"  ← base ({n}Y ago)" if i == n else "")
-                yr_comps.append((f"  {y[:4]}{label_suffix}", raw(yv)))
             return {
                 "formula": f"(V[{y0}] ÷ V[{yn}])^(1/{n}) − 1  × 100\n= Compound Annual Growth Rate over {n} years{fcf_note}\n⚠ N/A when base year ≤ 0",
                 "fields":  [f"{stmt_lbl}.{api_key} — annual"],
                 "unit": "%",
-                "components": (
-                    yr_comps +
-                    [
-                        ("── Berechnung ──",                                             ""),
-                        (f"({raw(v0)} ÷ {raw(vn)})^(1/{n}) − 1",  f"{(gr / 100):.6f}" if gr is not None else (gr_note or "—")),
-                        ("× 100",                                                        ""),
-                        ("── Result ──",                                                 ""),
-                        (f"→ {field_label} Growth ({n}Y CAGR)",  f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
-                    ]
-                ),
+                "components": [
+                    (f"{stmt_lbl}.{api_key}  [{y0}]  (V recent)" + (f"  source: {s0}" if is_fcf else ""), raw(v0)),
+                    (f"{stmt_lbl}.{api_key}  [{yn}]  (V base, {n}Y ago)" + (f"  source: {sn}" if is_fcf else ""), raw(vn)),
+                    ("── Calculation ──",                                            ""),
+                    (f"({raw(v0)} ÷ {raw(vn)})^(1/{n}) − 1",  f"{(gr / 100):.6f}" if gr is not None else (gr_note or "—")),
+                    ("× 100",                                                        ""),
+                    ("── Result ──",                                                 ""),
+                    (f"{field_label} Growth ({n}Y CAGR)",  f"{gr:.4f} %" if gr is not None else (gr_note or "—")),
+                ],
                 "result": f"{gr:.4f} %" if gr is not None else (gr_note or "—")}
 
         elif "Fwd" in L:
@@ -2652,7 +2446,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                         "result": "—"}
             def get_eps_dd(y):
                 ni  = fv(a_is[y].get("netIncomeApplicableToCommonShares")) or fv(a_is[y].get("netIncome"))
-                shs = (fv(a_bs.get(y, {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y, {}).get("weightedAverageShsOutDil")))
+                shs = fv(a_bs.get(y, {}).get("commonStockSharesOutstanding"))
                 return ni, shs, (ni / shs) if ni is not None and shs and shs > 0 else None
             y0 = ys[0]; yn = ys[n]
             ni0, shs0, eps0 = get_eps_dd(y0)
@@ -2699,8 +2493,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 return rows, (total if sum(1 for _, v in rows if v is not None)==4 else None)
             t0_rows, ni0 = ttm_ni_rows(0)
             t4_rows, ni4 = ttm_ni_rows(4)
-            shs0 = (fv(q_bs[qbs[0]].get("commonStockSharesOutstanding")) or fv(q_bs[qbs[0]].get("weightedAverageShsOutDil"))) if qbs else None
-            shs4 = (fv(q_bs[qbs[4]].get("commonStockSharesOutstanding")) or fv(q_bs[qbs[4]].get("weightedAverageShsOutDil"))) if len(qbs)>4 else shs0
+            shs0 = fv(q_bs[qbs[0]].get("commonStockSharesOutstanding")) if qbs else None
+            shs4 = fv(q_bs[qbs[4]].get("commonStockSharesOutstanding")) if len(qbs)>4 else shs0
             eps0 = (ni0 / shs0) if ni0 and shs0 and shs0 > 0 else None
             eps4 = (ni4 / shs4) if ni4 and shs4 and shs4 > 0 else None
             if eps4 is not None and eps4 <= 0:
@@ -2748,8 +2542,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             y0 = ys[0]; y1 = ys[1]
             ni0 = fv(a_is[y0].get("netIncomeApplicableToCommonShares")) or fv(a_is[y0].get("netIncome"))
             ni1 = fv(a_is[y1].get("netIncomeApplicableToCommonShares")) or fv(a_is[y1].get("netIncome"))
-            shs0 = (fv(a_bs.get(y0, {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y0, {}).get("weightedAverageShsOutDil")))
-            shs1 = (fv(a_bs.get(y1, {}).get("commonStockSharesOutstanding")) or fv(a_bs.get(y1, {}).get("weightedAverageShsOutDil")))
+            shs0 = fv(a_bs.get(y0, {}).get("commonStockSharesOutstanding"))
+            shs1 = fv(a_bs.get(y1, {}).get("commonStockSharesOutstanding"))
             eps0 = (ni0 / shs0) if ni0 and shs0 and shs0 > 0 else None
             eps1 = (ni1 / shs1) if ni1 and shs1 and shs1 > 0 else None
             if eps1 is not None and eps1 <= 0:
@@ -2790,8 +2584,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             q0b = qs_bs[0]; q1b = qs_bs[1]
             ni0 = fv(q_is[q0i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q0i].get("netIncome"))
             ni1 = fv(q_is[q1i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q1i].get("netIncome"))
-            shs0 = (fv(q_bs[q0b].get("commonStockSharesOutstanding")) or fv(q_bs[q0b].get("weightedAverageShsOutDil")))
-            shs1 = (fv(q_bs[q1b].get("commonStockSharesOutstanding")) or fv(q_bs[q1b].get("weightedAverageShsOutDil")))
+            shs0 = fv(q_bs[q0b].get("commonStockSharesOutstanding"))
+            shs1 = fv(q_bs[q1b].get("commonStockSharesOutstanding"))
             eps0 = (ni0 / shs0) if ni0 and shs0 and shs0 > 0 else None
             eps1 = (ni1 / shs1) if ni1 and shs1 and shs1 > 0 else None
             if eps1 is not None and eps1 <= 0:
@@ -2832,8 +2626,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             q0b = qs_bs[0]; q4b = qs_bs[4]
             ni0 = fv(q_is[q0i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q0i].get("netIncome"))
             ni4 = fv(q_is[q4i].get("netIncomeApplicableToCommonShares")) or fv(q_is[q4i].get("netIncome"))
-            shs0 = (fv(q_bs[q0b].get("commonStockSharesOutstanding")) or fv(q_bs[q0b].get("weightedAverageShsOutDil")))
-            shs4 = (fv(q_bs[q4b].get("commonStockSharesOutstanding")) or fv(q_bs[q4b].get("weightedAverageShsOutDil")))
+            shs0 = fv(q_bs[q0b].get("commonStockSharesOutstanding"))
+            shs4 = fv(q_bs[q4b].get("commonStockSharesOutstanding"))
             eps0 = (ni0 / shs0) if ni0 and shs0 and shs0 > 0 else None
             eps4 = (ni4 / shs4) if ni4 and shs4 and shs4 > 0 else None
             if eps4 is not None and eps4 <= 0:
@@ -2902,325 +2696,6 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 ("Rule of 40",                                                  f"{r40:.4f} %" if r40 else "—"),
             ],
             "result": f"{r40:.2f} %" if r40 else "—"}
-
-    # ── Share Count Change ───────────────────────────────────────────
-    if "Share Count Change" in L:
-        q_bs_dd  = data["Financials"]["Balance_Sheet"].get("quarterly", {})
-        a_bs_dd  = data["Financials"]["Balance_Sheet"].get("yearly", {})
-        qs_bs    = sorted(q_bs_dd.keys(), reverse=True)
-        ys_bs    = sorted(a_bs_dd.keys(), reverse=True)
-        key_sc   = "commonStockSharesOutstanding"
-        def get_sc_a(y): return fv(a_bs_dd.get(y, {}).get(key_sc))
-        def get_sc_q(q): return fv(q_bs_dd.get(q, {}).get(key_sc))
-        if "Ann" in L:
-            v0 = get_sc_a(ys_bs[0]) if ys_bs else None
-            v1 = get_sc_a(ys_bs[1]) if len(ys_bs)>1 else None
-            gr = (v0/v1-1)*100 if v0 and v1 and v1>0 else None
-            return {"formula": "(Shares[Y0] ÷ Shares[Y-1] − 1) × 100\n< 0 = Buyback (gut), > 0 = Verwässerung (schlecht)",
-                    "fields": [f"Balance_Sheet.{key_sc} — annual"],
-                    "unit": "%",
-                    "components": [
-                        (f"  {ys_bs[0][:4]}  (aktuell)", raw(v0)),
-                        (f"  {ys_bs[1][:4]}  (Vorjahr)", raw(v1)) if len(ys_bs)>1 else ("—","—"),
-                        ("── Berechnung ──", ""),
-                        (f"({raw(v0)} ÷ {raw(v1)}) − 1", f"{gr:.4f} %" if gr is not None else "—"),
-                    ], "result": f"{gr:.4f} %" if gr is not None else "—"}
-        elif "QoQ" in L:
-            v0 = get_sc_q(qs_bs[0]) if qs_bs else None
-            v1 = get_sc_q(qs_bs[1]) if len(qs_bs)>1 else None
-            gr = (v0/v1-1)*100 if v0 and v1 and v1>0 else None
-            return {"formula": "(Shares[Q0] ÷ Shares[Q-1] − 1) × 100",
-                    "fields": [f"Balance_Sheet.{key_sc} — quarterly"],
-                    "unit": "%",
-                    "components": [
-                        (f"  {qs_bs[0]}  (Q0)", raw(v0)),
-                        (f"  {qs_bs[1]}  (Q-1)", raw(v1)) if len(qs_bs)>1 else ("—","—"),
-                        ("── Berechnung ──", ""),
-                        (f"({raw(v0)} ÷ {raw(v1)}) − 1", f"{gr:.4f} %" if gr is not None else "—"),
-                    ], "result": f"{gr:.4f} %" if gr is not None else "—"}
-        elif "YoY" in L:
-            v0 = get_sc_q(qs_bs[0]) if qs_bs else None
-            v4 = get_sc_q(qs_bs[4]) if len(qs_bs)>4 else None
-            gr = (v0/v4-1)*100 if v0 and v4 and v4>0 else None
-            return {"formula": "(Shares[Q0] ÷ Shares[Q-4] − 1) × 100\nGleiches Quartal Vorjahr",
-                    "fields": [f"Balance_Sheet.{key_sc} — quarterly"],
-                    "unit": "%",
-                    "components": [
-                        (f"  {qs_bs[0]}  (Q0)", raw(v0)),
-                        (f"  {qs_bs[4]}  (Q-4 Vorjahr)", raw(v4)) if len(qs_bs)>4 else ("—","—"),
-                        ("── Berechnung ──", ""),
-                        (f"({raw(v0)} ÷ {raw(v4)}) − 1", f"{gr:.4f} %" if gr is not None else "—"),
-                    ], "result": f"{gr:.4f} %" if gr is not None else "—"}
-        elif "CAGR" in L:
-            import re as _re; m = _re.search(r"(\d+)Y CAGR", L); n = int(m.group(1)) if m else None
-            if n and len(ys_bs) >= n+1:
-                v0 = get_sc_a(ys_bs[0]); vn = get_sc_a(ys_bs[n])
-                gr = ((v0/vn)**(1/n)-1)*100 if v0 and vn and vn>0 else None
-                yr_comps = []
-                for i in range(n+1):
-                    val_i = get_sc_a(ys_bs[i])
-                    yr_comps.append((f"  {ys_bs[i][:4]}  (Shares)", raw(val_i)))
-                    if i < n:
-                        val_next = get_sc_a(ys_bs[i+1])
-                        yoy = (val_i/val_next-1)*100 if val_i and val_next and val_next>0 else None
-                        yr_comps.append((f"    → YoY Change {ys_bs[i+1][:4]}→{ys_bs[i][:4]}", f"{yoy:.2f} %" if yoy is not None else "—"))
-                return {"formula": f"(Shares[{ys_bs[0][:4]}] ÷ Shares[{ys_bs[n][:4]}])^(1/{n}) − 1 × 100\n< 0 = Buyback (gut), > 0 = Verwässerung",
-                        "fields": [f"Balance_Sheet.{key_sc} — annual"],
-                        "unit": "%",
-                        "components": yr_comps + [("── CAGR Berechnung ──",""), (f"({raw(v0)} ÷ {raw(vn)})^(1/{n})−1", f"{gr:.4f} %" if gr is not None else "—")],
-                        "result": f"{gr:.4f} %" if gr is not None else "—"}
-        return UNKNOWN
-
-    # ── Goodwill Growth ──────────────────────────────────────────────
-    if "Goodwill Growth" in L:
-        a_bs_dd = data["Financials"]["Balance_Sheet"].get("yearly", {})
-        q_bs_dd = data["Financials"]["Balance_Sheet"].get("quarterly", {})
-        ys_gw   = sorted(a_bs_dd.keys(), reverse=True)
-        qs_gw   = sorted(q_bs_dd.keys(), reverse=True)
-        def get_gw_a(y): return fv(a_bs_dd.get(y,{}).get("goodWill")) or fv(a_bs_dd.get(y,{}).get("goodwill"))
-        def get_gw_q(q): return fv(q_bs_dd.get(q,{}).get("goodWill")) or fv(q_bs_dd.get(q,{}).get("goodwill"))
-        if "Ann" in L:
-            v0=get_gw_a(ys_gw[0]); v1=get_gw_a(ys_gw[1]) if len(ys_gw)>1 else None
-            gr=(v0/v1-1)*100 if v0 and v1 and v1>0 else None
-            return {"formula":"(Goodwill[Y0] ÷ Goodwill[Y-1] − 1) × 100\nHohe Werte = aggressiver M&A-Käufer, Impairment-Risiko",
-                    "fields":["Balance_Sheet.goodWill — annual"],"unit":"%",
-                    "components":[(f"  {ys_gw[0][:4]}",raw(v0)),(f"  {ys_gw[1][:4]}",raw(v1)) if len(ys_gw)>1 else ("—","—"),
-                                  ("── Berechnung ──",""),(f"({raw(v0)} ÷ {raw(v1)}) − 1",f"{gr:.4f} %" if gr is not None else "—")],
-                    "result":f"{gr:.4f} %" if gr is not None else "—"}
-        elif "QoQ" in L:
-            v0=get_gw_q(qs_gw[0]); v1=get_gw_q(qs_gw[1]) if len(qs_gw)>1 else None
-            gr=(v0/v1-1)*100 if v0 and v1 and v1>0 else None
-            return {"formula":"(Goodwill[Q0] ÷ Goodwill[Q-1] − 1) × 100",
-                    "fields":["Balance_Sheet.goodWill — quarterly"],"unit":"%",
-                    "components":[(f"  {qs_gw[0]}",raw(v0)),(f"  {qs_gw[1]}",raw(v1)) if len(qs_gw)>1 else ("—","—"),
-                                  ("── Berechnung ──",""),(f"({raw(v0)} ÷ {raw(v1)}) − 1",f"{gr:.4f} %" if gr is not None else "—")],
-                    "result":f"{gr:.4f} %" if gr is not None else "—"}
-        elif "YoY" in L:
-            v0=get_gw_q(qs_gw[0]); v4=get_gw_q(qs_gw[4]) if len(qs_gw)>4 else None
-            gr=(v0/v4-1)*100 if v0 and v4 and v4>0 else None
-            return {"formula":"(Goodwill[Q0] ÷ Goodwill[Q-4] − 1) × 100",
-                    "fields":["Balance_Sheet.goodWill — quarterly"],"unit":"%",
-                    "components":[(f"  {qs_gw[0]}",raw(v0)),(f"  {qs_gw[4]}",raw(v4)) if len(qs_gw)>4 else ("—","—"),
-                                  ("── Berechnung ──",""),(f"({raw(v0)} ÷ {raw(v4)}) − 1",f"{gr:.4f} %" if gr is not None else "—")],
-                    "result":f"{gr:.4f} %" if gr is not None else "—"}
-        elif "CAGR" in L:
-            import re as _re; m=_re.search(r"(\d+)Y CAGR",L); n=int(m.group(1)) if m else None
-            if n and len(ys_gw)>=n+1:
-                v0=get_gw_a(ys_gw[0]); vn=get_gw_a(ys_gw[n])
-                gr=((v0/vn)**(1/n)-1)*100 if v0 and vn and vn>0 else None
-                yr_comps = []
-                for i in range(n+1):
-                    val_i = get_gw_a(ys_gw[i])
-                    yr_comps.append((f"  {ys_gw[i][:4]}  (Goodwill)", raw(val_i)))
-                    if i < n:
-                        val_next = get_gw_a(ys_gw[i+1])
-                        yoy = (val_i/val_next-1)*100 if val_i and val_next and val_next>0 else None
-                        yr_comps.append((f"    → YoY Change {ys_gw[i+1][:4]}→{ys_gw[i][:4]}", f"{yoy:.2f} %" if yoy is not None else "—"))
-                return {"formula":f"(GW[{ys_gw[0][:4]}] ÷ GW[{ys_gw[n][:4]}])^(1/{n}) − 1 × 100\nHohe CAGR = aggressiver M&A-Käufer",
-                        "fields":["Balance_Sheet.goodWill — annual"],"unit":"%",
-                        "components":yr_comps+[("── CAGR Berechnung ──",""),(f"({raw(v0)} ÷ {raw(vn)})^(1/{n})−1",f"{gr:.4f} %" if gr is not None else "—")],
-                        "result":f"{gr:.4f} %" if gr is not None else "—"}
-        return UNKNOWN
-
-    # ── Goodwill Ratios ──────────────────────────────────────────────
-    if "Goodwill / Assets" in L or "Goodwill / Equity" in L:
-        is_q   = "Quarterly" in L
-        is_eq  = "Equity" in L
-        bs_src = data["Financials"]["Balance_Sheet"].get("quarterly" if is_q else "yearly", {})
-        ks     = sorted(bs_src.keys(), reverse=True)
-        bs     = bs_src.get(ks[0], {}) if ks else {}
-        gw  = fv(bs.get("goodWill")) or fv(bs.get("goodwill")) or 0
-        denom_key = "totalStockholderEquity" if is_eq else "totalAssets"
-        denom = fv(bs.get(denom_key))
-        v = gw/denom if denom and denom>0 else None
-        period = ks[0] if ks else "—"
-        return {"formula": f"Goodwill ÷ {'Equity' if is_eq else 'Total Assets'}\nHohe Werte = Bilanz wird durch Akquisitionsprämien dominiert",
-                "fields": [f"Balance_Sheet.goodWill", f"Balance_Sheet.{denom_key}"],
-                "unit": "",
-                "components": [
-                    (f"  goodWill  [{period}]", raw(gw)),
-                    (f"  {denom_key}  [{period}]", raw(denom)),
-                    ("── Berechnung ──", ""),
-                    (f"{raw(gw)} ÷ {raw(denom)}", f"{v:.4f}" if v is not None else "—"),
-                ], "result": f"{v:.4f}" if v is not None else "—"}
-
-    # ── SBC Metrics ──────────────────────────────────────────────────
-    if "SBC / Revenue" in L:
-        is_q   = "Quarterly" in L
-        is_ttm = "TTM" in L
-        cf_src = data["Financials"]["Cash_Flow"]
-        is_src = data["Financials"]["Income_Statement"]
-        if is_ttm:
-            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
-            qs_is = sorted(is_src.get("quarterly",{}).keys(), reverse=True)[:4]
-            sbc_v = sum(fv(cf_src["quarterly"][q].get("stockBasedCompensation")) or 0 for q in qs_cf)
-            rev_v = sum(fv(is_src["quarterly"][q].get("totalRevenue")) or 0 for q in qs_is)
-            comps = [*[(f"  SBC  [{q}]", raw(fv(cf_src["quarterly"][q].get("stockBasedCompensation")))) for q in qs_cf],
-                     ("  → SBC TTM", raw(sbc_v)),
-                     *[(f"  Revenue  [{q}]", raw(fv(is_src["quarterly"][q].get("totalRevenue")))) for q in qs_is],
-                     ("  → Revenue TTM", raw(rev_v))]
-        elif is_q:
-            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)
-            qs_is = sorted(is_src.get("quarterly",{}).keys(), reverse=True)
-            q0 = qs_cf[0] if qs_cf else None
-            sbc_v = fv(cf_src["quarterly"].get(q0,{}).get("stockBasedCompensation")) if q0 else None
-            rev_v = fv(is_src["quarterly"].get(qs_is[0],{}).get("totalRevenue")) if qs_is else None
-            comps = [(f"  stockBasedCompensation  [{q0}]", raw(sbc_v)), (f"  totalRevenue  [{qs_is[0] if qs_is else '—'}]", raw(rev_v))]
-        else:
-            ys = sorted(cf_src.get("yearly",{}).keys(), reverse=True)
-            y0 = ys[0] if ys else None
-            sbc_v = fv(cf_src["yearly"].get(y0,{}).get("stockBasedCompensation")) if y0 else None
-            rev_v = fv(is_src["yearly"].get(y0,{}).get("totalRevenue")) if y0 else None
-            comps = [(f"  stockBasedCompensation  [{y0}]", raw(sbc_v)), (f"  totalRevenue  [{y0}]", raw(rev_v))]
-        v = sbc_v/rev_v if sbc_v is not None and rev_v and rev_v>0 else None
-        comps += [("── Berechnung ──",""), (f"SBC ÷ Revenue", f"{v*100:.4f} %" if v is not None else "—")]
-        return {"formula":"SBC ÷ Revenue\nZeigt den Verwässerungsgrad als % des Umsatzes\n< 2% = minimal, > 10% = sehr hoch (typisch SaaS/Tech)",
-                "fields":["Cash_Flow.stockBasedCompensation","Income_Statement.totalRevenue"],
-                "unit":"%","components":comps,"result":f"{v*100:.4f} %" if v is not None else "—"}
-
-    if "SBC-adj. FCF Margin" in L:
-        is_ttm = "TTM" in L
-        cf_src = data["Financials"]["Cash_Flow"]
-        is_src = data["Financials"]["Income_Statement"]
-        if is_ttm:
-            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
-            qs_is = sorted(is_src.get("quarterly",{}).keys(), reverse=True)[:4]
-            def q_fcf(q):
-                f=fv(cf_src["quarterly"][q].get("freeCashFlow"))
-                if f is None:
-                    c=fv(cf_src["quarterly"][q].get("totalCashFromOperatingActivities"))
-                    cx=fv(cf_src["quarterly"][q].get("capitalExpenditures"))
-                    f=c-abs(cx) if c and cx else None
-                return f
-            fcf_v = sum(q_fcf(q) or 0 for q in qs_cf)
-            sbc_v = sum(fv(cf_src["quarterly"][q].get("stockBasedCompensation")) or 0 for q in qs_cf)
-            rev_v = sum(fv(is_src["quarterly"][q].get("totalRevenue")) or 0 for q in qs_is)
-        else:
-            ys=sorted(cf_src.get("yearly",{}).keys(),reverse=True); y0=ys[0] if ys else None
-            fcf_v=fv(cf_src["yearly"].get(y0,{}).get("freeCashFlow")) if y0 else None
-            if fcf_v is None and y0:
-                c=fv(cf_src["yearly"][y0].get("totalCashFromOperatingActivities"))
-                cx=fv(cf_src["yearly"][y0].get("capitalExpenditures"))
-                fcf_v=c-abs(cx) if c and cx else None
-            sbc_v=fv(cf_src["yearly"].get(y0,{}).get("stockBasedCompensation")) if y0 else None
-            rev_v=fv(is_src["yearly"].get(y0,{}).get("totalRevenue")) if y0 else None
-        adj_fcf = (fcf_v-sbc_v) if fcf_v is not None and sbc_v is not None else None
-        v = adj_fcf/rev_v if adj_fcf is not None and rev_v and rev_v>0 else None
-        return {"formula":"(FCF − SBC) ÷ Revenue\nBereinigt den FCF um Aktienbasierte Vergütungen\nZeigt den 'echten' FCF den Aktionäre erhalten",
-                "fields":["Cash_Flow.freeCashFlow","Cash_Flow.stockBasedCompensation","Income_Statement.totalRevenue"],
-                "unit":"%",
-                "components":[(f"  FCF {'TTM' if is_ttm else 'Year'}",raw(fcf_v)),(f"  SBC {'TTM' if is_ttm else 'Year'}",raw(sbc_v)),
-                               ("  → FCF − SBC",raw(adj_fcf)),(f"  Revenue {'TTM' if is_ttm else 'Year'}",raw(rev_v)),
-                               ("── Berechnung ──",""),(f"({raw(adj_fcf)}) ÷ {raw(rev_v)}",f"{v*100:.4f} %" if v is not None else "—")],
-                "result":f"{v*100:.4f} %" if v is not None else "—"}
-
-    if "CapEx / Revenue" in L:
-        is_ttm = "TTM" in L
-        cf_src = data["Financials"]["Cash_Flow"]
-        is_src = data["Financials"]["Income_Statement"]
-        if is_ttm:
-            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
-            qs_is = sorted(is_src.get("quarterly",{}).keys(), reverse=True)[:4]
-            capex_v = abs(sum(fv(cf_src["quarterly"][q].get("capitalExpenditures")) or 0 for q in qs_cf))
-            rev_v   = sum(fv(is_src["quarterly"][q].get("totalRevenue")) or 0 for q in qs_is)
-            comps   = [*[(f"  capitalExpenditures  [{q}]", raw(fv(cf_src["quarterly"][q].get("capitalExpenditures")))) for q in qs_cf],
-                       ("  → CapEx TTM (abs.)", raw(capex_v)),
-                       ("  → Revenue TTM", raw(rev_v))]
-        else:
-            ys=sorted(cf_src.get("yearly",{}).keys(),reverse=True); y0=ys[0] if ys else None
-            capex_v=abs(fv(cf_src["yearly"].get(y0,{}).get("capitalExpenditures")) or 0) if y0 else None
-            rev_v=fv(is_src["yearly"].get(y0,{}).get("totalRevenue")) if y0 else None
-            comps=[(f"  capitalExpenditures  [{y0}]",raw(fv(cf_src["yearly"].get(y0,{}).get("capitalExpenditures")))),(f"  totalRevenue  [{y0}]",raw(rev_v))]
-        v=capex_v/rev_v if capex_v is not None and rev_v and rev_v>0 else None
-        comps+=[("── Berechnung ──",""),(f"|CapEx| ÷ Revenue",f"{v*100:.4f} %" if v is not None else "—")]
-        return {"formula":"|CapEx| ÷ Revenue\nZeigt die Kapitalintensität des Geschäftsmodells\n< 5% = kapitalarm (SaaS), > 20% = kapitalintensiv (Industrie/Utilities)",
-                "fields":["Cash_Flow.capitalExpenditures","Income_Statement.totalRevenue"],
-                "unit":"%","components":comps,"result":f"{v*100:.4f} %" if v is not None else "—"}
-
-    if "CapEx / Op. Cash Flow" in L:
-        is_ttm = "TTM" in L
-        cf_src = data["Financials"]["Cash_Flow"]
-        if is_ttm:
-            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
-            capex_v = abs(sum(fv(cf_src["quarterly"][q].get("capitalExpenditures")) or 0 for q in qs_cf))
-            cfo_v   = sum(fv(cf_src["quarterly"][q].get("totalCashFromOperatingActivities")) or 0 for q in qs_cf)
-            comps   = [*[(f"  capitalExpenditures  [{q}]",raw(fv(cf_src["quarterly"][q].get("capitalExpenditures")))) for q in qs_cf],
-                       ("  → CapEx TTM",raw(capex_v)),
-                       *[(f"  CFO  [{q}]",raw(fv(cf_src["quarterly"][q].get("totalCashFromOperatingActivities")))) for q in qs_cf],
-                       ("  → CFO TTM",raw(cfo_v))]
-        else:
-            ys=sorted(cf_src.get("yearly",{}).keys(),reverse=True); y0=ys[0] if ys else None
-            capex_v=abs(fv(cf_src["yearly"].get(y0,{}).get("capitalExpenditures")) or 0) if y0 else None
-            cfo_v=fv(cf_src["yearly"].get(y0,{}).get("totalCashFromOperatingActivities")) if y0 else None
-            comps=[(f"  capitalExpenditures  [{y0}]",raw(fv(cf_src["yearly"].get(y0,{}).get("capitalExpenditures")))),(f"  CFO  [{y0}]",raw(cfo_v))]
-        v=capex_v/cfo_v if capex_v is not None and cfo_v and cfo_v>0 else None
-        comps+=[("── Berechnung ──",""),(f"|CapEx| ÷ CFO",f"{v*100:.4f} %" if v is not None else "—")]
-        return {"formula":"|CapEx| ÷ Operating Cash Flow\n< 20% = sehr effizient, > 75% = kaum freier Cash nach Investitionen",
-                "fields":["Cash_Flow.capitalExpenditures","Cash_Flow.totalCashFromOperatingActivities"],
-                "unit":"%","components":comps,"result":f"{v*100:.4f} %" if v is not None else "—"}
-
-    if "FCF Conversion" in L:
-        is_ttm = "TTM" in L
-        cf_src = data["Financials"]["Cash_Flow"]
-        is_src = data["Financials"]["Income_Statement"]
-        if is_ttm:
-            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
-            qs_is = sorted(is_src.get("quarterly",{}).keys(), reverse=True)[:4]
-            def q_fcf2(q):
-                f=fv(cf_src["quarterly"][q].get("freeCashFlow"))
-                if f is None:
-                    c=fv(cf_src["quarterly"][q].get("totalCashFromOperatingActivities"))
-                    cx=fv(cf_src["quarterly"][q].get("capitalExpenditures"))
-                    f=c-abs(cx) if c and cx else None
-                return f
-            fcf_v = sum(q_fcf2(q) or 0 for q in qs_cf)
-            ni_v  = sum(fv(is_src["quarterly"][q].get("netIncome")) or 0 for q in qs_is)
-        else:
-            ys=sorted(cf_src.get("yearly",{}).keys(),reverse=True); y0=ys[0] if ys else None
-            fcf_v=fv(cf_src["yearly"].get(y0,{}).get("freeCashFlow")) if y0 else None
-            if fcf_v is None and y0:
-                c=fv(cf_src["yearly"][y0].get("totalCashFromOperatingActivities"))
-                cx=fv(cf_src["yearly"][y0].get("capitalExpenditures"))
-                fcf_v=c-abs(cx) if c and cx else None
-            ni_v=fv(is_src["yearly"].get(y0,{}).get("netIncome")) if y0 else None
-        v=fcf_v/ni_v if fcf_v is not None and ni_v and ni_v!=0 else None
-        return {"formula":"FCF ÷ Net Income\n1.0 = perfekte Umwandlung, > 1.0 = FCF > Gewinn (sehr gut)\n< 0.5 = viel Buchgewinn wird nicht zu Cash",
-                "fields":["Cash_Flow.freeCashFlow","Income_Statement.netIncome"],
-                "unit":"x",
-                "components":[(f"  FCF {'TTM' if is_ttm else 'Year'}",raw(fcf_v)),(f"  Net Income {'TTM' if is_ttm else 'Year'}",raw(ni_v)),
-                               ("── Berechnung ──",""),(f"{raw(fcf_v)} ÷ {raw(ni_v)}",f"{v:.4f}x" if v is not None else "—")],
-                "result":f"{v:.4f}x" if v is not None else "—"}
-
-    if "P/Tangible Book" in L:
-        is_cur = "Cur" in L
-        bs_src = data["Financials"]["Balance_Sheet"]
-        if is_cur:
-            qs = sorted(bs_src.get("quarterly",{}).keys(), reverse=True)
-            bs = bs_src["quarterly"].get(qs[0],{}) if qs else {}
-            period = qs[0] if qs else "—"
-        else:
-            ys = sorted(bs_src.get("yearly",{}).keys(), reverse=True)
-            bs = bs_src["yearly"].get(ys[0],{}) if ys else {}
-            period = ys[0][:4] if ys else "—"
-        eq  = fv(bs.get("totalStockholderEquity")) or 0
-        gw  = fv(bs.get("goodWill")) or fv(bs.get("goodwill")) or 0
-        ia  = fv(bs.get("intangibleAssets")) or 0
-        tbv = eq - gw - ia
-        shs = (fv(bs.get("commonStockSharesOutstanding")) or fv(bs.get("weightedAverageShsOutDil")))
-        mc  = fv(hl.get("MarketCapitalization"))
-        v   = mc/tbv if mc and tbv and tbv>0 else None
-        return {"formula":"MCap ÷ Tangible Book Value\nTBV = Equity − Goodwill − Intangible Assets\nP/TBV zeigt was man für 'materielles' Eigenkapital bezahlt",
-                "fields":["Balance_Sheet.totalStockholderEquity","Balance_Sheet.goodWill","Balance_Sheet.intangibleAssets"],
-                "unit":"x",
-                "components":[
-                    (f"  totalStockholderEquity  [{period}]", raw(eq)),
-                    (f"  goodWill  [{period}]", raw(gw)),
-                    (f"  intangibleAssets  [{period}]", raw(ia)),
-                    ("  → TBV = Equity − GW − IA", raw(tbv)),
-                    ("  MCap", raw(mc)),
-                    ("── Berechnung ──",""),
-                    (f"{raw(mc)} ÷ {raw(tbv)}", f"{v:.4f}x" if v is not None else "—"),
-                ],"result":f"{v:.4f}x" if v is not None else "—"}
 
     # ═══════════════════════════════════════════════════════════════════
     # HEALTH
@@ -3791,7 +3266,7 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
     q_health = pick(hs["rows"],
         "Cash/Debt (Quarterly)",   "Cash/Debt (Year)",
         "Debt/Capital (Quarterly)","Debt/Capital (Year)",
-        "FCF/Debt (TTM)",          "FCF/Debt (Year)",
+        "FCF/Debt (Quarterly)",    "FCF/Debt (Year)",
         "Interest Coverage (TTM)", "Interest Coverage (Year)",
         "Debt/Equity (Quarterly)", "Debt/Equity (Year)",
         "NetDebt/Equity (Quarterly)","NetDebt/Equity (Year)",
@@ -3837,16 +3312,10 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
             fcf  = cfo - abs(capex) if cfo and capex else None
         eq   = fv(bs_d.get("totalStockholderEquity"))
         ltd  = fv(bs_d.get("longTermDebt")) or 0
-        std  = (fv(bs_d.get("shortLongTermDebt")) or fv(bs_d.get("shortTermDebt")) or 0)
+        std  = fv(bs_d.get("shortLongTermDebt")) or 0
         ic   = (eq or 0) + ltd + std
-        # ROIC: NOPAT/IC — consistent with profitability score
-        _ebit_c1 = (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome")))
-        _tax_c1  = fv(is_d.get("incomeTaxExpense"))
-        _pre_c1  = fv(is_d.get("incomeBeforeTax"))
-        _etax_c1 = min(max(_tax_c1 / _pre_c1, 0), 0.50) if _tax_c1 and _pre_c1 and _pre_c1 > 0 else 0.21
-        _nopat_c1= _ebit_c1 * (1 - _etax_c1) if _ebit_c1 is not None else None
-        roic = _nopat_c1/ic if _nopat_c1 is not None and ic and ic != 0 else None
-        gm   = gp/rev if gp is not None and rev and rev != 0 else None
+        roic = ni/ic if ni and ic and ic != 0 else None
+        gm   = gp/rev if gp and rev and rev != 0 else None
         fcfm = fcf/rev if fcf is not None and rev and rev != 0 else None
         if rev:
             chart1.append({
@@ -3862,13 +3331,13 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
         bs_d = a_bs[y]; cf_d = a_cf.get(y, {}); is_d = a_is.get(y, {})
         eq   = fv(bs_d.get("totalStockholderEquity"))
         ltd  = fv(bs_d.get("longTermDebt")) or 0
-        std  = (fv(bs_d.get("shortLongTermDebt")) or fv(bs_d.get("shortTermDebt")) or 0)
+        std  = fv(bs_d.get("shortLongTermDebt")) or 0
         debt = ltd + std
         ca   = fv(bs_d.get("totalCurrentAssets"))
         cl   = fv(bs_d.get("totalCurrentLiabilities"))
         cash = (fv(bs_d.get("cash")) or fv(bs_d.get("cashAndEquivalents")) or 0) + (fv(bs_d.get("shortTermInvestments")) or 0)
-        de   = debt/eq   if eq is not None and eq != 0 else None
-        cr   = cash/cl   if cl is not None and cl  != 0 else None
+        de   = debt/eq   if eq   and eq   != 0 else None
+        cr   = cash/cl   if cl   and cl   != 0 and cash is not None else None
         if de is not None or cr is not None:
             chart2.append({
                 "Year":         y[:4],
@@ -3918,7 +3387,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     bsQ  = q_bs.get(qbs[0], {}) if qbs else {}
     cash_q  = (fv(bsQ.get("cash")) or fv(bsQ.get("cashAndEquivalents")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
     ltd_q   = fv(bsQ.get("longTermDebt"))  or 0
-    std_q   = (fv(bsQ.get("shortLongTermDebt")) or fv(bsQ.get("shortTermDebt")) or 0)
+    std_q   = fv(bsQ.get("shortLongTermDebt")) or 0
     debt_q  = ltd_q + std_q
     eq_q    = fv(bsQ.get("totalStockholderEquity"))
     ta_q    = fv(bsQ.get("totalAssets"))
@@ -3936,7 +3405,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     cfA  = a_cf.get(years[0], {}) if years else {}
     cash_a  = (fv(bsA.get("cash")) or fv(bsA.get("cashAndEquivalents")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
     ltd_a   = fv(bsA.get("longTermDebt"))  or 0
-    std_a   = (fv(bsA.get("shortLongTermDebt")) or fv(bsA.get("shortTermDebt")) or 0)
+    std_a   = fv(bsA.get("shortLongTermDebt")) or 0
     debt_a  = ltd_a + std_a
     eq_a    = fv(bsA.get("totalStockholderEquity"))
     ta_a    = fv(bsA.get("totalAssets"))
@@ -3974,11 +3443,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     fcf_a   = get_fcf_annual(years[0]) if years else None
 
     # Annual income
-    ebit_a   = (fv(isA.get("ebit")) or fv(isA.get("operatingIncome")))
+    ebit_a   = fv(isA.get("ebit"))
     ebitda_a = fv(isA.get("ebitda"))
-    if ebitda_a is None:  # ebitda fallback: ebit + D&A
-        _da_ha = fv(isA.get("depreciationAmortization")) or fv(isA.get("depreciation"))
-        if ebit_a is not None and _da_ha is not None: ebitda_a = ebit_a + abs(_da_ha)
     int_a    = fv(isA.get("interestExpense"))
     ni_a     = fv(isA.get("netIncome"))
     rev_a    = fv(isA.get("totalRevenue"))
@@ -3987,9 +3453,6 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     # TTM income
     ebit_ttm   = ttm_sum(q_is, "ebit")
     ebitda_ttm = ttm_sum(q_is, "ebitda")
-    if ebitda_ttm is None:  # ebitda TTM fallback: ebit_ttm + D&A_ttm
-        _da_ttm = ttm_sum(q_is, "depreciationAmortization") or ttm_sum(q_is, "depreciation")
-        if ebit_ttm is not None and _da_ttm is not None: ebitda_ttm = ebit_ttm + abs(_da_ttm)
     int_ttm    = ttm_sum(q_is, "interestExpense")
     ni_ttm     = ttm_sum(q_is, "netIncome")
     rev_ttm    = ttm_sum(q_is, "totalRevenue")
@@ -3999,10 +3462,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     cd_q  = safe(cash_q, debt_q)
     cd_a  = safe(cash_a, debt_a)
     # Debt/Capital
-    _dc_denom_q = debt_q + (eq_q or 0)
-    _dc_denom_a = debt_a + (eq_a or 0)
-    dc_q  = safe(debt_q, _dc_denom_q) if eq_q and _dc_denom_q > 0 else None
-    dc_a  = safe(debt_a, _dc_denom_a) if eq_a and _dc_denom_a > 0 else None
+    dc_q  = safe(debt_q, (debt_q + (eq_q or 0))) if eq_q else None
+    dc_a  = safe(debt_a, (debt_a + (eq_a or 0))) if eq_a else None
     # FCF/Debt
     fd_q  = safe(fcf_ttm, debt_q)
     fd_a  = safe(fcf_a,   debt_a)
@@ -4012,12 +3473,12 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     # Cash Ratio
     cr_q  = safe(cash_q, cl_q)
     cr_a  = safe(cash_a, cl_a)
-    # Debt/Equity — undefined/misleading when equity is negative
-    de_q  = safe(debt_q, eq_q) if eq_q and eq_q > 0 else None
-    de_a  = safe(debt_a, eq_a) if eq_a and eq_a > 0 else None
-    # NetDebt/Equity — undefined when equity is negative (result would invert sign meaning)
-    nde_q = safe(nd_q, eq_q) if eq_q and eq_q > 0 else None
-    nde_a = safe(nd_a, eq_a) if eq_a and eq_a > 0 else None
+    # Debt/Equity
+    de_q  = safe(debt_q, eq_q)
+    de_a  = safe(debt_a, eq_a)
+    # NetDebt/Equity
+    nde_q = safe(nd_q, eq_q)
+    nde_a = safe(nd_a, eq_a)
     # Equity/Assets
     ea_q  = safe(eq_q, ta_q)
     ea_a  = safe(eq_a, ta_a)
@@ -4027,16 +3488,16 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     # NetDebt/Assets
     nda_q = safe(nd_q, ta_q)
     nda_a = safe(nd_a, ta_a)
-    # Debt/EBIT — None when EBIT negative (inverted threshold would grade incorrectly)
-    debit_ttm = safe(debt_q, ebit_ttm)  if ebit_ttm and ebit_ttm > 0 else None
-    debit_a   = safe(debt_a, ebit_a)    if ebit_a   and ebit_a   > 0 else None
-    ndebit_ttm= safe(nd_q,   ebit_ttm)  if ebit_ttm and ebit_ttm > 0 else None
-    ndebit_a  = safe(nd_a,   ebit_a)    if ebit_a   and ebit_a   > 0 else None
-    # Debt/EBITDA — None when EBITDA negative
-    debitda_ttm = safe(debt_q,  ebitda_ttm) if ebitda_ttm and ebitda_ttm > 0 else None
-    debitda_a   = safe(debt_a,  ebitda_a)   if ebitda_a   and ebitda_a   > 0 else None
-    ndebitda_ttm= safe(nd_q,    ebitda_ttm) if ebitda_ttm and ebitda_ttm > 0 else None
-    ndebitda_a  = safe(nd_a,    ebitda_a)   if ebitda_a   and ebitda_a   > 0 else None
+    # Debt/EBIT
+    debit_ttm = safe(debt_q, ebit_ttm)
+    debit_a   = safe(debt_a, ebit_a)
+    ndebit_ttm= safe(nd_q,   ebit_ttm)
+    ndebit_a  = safe(nd_a,   ebit_a)
+    # Debt/EBITDA
+    debitda_ttm = safe(debt_q,  ebitda_ttm)
+    debitda_a   = safe(debt_a,  ebitda_a)
+    ndebitda_ttm= safe(nd_q,    ebitda_ttm)
+    ndebitda_a  = safe(nd_a,    ebitda_a)
     # Current Ratio
     cur_q = safe(ca_q, cl_q)
     cur_a = safe(ca_a, cl_a)
@@ -4058,6 +3519,7 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return 1.2*x1 + 1.4*x2 + 3.3*x3 + 0.6*x4 + 1.0*x5
 
     az_cur = altman_z(ta_q, ca_q, cl_q, re_q, ebit_ttm, rev_ttm, tl_q, mcap)
+    az_q   = altman_z(ta_q, ca_q, cl_q, re_q, ebit_ttm, rev_ttm, tl_q, mcap)
     az_a   = altman_z(ta_a, ca_a, cl_a, re_a, ebit_a,   rev_a,   tl_a, mcap)
 
     # ── Piotroski F-Score ─────────────────────────────────────────────
@@ -4081,8 +3543,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         gp  = fv(is_d.get("grossProfit"))
         rev_p= fv(a_is.get(years[1], {}).get("totalRevenue")) if len(years)>1 else None
         gp_p = fv(a_is.get(years[1], {}).get("grossProfit")) if len(years)>1 else None
-        shares = (fv(bs_d.get("commonStockSharesOutstanding")) or fv(bs_d.get("weightedAverageShsOutDil")))
-        shares_p = (fv(bs_prev.get("commonStockSharesOutstanding")) or fv(bs_prev.get("weightedAverageShsOutDil"))) if bs_prev else None
+        shares = fv(bs_d.get("commonStockSharesOutstanding"))
+        shares_p = fv(bs_prev.get("commonStockSharesOutstanding")) if bs_prev else None
         # F1: ROA > 0
         if ni and ta_avg and ta_avg != 0 and ni/ta_avg > 0: score += 1
         # F2: CFO > 0
@@ -4096,25 +3558,21 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
             if ni_p and ta_avg_p and ta_avg_p != 0 and roa_c > ni_p/ta_avg_p: score += 1
         # F4: CFO > NI (accrual)
         if cfo and ni and cfo > ni: score += 1
-        # F5: Δleverage < 0 (lower debt ratio) — use total debt (ltd + std)
-        std  = fv(bs_d.get("shortLongTermDebt")) or fv(bs_d.get("shortTermDebt")) or 0
-        std_p= (fv(bs_prev.get("shortLongTermDebt")) or fv(bs_prev.get("shortTermDebt")) or 0) if bs_prev else 0
+        # F5: Δleverage < 0 (lower debt ratio)
         if ta and ta_p:
-            lev_c = (ltd + std) / ta; lev_p = (ltd_p + std_p) / ta_p
+            lev_c = ltd/ta; lev_p = ltd_p/ta_p
             if lev_c < lev_p: score += 1
         # F6: Δliquidity > 0 (current ratio improved)
         if ca and cl and ca_p and cl_p:
             if (ca/cl) > (ca_p/cl_p): score += 1
         # F7: No new shares issued
         if shares and shares_p and shares <= shares_p: score += 1
-        # F8: Δgross margin > 0 — allow negative gp (gross loss)
-        if rev and rev != 0 and gp is not None and rev_p and rev_p != 0 and gp_p is not None:
+        # F8: Δgross margin > 0
+        if rev and gp and rev_p and gp_p:
             if (gp/rev) > (gp_p/rev_p): score += 1
-        # F9: Δasset turnover > 0 — use avg assets for both periods
-        ta_pp2 = fv(a_bs.get(years_bs[2], {}).get("totalAssets")) if len(years_bs) > 2 else None
-        ta_avg_p2 = (ta_p + ta_pp2) / 2 if ta_p and ta_pp2 else ta_p
-        if rev and ta_avg and ta_avg!=0 and rev_p and ta_avg_p2 and ta_avg_p2!=0:
-            if (rev/ta_avg) > (rev_p/ta_avg_p2): score += 1
+        # F9: Δasset turnover > 0
+        if rev and ta_avg and ta_avg!=0 and rev_p and ta_p and ta_p!=0:
+            if (rev/ta_avg) > (rev_p/ta_p): score += 1
         return score
 
     bs_prev_a = a_bs.get(years_bs[1], {}) if len(years_bs) > 1 else None
@@ -4128,43 +3586,25 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         valid = [v for v in vals if v is not None]
         return sum(valid)/len(valid) if valid else None
 
-    def hist_hy(fn, n):
-        """Return [(year_str, value_or_None, reason_or_None)] for n years."""
-        result = []
-        for i in range(min(n, len(years_bs))):
-            yr = years_bs[i][:4]
-            v  = fn(i)
-            if v is None:
-                result.append((yr, None, "Wert nicht berechenbar"))
-            else:
-                result.append((yr, v, None))
-        return result
-
-    def h(fn, n):  return hist_avg(fn, n)
-    def hy(fn, n): return hist_hy(fn, n)
-
     def yr_cd(i):
         bs = a_bs.get(years_bs[i], {}); cf = a_cf.get(years_bs[i], {})
         c = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d = (fv(bs.get("longTermDebt")) or 0) + ((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
+        d = (fv(bs.get("longTermDebt")) or 0) + (fv(bs.get("shortLongTermDebt")) or 0)
         return safe(c, d)
     def yr_dc(i):
         bs = a_bs.get(years_bs[i], {})
-        d = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
+        d = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         e = fv(bs.get("totalStockholderEquity"))
-        denom = d + (e or 0)
-        return safe(d, denom) if e and denom > 0 else None
+        return safe(d, d+(e or 0)) if e else None
     def yr_fd(i):
         bs = a_bs.get(years_bs[i], {})
-        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         fc = get_fcf_annual(years_bs[i])
         return safe(fc, d)
     def yr_ic(i):
         is_d= a_is.get(years_bs[i], {}); bs= a_bs.get(years_bs[i], {})
-        e   = (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome"))); ie = fv(is_d.get("interestExpense"))
-        if ie is None: return None          # no data
-        if abs(ie) < 1: return 999.0 if e and e > 0 else None  # debt-free: very high coverage
-        return safe(e, abs(ie))
+        e   = fv(is_d.get("ebit")); ie = fv(is_d.get("interestExpense"))
+        return safe(e, abs(ie)) if ie else None
     def yr_cr(i):
         bs  = a_bs.get(years_bs[i], {})
         c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
@@ -4172,49 +3612,45 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(c, cl)
     def yr_de(i):
         bs  = a_bs.get(years_bs[i], {})
-        d   = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         e   = fv(bs.get("totalStockholderEquity"))
-        return safe(d, e) if e and e > 0 else None
+        return safe(d, e)
     def yr_nde(i):
         bs  = a_bs.get(years_bs[i], {})
         c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d   = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         e   = fv(bs.get("totalStockholderEquity"))
-        return safe(d-(c or 0), e) if e and e > 0 else None
+        return safe(d-(c or 0), e)
     def yr_ea(i):
         bs  = a_bs.get(years_bs[i], {})
         return safe(fv(bs.get("totalStockholderEquity")), fv(bs.get("totalAssets")))
     def yr_da(i):
         bs  = a_bs.get(years_bs[i], {})
-        d   = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         return safe(d, fv(bs.get("totalAssets")))
     def yr_nda(i):
         bs  = a_bs.get(years_bs[i], {})
         c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d   = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
         return safe(d-(c or 0), fv(bs.get("totalAssets")))
     def yr_debit(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
-        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
-        e  = (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome")))
-        return safe(d, e) if e and e > 0 else None
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d, fv(is_d.get("ebit")))
     def yr_ndebit(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
-        e  = (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome")))
-        return safe(d-(c or 0), e) if e and e > 0 else None
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d-(c or 0), fv(is_d.get("ebit")))
     def yr_debitda(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
-        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
-        eb = fv(is_d.get("ebitda"))
-        return safe(d, eb) if eb and eb > 0 else None
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d, fv(is_d.get("ebitda")))
     def yr_ndebitda(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d  = (fv(bs.get("longTermDebt")) or 0)+((fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0))
-        eb = fv(is_d.get("ebitda"))
-        return safe(d-(c or 0), eb) if eb and eb > 0 else None
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        return safe(d-(c or 0), fv(is_d.get("ebitda")))
     def yr_cur(i):
         bs = a_bs.get(years_bs[i], {})
         return safe(fv(bs.get("totalCurrentAssets")), fv(bs.get("totalCurrentLiabilities")))
@@ -4228,40 +3664,10 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return altman_z(
             fv(bs.get("totalAssets")), fv(bs.get("totalCurrentAssets")),
             fv(bs.get("totalCurrentLiabilities")), fv(bs.get("retainedEarnings")),
-            (fv(is_d.get("ebit")) or fv(is_d.get("operatingIncome"))), fv(is_d.get("totalRevenue")),
+            fv(is_d.get("ebit")), fv(is_d.get("totalRevenue")),
             fv(bs.get("totalLiab")), mcap)
 
     def h(fn, n): return hist_avg(fn, n)
-    def hy(fn, n): return hist_hy(fn, n)
-
-    # ── Goodwill yr_ functions ────────────────────────────────────────
-    def yr_gw_ta(i):
-        bs = a_bs.get(years_bs[i], {})
-        gw = fv(bs.get("goodWill")) or fv(bs.get("goodwill")) or 0
-        ta = fv(bs.get("totalAssets"))
-        return gw / ta if ta and ta > 0 else None
-
-    def yr_gw_eq(i):
-        bs = a_bs.get(years_bs[i], {})
-        gw = fv(bs.get("goodWill")) or fv(bs.get("goodwill")) or 0
-        eq = fv(bs.get("totalStockholderEquity"))
-        return gw / eq if eq and eq > 0 else None
-
-    # Current quarter Goodwill ratios
-    qbs_s_h = sorted(q_bs.keys(), reverse=True)
-    if qbs_s_h:
-        bs_q0 = q_bs[qbs_s_h[0]]
-        gw_q0 = fv(bs_q0.get("goodWill")) or fv(bs_q0.get("goodwill")) or 0
-        ta_q0 = fv(bs_q0.get("totalAssets"))
-        eq_q0 = fv(bs_q0.get("totalStockholderEquity"))
-        gw_ta_q = gw_q0 / ta_q0 if ta_q0 and ta_q0 > 0 else None
-        gw_eq_q = gw_q0 / eq_q0 if eq_q0 and eq_q0 > 0 else None
-    else:
-        gw_ta_q = gw_eq_q = None
-
-    # Annual Goodwill ratios
-    gw_ta_a = yr_gw_ta(0) if years_bs else None
-    gw_eq_a = yr_gw_eq(0) if years_bs else None
 
     # ── Grade thresholds ─────────────────────────────────────────────
     # Higher = better
@@ -4292,27 +3698,13 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     AZ_T    = [(5,"ap"),(3,"a"),(2.5,"am"),(2,"bp"),(1.8,"b"),(1,"bm"),(0,"cp")]
     # Piotroski: 8-9=strong, 5-7=avg, 0-4=weak
     PF_T    = [(8,"ap"),(7,"a"),(6,"am"),(5,"bp"),(4,"b"),(2,"bm"),(0,"cp")]
-    # Goodwill/Assets: lower = better
-    GW_TA_T  = [(0,"ap"),(0.05,"a"),(0.1,"am"),(0.2,"bp"),(0.3,"b"),(0.5,"bm"),(0.7,"cp")]
-    GW_TA_Ti = [(0.7,"cp"),(0.5,"bm"),(0.3,"b"),(0.2,"bp"),(0.1,"am"),(0.05,"a"),(0,"ap")]
-    # Goodwill/Equity: lower = better
-    GW_EQ_T  = [(0,"ap"),(0.1,"a"),(0.2,"am"),(0.5,"bp"),(1.0,"b"),(2.0,"bm"),(5.0,"cp")]
-    GW_EQ_Ti = [(5.0,"cp"),(2.0,"bm"),(1.0,"b"),(0.5,"bp"),(0.2,"am"),(0.1,"a"),(0,"ap")]
 
     def fmt_r(v, decimals=2):
         return f"{v:.{decimals}f}" if v is not None else "—"
 
-    def row(label, cur, avg3, avg5, avg10, T, invert=False, decimals=2,
-            hy3=None, hy5=None, hy10=None):
+    def row(label, cur, avg3, avg5, avg10, T, invert=False, decimals=2):
         css, lbl = get_grade(cur, T) if cur is not None else ("grade-na", "—")
         f = lambda v: fmt_r(v, decimals) if v is not None else "—"
-        def conv(hy):
-            if not hy: return []
-            result = []
-            for item in hy:
-                yr, v, reason = item if len(item) == 3 else (*item, None)
-                result.append((yr, f(v) if v is not None else None, reason))
-            return result
         return {
             "label": label, "fmt": f(cur),
             "css": css, "lbl": lbl,
@@ -4320,46 +3712,43 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
             "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
             "T": T, "higher": True, "pct": False, "decimals": decimals,
             "group": label.split("/")[0].split(" ")[0],
-            "hy3":  conv(hy3),
-            "hy5":  conv(hy5),
-            "hy10": conv(hy10),
         }
 
     rows = [
-        row("Cash/Debt (Quarterly)",      cd_q,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T, hy3=hy(yr_cd,3), hy5=hy(yr_cd,5), hy10=hy(yr_cd,10)),
-        row("Cash/Debt (Year)",           cd_a,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T, hy3=hy(yr_cd,3), hy5=hy(yr_cd,5), hy10=hy(yr_cd,10)),
-        row("Debt/Capital (Quarterly)",   dc_q,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T, hy3=hy(yr_dc,3), hy5=hy(yr_dc,5), hy10=hy(yr_dc,10)),
-        row("Debt/Capital (Year)",        dc_a,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T, hy3=hy(yr_dc,3), hy5=hy(yr_dc,5), hy10=hy(yr_dc,10)),
-        row("FCF/Debt (TTM)",             fd_q,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T, hy3=hy(yr_fd,3), hy5=hy(yr_fd,5), hy10=hy(yr_fd,10)),
-        row("FCF/Debt (Year)",            fd_a,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T, hy3=hy(yr_fd,3), hy5=hy(yr_fd,5), hy10=hy(yr_fd,10)),
-        row("Interest Coverage (TTM)",    ic_ttm,      h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T, hy3=hy(yr_ic,3), hy5=hy(yr_ic,5), hy10=hy(yr_ic,10)),
-        row("Interest Coverage (Year)",   ic_a,        h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T, hy3=hy(yr_ic,3), hy5=hy(yr_ic,5), hy10=hy(yr_ic,10)),
-        row("Cash Ratio (Quarterly)",     cr_q,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T, hy3=hy(yr_cr,3), hy5=hy(yr_cr,5), hy10=hy(yr_cr,10)),
-        row("Cash Ratio (Year)",          cr_a,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T, hy3=hy(yr_cr,3), hy5=hy(yr_cr,5), hy10=hy(yr_cr,10)),
-        row("Debt/Equity (Quarterly)",    de_q,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T, hy3=hy(yr_de,3), hy5=hy(yr_de,5), hy10=hy(yr_de,10)),
-        row("Debt/Equity (Year)",         de_a,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T, hy3=hy(yr_de,3), hy5=hy(yr_de,5), hy10=hy(yr_de,10)),
-        row("NetDebt/Equity (Quarterly)", nde_q,       h(yr_nde,3),    h(yr_nde,5),    h(yr_nde,10),   NDEi_T, hy3=hy(yr_nde,3), hy5=hy(yr_nde,5), hy10=hy(yr_nde,10)),
-        row("NetDebt/Equity (Year)",      nde_a,       h(yr_nde,3),    h(yr_nde,5),    h(yr_nde,10),   NDEi_T, hy3=hy(yr_nde,3), hy5=hy(yr_nde,5), hy10=hy(yr_nde,10)),
-        row("Equity/Assets (Quarterly)",  ea_q,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T, hy3=hy(yr_ea,3), hy5=hy(yr_ea,5), hy10=hy(yr_ea,10)),
-        row("Equity/Assets (Year)",       ea_a,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T, hy3=hy(yr_ea,3), hy5=hy(yr_ea,5), hy10=hy(yr_ea,10)),
-        row("Debt/Asset (Quarterly)",     da_q,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T, hy3=hy(yr_da,3), hy5=hy(yr_da,5), hy10=hy(yr_da,10)),
-        row("Debt/Asset (Year)",          da_a,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T, hy3=hy(yr_da,3), hy5=hy(yr_da,5), hy10=hy(yr_da,10)),
-        row("NetDebt/Asset (Quarterly)",  nda_q,       h(yr_nda,3),    h(yr_nda,5),    h(yr_nda,10),   NDEi_T, hy3=hy(yr_nda,3), hy5=hy(yr_nda,5), hy10=hy(yr_nda,10)),
-        row("NetDebt/Asset (Year)",       nda_a,       h(yr_nda,3),    h(yr_nda,5),    h(yr_nda,10),   NDEi_T, hy3=hy(yr_nda,3), hy5=hy(yr_nda,5), hy10=hy(yr_nda,10)),
-        row("Debt/EBIT (TTM)",            debit_ttm,   h(yr_debit,3),    h(yr_debit,5),    h(yr_debit,10), DEBITi_T, hy3=hy(yr_debit,3), hy5=hy(yr_debit,5), hy10=hy(yr_debit,10)),
-        row("Debt/EBIT (Year)",           debit_a,     h(yr_debit,3),    h(yr_debit,5),    h(yr_debit,10), DEBITi_T, hy3=hy(yr_debit,3), hy5=hy(yr_debit,5), hy10=hy(yr_debit,10)),
-        row("NetDebt/EBIT (TTM)",         ndebit_ttm,  h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T, hy3=hy(yr_ndebit,3), hy5=hy(yr_ndebit,5), hy10=hy(yr_ndebit,10)),
-        row("NetDebt/EBIT (Year)",        ndebit_a,    h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T, hy3=hy(yr_ndebit,3), hy5=hy(yr_ndebit,5), hy10=hy(yr_ndebit,10)),
-        row("Debt/EBITDA (TTM)",          debitda_ttm, h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T, hy3=hy(yr_debitda,3), hy5=hy(yr_debitda,5), hy10=hy(yr_debitda,10)),
-        row("Debt/EBITDA (Year)",         debitda_a,   h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T, hy3=hy(yr_debitda,3), hy5=hy(yr_debitda,5), hy10=hy(yr_debitda,10)),
-        row("NetDebt/EBITDA (TTM)",       ndebitda_ttm,h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T, hy3=hy(yr_ndebitda,3), hy5=hy(yr_ndebitda,5), hy10=hy(yr_ndebitda,10)),
-        row("NetDebt/EBITDA (Year)",      ndebitda_a,  h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T, hy3=hy(yr_ndebitda,3), hy5=hy(yr_ndebitda,5), hy10=hy(yr_ndebitda,10)),
-        row("Current Ratio (Quarterly)",  cur_q,       h(yr_cur,3),    h(yr_cur,5),    h(yr_cur,10),   CURR_T, hy3=hy(yr_cur,3), hy5=hy(yr_cur,5), hy10=hy(yr_cur,10)),
-        row("Current Ratio (Year)",       cur_a,       h(yr_cur,3),    h(yr_cur,5),    h(yr_cur,10),   CURR_T, hy3=hy(yr_cur,3), hy5=hy(yr_cur,5), hy10=hy(yr_cur,10)),
-        row("Quick Ratio (Quarterly)",    qr_q,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T, hy3=hy(yr_qr,3), hy5=hy(yr_qr,5), hy10=hy(yr_qr,10)),
-        row("Quick Ratio (Year)",         qr_a,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T, hy3=hy(yr_qr,3), hy5=hy(yr_qr,5), hy10=hy(yr_qr,10)),
-        row("Altman Z-Score (Cur)",       az_cur,      h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T, hy3=hy(yr_az,3), hy5=hy(yr_az,5), hy10=hy(yr_az,10)),
-        row("Altman Z-Score (Year)",      az_a,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T, hy3=hy(yr_az,3), hy5=hy(yr_az,5), hy10=hy(yr_az,10)),
+        row("Cash/Debt (Quarterly)",      cd_q,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T),
+        row("Cash/Debt (Year)",           cd_a,        h(yr_cd,3),    h(yr_cd,5),    h(yr_cd,10),    CD_T),
+        row("Debt/Capital (Quarterly)",   dc_q,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T),
+        row("Debt/Capital (Year)",        dc_a,        h(yr_dc,3),    h(yr_dc,5),    h(yr_dc,10),    DCi_T),
+        row("FCF/Debt (Quarterly)",       fd_q,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T),
+        row("FCF/Debt (Year)",            fd_a,        h(yr_fd,3),    h(yr_fd,5),    h(yr_fd,10),    FD_T),
+        row("Interest Coverage (TTM)",    ic_ttm,      h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T),
+        row("Interest Coverage (Year)",   ic_a,        h(yr_ic,3),    h(yr_ic,5),    h(yr_ic,10),    IC_T),
+        row("Cash Ratio (Quarterly)",     cr_q,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T),
+        row("Cash Ratio (Year)",          cr_a,        h(yr_cr,3),    h(yr_cr,5),    h(yr_cr,10),    CR_T),
+        row("Debt/Equity (Quarterly)",    de_q,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T),
+        row("Debt/Equity (Year)",         de_a,        h(yr_de,3),    h(yr_de,5),    h(yr_de,10),    DEi_T),
+        row("NetDebt/Equity (Quarterly)", nde_q,       h(yr_nde,3),   h(yr_nde,5),   h(yr_nde,10),   NDEi_T),
+        row("NetDebt/Equity (Year)",      nde_a,       h(yr_nde,3),   h(yr_nde,5),   h(yr_nde,10),   NDEi_T),
+        row("Equity/Assets (Quarterly)",  ea_q,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T),
+        row("Equity/Assets (Year)",       ea_a,        h(yr_ea,3),    h(yr_ea,5),    h(yr_ea,10),    EA_T),
+        row("Debt/Asset (Quarterly)",     da_q,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T),
+        row("Debt/Asset (Year)",          da_a,        h(yr_da,3),    h(yr_da,5),    h(yr_da,10),    DAi_T),
+        row("NetDebt/Asset (Quarterly)",  nda_q,       h(yr_nda,3),   h(yr_nda,5),   h(yr_nda,10),   NDEi_T),
+        row("NetDebt/Asset (Year)",       nda_a,       h(yr_nda,3),   h(yr_nda,5),   h(yr_nda,10),   NDEi_T),
+        row("Debt/EBIT (TTM)",            debit_ttm,   h(yr_debit,3), h(yr_debit,5), h(yr_debit,10), DEBITi_T),
+        row("Debt/EBIT (Year)",           debit_a,     h(yr_debit,3), h(yr_debit,5), h(yr_debit,10), DEBITi_T),
+        row("NetDebt/EBIT (TTM)",         ndebit_ttm,  h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T),
+        row("NetDebt/EBIT (Year)",        ndebit_a,    h(yr_ndebit,3),h(yr_ndebit,5),h(yr_ndebit,10),NDEi_T),
+        row("Debt/EBITDA (TTM)",          debitda_ttm, h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T),
+        row("Debt/EBITDA (Year)",         debitda_a,   h(yr_debitda,3),h(yr_debitda,5),h(yr_debitda,10),DEBITi_T),
+        row("NetDebt/EBITDA (TTM)",       ndebitda_ttm,h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T),
+        row("NetDebt/EBITDA (Year)",      ndebitda_a,  h(yr_ndebitda,3),h(yr_ndebitda,5),h(yr_ndebitda,10),NDEi_T),
+        row("Current Ratio (Quarterly)",  cur_q,       h(yr_cur,3),   h(yr_cur,5),   h(yr_cur,10),   CURR_T),
+        row("Current Ratio (Year)",       cur_a,       h(yr_cur,3),   h(yr_cur,5),   h(yr_cur,10),   CURR_T),
+        row("Quick Ratio (Quarterly)",    qr_q,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T),
+        row("Quick Ratio (Year)",         qr_a,        h(yr_qr,3),    h(yr_qr,5),    h(yr_qr,10),    CURR_T),
+        row("Altman Z-Score (Cur)",       az_cur,      h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
+        row("Altman Z-Score (Year)",      az_a,        h(yr_az,3),    h(yr_az,5),    h(yr_az,10),    AZ_T),
     ]
 
     def yr_pf(i):
@@ -4370,13 +3759,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return piotroski(is_d, cf_d, bs_d, bs_p)
 
     rows += [
-        row("Piotroski F-Score (Cur)",  pf_cur, h(yr_pf,3),    h(yr_pf,5),    h(yr_pf,10), PF_T, decimals=0, hy3=hy(yr_pf,3), hy5=hy(yr_pf,5), hy10=hy(yr_pf,10)),
-        row("Piotroski F-Score (Year)", pf_a,   h(yr_pf,3),    h(yr_pf,5),    h(yr_pf,10), PF_T, decimals=0, hy3=hy(yr_pf,3), hy5=hy(yr_pf,5), hy10=hy(yr_pf,10)),
-        # Goodwill Ratios
-        row("Goodwill / Assets (Quarterly)", gw_ta_q, h(yr_gw_ta,3), h(yr_gw_ta,5), h(yr_gw_ta,10), GW_TA_Ti, decimals=3, hy3=hy(yr_gw_ta,3), hy5=hy(yr_gw_ta,5), hy10=hy(yr_gw_ta,10)),
-        row("Goodwill / Assets (Year)",      gw_ta_a, h(yr_gw_ta,3), h(yr_gw_ta,5), h(yr_gw_ta,10), GW_TA_Ti, decimals=3, hy3=hy(yr_gw_ta,3), hy5=hy(yr_gw_ta,5), hy10=hy(yr_gw_ta,10)),
-        row("Goodwill / Equity (Quarterly)", gw_eq_q, h(yr_gw_eq,3), h(yr_gw_eq,5), h(yr_gw_eq,10), GW_EQ_Ti, decimals=3, hy3=hy(yr_gw_eq,3), hy5=hy(yr_gw_eq,5), hy10=hy(yr_gw_eq,10)),
-        row("Goodwill / Equity (Year)",      gw_eq_a, h(yr_gw_eq,3), h(yr_gw_eq,5), h(yr_gw_eq,10), GW_EQ_Ti, decimals=3, hy3=hy(yr_gw_eq,3), hy5=hy(yr_gw_eq,5), hy10=hy(yr_gw_eq,10)),
+        row("Piotroski F-Score (Cur)",  pf_cur, h(yr_pf,3), h(yr_pf,5), h(yr_pf,10), PF_T, decimals=0),
+        row("Piotroski F-Score (Year)", pf_a,   h(yr_pf,3), h(yr_pf,5), h(yr_pf,10), PF_T, decimals=0),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
@@ -4439,9 +3823,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             if all(v is not None for v in vals):
                 rows.append(sum(vals))
         if len(rows) >= 5 and rows[4] and rows[4] > 0:
-            import math as _math
-            r = (rows[0] / rows[4] - 1) * 100
-            return None if (_math.isnan(r) or _math.isinf(r)) else r
+            return (rows[0] / rows[4] - 1) * 100
         return None
 
     # ── Annual YoY: year[0] vs year[1] (kept for Rule of 40 only) ────
@@ -4486,26 +3868,21 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         return None if (math.isnan(r) or math.isinf(r)) else r
 
     def eps_ttm_gr():
-        """EPS TTM growth: (NI_TTM/shares_Q0) vs (NI_TTM_1Yago/shares_Q4).
-        Uses common quarter keys between q_is and q_bs to avoid period mismatch."""
-        import math
-        common_qs = sorted(set(q_is.keys()) & set(q_bs.keys()), reverse=True)
-        if len(common_qs) < 5: return None
-        # Need 8 IS quarters for two TTM windows; use all q_is for NI but common for shares
-        qs_is = sorted(q_is.keys(), reverse=True)
-        if len(qs_is) < 8: return None
-        def ttm_ni(qs, start):
+        """EPS TTM growth: (NI_TTM/shares_Q0) vs (NI_TTM_1Yago/shares_Q4)."""
+        qs = sorted(q_is.keys(), reverse=True)
+        qbs = sorted(q_bs.keys(), reverse=True)
+        if len(qs) < 8 or len(qbs) < 5: return None
+        def ttm_ni(start):
             vals = [fv(q_is[qs[i]].get("netIncomeApplicableToCommonShares"))
                     or fv(q_is[qs[i]].get("netIncome")) for i in range(start, start+4)]
             return sum(vals) if all(v is not None for v in vals) else None
-        ni0 = ttm_ni(qs_is, 0); ni4 = ttm_ni(qs_is, 4)
-        shs0 = (fv(q_bs[common_qs[0]].get("commonStockSharesOutstanding")) or fv(q_bs[common_qs[0]].get("weightedAverageShsOutDil")))
-        shs4 = (fv(q_bs[common_qs[4]].get("commonStockSharesOutstanding")) or fv(q_bs[common_qs[4]].get("weightedAverageShsOutDil"))) if len(common_qs) > 4 else None
+        ni0  = ttm_ni(0); ni4  = ttm_ni(4)
+        shs0 = fv(q_bs[qbs[0]].get("commonStockSharesOutstanding"))
+        shs4 = fv(q_bs[qbs[4]].get("commonStockSharesOutstanding")) if len(qbs) > 4 else shs0
         if not ni0 or not ni4 or not shs0 or shs0 <= 0 or not shs4 or shs4 <= 0: return None
         eps0 = ni0 / shs0; eps4 = ni4 / shs4
         if eps4 <= 0: return None
-        r = (eps0 / eps4 - 1) * 100
-        return None if (math.isnan(r) or math.isinf(r)) else r
+        return (eps0 / eps4 - 1) * 100
 
     def fcf_yr(y):
         d = a_cf.get(y, {})
@@ -4625,18 +4002,16 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     fcf_gr_qoq = fcf_qoq()
 
     def eps_qoq():
-        import math
-        # Match IS and BS quarters by the same date key for accurate EPS
-        common_qs = sorted(set(q_is.keys()) & set(q_bs.keys()), reverse=True)
-        if len(common_qs) < 2: return None
-        def get_eps_q(i):
-            q   = common_qs[i]
-            ni  = fv(q_is[q].get("netIncomeApplicableToCommonShares")) or fv(q_is[q].get("netIncome"))
-            shs = (fv(q_bs[q].get("commonStockSharesOutstanding")) or fv(q_bs[q].get("weightedAverageShsOutDil")))
+        qs_is = sorted(q_is.keys(), reverse=True)
+        qs_bs = sorted(q_bs.keys(), reverse=True)
+        if len(qs_is) < 2 or len(qs_bs) < 2: return None
+        def get_eps_q(qi, bi):
+            ni  = fv(q_is[qs_is[qi]].get("netIncomeApplicableToCommonShares")) or fv(q_is[qs_is[qi]].get("netIncome"))
+            shs = fv(q_bs[qs_bs[bi]].get("commonStockSharesOutstanding"))
             return (ni / shs) if ni and shs and shs > 0 else None
-        eps0 = get_eps_q(0); eps1 = get_eps_q(1)
+        eps0 = get_eps_q(0, 0); eps1 = get_eps_q(1, 1)
         if eps0 is None or not eps1 or eps1 <= 0: return None
-        r = (eps0 / eps1 - 1) * 100
+        import math; r = (eps0 / eps1 - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
     eps_gr_qoq = eps_qoq()
 
@@ -4647,9 +4022,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         if len(qs) < 5: return None
         v0 = fv(stmt[qs[0]].get(key))
         v4 = fv(stmt[qs[4]].get(key))
-        if v0 is None or v4 is None: return None
-        # Turnaround: negative base → growth not meaningful as %, return None
-        if v4 <= 0: return None
+        if v0 is None or v4 is None or v4 <= 0: return None
         r = (v0 / v4 - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
 
@@ -4675,18 +4048,16 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     fcf_gr_yoq = fcf_yoq()
 
     def eps_yoq():
-        import math
-        # Match IS and BS quarters by same date key
-        common_qs = sorted(set(q_is.keys()) & set(q_bs.keys()), reverse=True)
-        if len(common_qs) < 5: return None
-        def get_eps_q(i):
-            q   = common_qs[i]
-            ni  = fv(q_is[q].get("netIncomeApplicableToCommonShares")) or fv(q_is[q].get("netIncome"))
-            shs = (fv(q_bs[q].get("commonStockSharesOutstanding")) or fv(q_bs[q].get("weightedAverageShsOutDil")))
+        qs_is = sorted(q_is.keys(), reverse=True)
+        qs_bs = sorted(q_bs.keys(), reverse=True)
+        if len(qs_is) < 5 or len(qs_bs) < 5: return None
+        def get_eps_q(qi, bi):
+            ni  = fv(q_is[qs_is[qi]].get("netIncomeApplicableToCommonShares")) or fv(q_is[qs_is[qi]].get("netIncome"))
+            shs = fv(q_bs[qs_bs[bi]].get("commonStockSharesOutstanding"))
             return (ni / shs) if ni and shs and shs > 0 else None
-        eps0 = get_eps_q(0); eps4 = get_eps_q(4)
+        eps0 = get_eps_q(0, 0); eps4 = get_eps_q(4, 4)
         if eps0 is None or not eps4 or eps4 <= 0: return None
-        r = (eps0 / eps4 - 1) * 100
+        import math; r = (eps0 / eps4 - 1) * 100
         return None if (math.isnan(r) or math.isinf(r)) else r
     eps_gr_yoq = eps_yoq()
 
@@ -4700,8 +4071,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
 
     # ── Rule of 40 (keeps YoY rev growth as per convention) ──────────
     rev_gr_yr = yr_gr(a_is, "totalRevenue")
-    _rev_ttm_v_vals = [fv(q_is[q].get("totalRevenue")) for q in sorted(q_is.keys(), reverse=True)[:4]]
-    rev_ttm_v = sum(_rev_ttm_v_vals) if len(_rev_ttm_v_vals) == 4 and all(v is not None for v in _rev_ttm_v_vals) else None
+    rev_ttm_v = sum(fv(q_is[q].get("totalRevenue")) or 0 for q in sorted(q_is.keys(), reverse=True)[:4])
     fcf_ttm_v = fcf_ttm_sum()
     fcfm_ttm  = fcf_ttm_v / rev_ttm_v * 100 if rev_ttm_v and fcf_ttm_v is not None else None
     ro40_ttm  = (rev_gr_ttm or 0) + (fcfm_ttm or 0) if rev_gr_ttm is not None and fcfm_ttm is not None else None
@@ -4713,172 +4083,17 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
 
     def ro40_hist(n):
         ys = sorted(a_is.keys(), reverse=True)
-        vals, all_yr = [], []
+        vals = []
         for i in range(min(n, len(ys) - 1)):
-            yr = ys[i][:4]
             r0 = fv(a_is[ys[i]].get("totalRevenue"))
             r1 = fv(a_is[ys[i+1]].get("totalRevenue"))
-            if not r0 or not r1 or r1 <= 0:
-                all_yr.append((yr, None, "Revenue fehlt/0")); continue
-            rg = (r0/r1 - 1)*100
+            rg = (r0/r1 - 1)*100 if r0 and r1 and r1 > 0 else None
             fc = fcf_yr(ys[i])
-            if fc is None:
-                all_yr.append((yr, None, "FCF fehlt")); continue
-            fm = fc/r0*100 if r0 > 0 else None
-            if fm is None:
-                all_yr.append((yr, None, "FCF Margin nicht berechenbar")); continue
-            v = rg + fm
-            vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
+            fm = fc/r0*100 if fc is not None and r0 and r0 > 0 else None
+            if rg is not None and fm is not None: vals.append(rg + fm)
+        return sum(vals)/len(vals) if vals else None
 
-    ro40_3y,  _hy_ro40_3  = ro40_hist(3)
-    ro40_5y,  _hy_ro40_5  = ro40_hist(5)
-    ro40_10y, _hy_ro40_10 = ro40_hist(10)
-
-    # ── Share Count Change ────────────────────────────────────────────
-    # Uses commonStockSharesOutstanding from quarterly + annual BS
-    def sc_ann():
-        import math
-        ys = sorted(a_bs.keys(), reverse=True)
-        if len(ys) < 2: return None
-        v0 = (fv(a_bs[ys[0]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[0]].get("weightedAverageShsOutDil")))
-        v1 = (fv(a_bs[ys[1]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[1]].get("weightedAverageShsOutDil")))
-        if v0 is None or not v1 or v1 <= 0: return None
-        r = (v0 / v1 - 1) * 100
-        return None if (__import__("math").isnan(r) or __import__("math").isinf(r)) else r
-
-    def sc_qoq():
-        import math
-        qs = sorted(q_bs.keys(), reverse=True)
-        if len(qs) < 2: return None
-        v0 = (fv(q_bs[qs[0]].get("commonStockSharesOutstanding")) or fv(q_bs[qs[0]].get("weightedAverageShsOutDil")))
-        v1 = (fv(q_bs[qs[1]].get("commonStockSharesOutstanding")) or fv(q_bs[qs[1]].get("weightedAverageShsOutDil")))
-        if v0 is None or not v1 or v1 <= 0: return None
-        r = (v0 / v1 - 1) * 100
-        return None if (math.isnan(r) or math.isinf(r)) else r
-
-    def sc_yoy():
-        import math
-        qs = sorted(q_bs.keys(), reverse=True)
-        if len(qs) < 5: return None
-        v0 = (fv(q_bs[qs[0]].get("commonStockSharesOutstanding")) or fv(q_bs[qs[0]].get("weightedAverageShsOutDil")))
-        v4 = (fv(q_bs[qs[4]].get("commonStockSharesOutstanding")) or fv(q_bs[qs[4]].get("weightedAverageShsOutDil")))
-        if v0 is None or not v4 or v4 <= 0: return None
-        r = (v0 / v4 - 1) * 100
-        return None if (math.isnan(r) or math.isinf(r)) else r
-
-    def sc_cagr(n):
-        import math
-        ys = sorted(a_bs.keys(), reverse=True)
-        if len(ys) < n + 1: return None
-        v0 = (fv(a_bs[ys[0]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[0]].get("weightedAverageShsOutDil")))
-        vn = (fv(a_bs[ys[n]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[n]].get("weightedAverageShsOutDil")))
-        if v0 is None or not vn or vn <= 0: return None
-        ratio = v0 / vn
-        if ratio < 0: return None
-        r = (ratio ** (1 / n) - 1) * 100
-        return None if (math.isnan(r) or math.isinf(r)) else r
-
-    def sc_hist(n):
-        import math
-        ys = sorted(a_bs.keys(), reverse=True)
-        vals, all_yr = [], []
-        for i in range(min(n, len(ys) - 1)):
-            yr = ys[i][:4]
-            v0 = (fv(a_bs[ys[i]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[i]].get("weightedAverageShsOutDil")))
-            v1 = (fv(a_bs[ys[i+1]].get("commonStockSharesOutstanding")) or fv(a_bs[ys[i+1]].get("weightedAverageShsOutDil")))
-            if v0 is None or not v1 or v1 <= 0:
-                all_yr.append((yr, None, "Shares fehlen")); continue
-            r = (v0 / v1 - 1) * 100
-            if math.isnan(r) or math.isinf(r):
-                all_yr.append((yr, None, "Berechnung ungültig")); continue
-            vals.append(r); all_yr.append((yr, r, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
-
-    sc_gr_ann = sc_ann()
-    sc_gr_qoq = sc_qoq()
-    sc_gr_yoy = sc_yoy()
-    sc_3y,  _hy_sc_3  = sc_hist(3)
-    sc_5y,  _hy_sc_5  = sc_hist(5)
-    sc_10y, _hy_sc_10 = sc_hist(10)
-    sc_cagr_3  = sc_cagr(3)
-    sc_cagr_5  = sc_cagr(5)
-    sc_cagr_10 = sc_cagr(10)
-
-    # ── Goodwill Growth ───────────────────────────────────────────────
-    def gw_get_a(y):
-        bs = a_bs.get(y, {})
-        return fv(bs.get("goodWill")) or fv(bs.get("goodwill"))
-
-    def gw_get_q(q):
-        bs = q_bs.get(q, {})
-        return fv(bs.get("goodWill")) or fv(bs.get("goodwill"))
-
-    def gw_ann():
-        import math
-        ys = sorted(a_bs.keys(), reverse=True)
-        if len(ys) < 2: return None
-        v0 = gw_get_a(ys[0]); v1 = gw_get_a(ys[1])
-        if v0 is None or not v1 or v1 <= 0: return None
-        r = (v0 / v1 - 1) * 100
-        return None if (math.isnan(r) or math.isinf(r)) else r
-
-    def gw_qoq():
-        import math
-        qs = sorted(q_bs.keys(), reverse=True)
-        if len(qs) < 2: return None
-        v0 = gw_get_q(qs[0]); v1 = gw_get_q(qs[1])
-        if v0 is None or not v1 or v1 <= 0: return None
-        r = (v0 / v1 - 1) * 100
-        return None if (math.isnan(r) or math.isinf(r)) else r
-
-    def gw_yoy():
-        import math
-        qs = sorted(q_bs.keys(), reverse=True)
-        if len(qs) < 5: return None
-        v0 = gw_get_q(qs[0]); v4 = gw_get_q(qs[4])
-        if v0 is None or not v4 or v4 <= 0: return None
-        r = (v0 / v4 - 1) * 100
-        return None if (math.isnan(r) or math.isinf(r)) else r
-
-    def gw_cagr(n):
-        import math
-        ys = sorted(a_bs.keys(), reverse=True)
-        if len(ys) < n + 1: return None
-        v0 = gw_get_a(ys[0]); vn = gw_get_a(ys[n])
-        if v0 is None or not vn or vn <= 0: return None
-        ratio = v0 / vn
-        if ratio < 0: return None
-        r = (ratio ** (1 / n) - 1) * 100
-        return None if (math.isnan(r) or math.isinf(r)) else r
-
-    def gw_hist(n):
-        import math
-        ys = sorted(a_bs.keys(), reverse=True)
-        vals, all_yr = [], []
-        for i in range(min(n, len(ys) - 1)):
-            yr = ys[i][:4]
-            v0 = gw_get_a(ys[i]); v1 = gw_get_a(ys[i+1])
-            if v0 is None or not v1 or v1 <= 0:
-                all_yr.append((yr, None, "Goodwill fehlt/0")); continue
-            r = (v0 / v1 - 1) * 100
-            if math.isnan(r) or math.isinf(r):
-                all_yr.append((yr, None, "Berechnung ungültig")); continue
-            vals.append(r); all_yr.append((yr, r, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
-
-    gw_gr_ann = gw_ann()
-    gw_gr_qoq = gw_qoq()
-    gw_gr_yoy = gw_yoy()
-    gw_3y,  _hy_gw_3  = gw_hist(3)
-    gw_5y,  _hy_gw_5  = gw_hist(5)
-    gw_10y, _hy_gw_10 = gw_hist(10)
-    gw_cagr_3  = gw_cagr(3)
-    gw_cagr_5  = gw_cagr(5)
-    gw_cagr_10 = gw_cagr(10)
+    ro40_3y = ro40_hist(3); ro40_5y = ro40_hist(5); ro40_10y = ro40_hist(10)
 
     # ── Grade thresholds ─────────────────────────────────────────────
     # Single-period (Fwd, TTM): higher expected volatility
@@ -4896,21 +4111,11 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
     EBIT_CAGR_T   = [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
     EBITDA_CAGR_T = [(15,"ap"),(12,"a"),(8,"am"),(5,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
     FCF_CAGR_T    = [(20,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-10,"c")]
-    # Share Count Change: lower = better (dilution negative, buybacks positive)
-    # negative = buyback (good), positive = dilution (bad)
-    SC_T      = [(10,"c"),(5,"cp"),(3,"bm"),(2,"b"),(1,"bp"),(0,"am"),(-1,"a"),(-3,"ap")]
-    SC_CAGR_T = [(10,"c"),(5,"cp"),(3,"bm"),(2,"b"),(1,"bp"),(0,"am"),(-1,"a"),(-3,"ap")]
-    # Goodwill Growth: context-dependent, lower is generally safer
-    GW_T      = [(40,"cp"),(25,"bm"),(15,"b"),(10,"bp"),(5,"am"),(3,"a"),(0,"ap")]
-    GW_CAGR_T = [(40,"cp"),(25,"bm"),(15,"b"),(10,"bp"),(5,"am"),(3,"a"),(0,"ap")]
 
     def fmt(v): return f"{v:.2f} %" if v is not None else "—"
 
-    def row(label, cur, avg3, avg5, avg10, T, hy3=None, hy5=None, hy10=None, higher=True):
+    def row(label, cur, avg3, avg5, avg10, T):
         css, lbl = get_grade(cur, T) if cur is not None else ("grade-na", "—")
-        def conv(hy):
-            if not hy: return []
-            return [(yr, fmt(v) if v is not None else None, r) if len(item:=(yr,v,r)) == 3 else (yr, fmt(v), None) for yr, v, r in [i if len(i)==3 else (*i, None) for i in hy]]
         return {
             "label": label, "fmt": fmt(cur),
             "css": css, "lbl": lbl,
@@ -4918,11 +4123,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
             "avg5":  fmt(avg5),
             "avg10": fmt(avg10),
             "avg3_raw": avg3, "avg5_raw": avg5, "avg10_raw": avg10,
-            "T": T, "higher": higher, "pct": False,
+            "T": T, "higher": True, "pct": False,
             "group": label.split(" ")[0],
-            "hy3":  conv(hy3),
-            "hy5":  conv(hy5),
-            "hy10": conv(hy10),
         }
 
     rows = [
@@ -4978,22 +4180,8 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         row("  ↳ FCF Growth (5Y CAGR)",          fcf_5y,        None,      None,      None,       FCF_CAGR_T),
         row("  ↳ FCF Growth (10Y CAGR)",         fcf_10y,       None,      None,      None,       FCF_CAGR_T),
         # Rule of 40
-        row("Rule of 40 (TTM)",              ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,   RO40_T, hy3=_hy_ro40_3, hy5=_hy_ro40_5, hy10=_hy_ro40_10),
-        row("Rule of 40 (Year)",             ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,   RO40_T, hy3=_hy_ro40_3, hy5=_hy_ro40_5, hy10=_hy_ro40_10),
-        # Share Count Change (negative = buyback/good, positive = dilution/bad)
-        row("Share Count Change (Ann)",       sc_gr_ann,    sc_3y,     sc_5y,     sc_10y,     SC_T,   hy3=_hy_sc_3, hy5=_hy_sc_5, hy10=_hy_sc_10, higher=False),
-        row("Share Count Change (QoQ)",       sc_gr_qoq,    sc_3y,     sc_5y,     sc_10y,     SC_T,   hy3=_hy_sc_3, hy5=_hy_sc_5, hy10=_hy_sc_10, higher=False),
-        row("Share Count Change (YoY)",       sc_gr_yoy,    sc_3y,     sc_5y,     sc_10y,     SC_T,   hy3=_hy_sc_3, hy5=_hy_sc_5, hy10=_hy_sc_10, higher=False),
-        row("  ↳ Share Count Change (3Y CAGR)",  sc_cagr_3,    None,      None,      None,       SC_CAGR_T, higher=False),
-        row("  ↳ Share Count Change (5Y CAGR)",  sc_cagr_5,    None,      None,      None,       SC_CAGR_T, higher=False),
-        row("  ↳ Share Count Change (10Y CAGR)", sc_cagr_10,   None,      None,      None,       SC_CAGR_T, higher=False),
-        # Goodwill Growth
-        row("Goodwill Growth (Ann)",          gw_gr_ann,    gw_3y,     gw_5y,     gw_10y,     GW_T,   hy3=_hy_gw_3, hy5=_hy_gw_5, hy10=_hy_gw_10, higher=False),
-        row("Goodwill Growth (QoQ)",          gw_gr_qoq,    gw_3y,     gw_5y,     gw_10y,     GW_T,   hy3=_hy_gw_3, hy5=_hy_gw_5, hy10=_hy_gw_10, higher=False),
-        row("Goodwill Growth (YoY)",          gw_gr_yoy,    gw_3y,     gw_5y,     gw_10y,     GW_T,   hy3=_hy_gw_3, hy5=_hy_gw_5, hy10=_hy_gw_10, higher=False),
-        row("  ↳ Goodwill Growth (3Y CAGR)",     gw_cagr_3,    None,      None,      None,       GW_CAGR_T, higher=False),
-        row("  ↳ Goodwill Growth (5Y CAGR)",     gw_cagr_5,    None,      None,      None,       GW_CAGR_T, higher=False),
-        row("  ↳ Goodwill Growth (10Y CAGR)",    gw_cagr_10,   None,      None,      None,       GW_CAGR_T, higher=False),
+        row("Rule of 40 (TTM)",              ro40_ttm,      ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
+        row("Rule of 40 (Year)",             ro40_yr,       ro40_3y,   ro40_5y,   ro40_10y,   RO40_T),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
@@ -5014,7 +4202,7 @@ def compute_growth_score(data: dict, hl: dict) -> dict:
         def gr(stmt, key):
             v0 = fv(stmt.get(y, {}).get(key))
             v1 = fv(stmt.get(y_prev, {}).get(key))
-            return (v0/v1 - 1) if v0 is not None and v1 and v1 > 0 else None
+            return (v0/v1 - 1) if v0 and v1 and v1 > 0 else None
         rev_g = gr(a_is, "totalRevenue")
         ni_g  = gr(a_is, "netIncome")
         ocf_g = gr(a_cf, "totalCashFromOperatingActivities")
@@ -5080,24 +4268,16 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     oi_ttm     = ttm_sum(q_is, "operatingIncome")
     ebit_ttm   = ttm_sum(q_is, "ebit")
     ebitda_ttm = ttm_sum(q_is, "ebitda")
-    if ebitda_ttm is None:  # ebitda TTM fallback: ebit_ttm + D&A_ttm
-        _da_ttm = ttm_sum(q_is, "depreciationAmortization") or ttm_sum(q_is, "depreciation")
-        if ebit_ttm is not None and _da_ttm is not None: ebitda_ttm = ebit_ttm + abs(_da_ttm)
     cfo_ttm    = ttm_sum(q_cf, "totalCashFromOperatingActivities")
     capex_ttm  = ttm_sum(q_cf, "capitalExpenditures")
     fcf_ttm_raw= ttm_sum(q_cf, "freeCashFlow")
-    if fcf_ttm_raw is not None:
-        fcf_ttm = fcf_ttm_raw
-    elif cfo_ttm is not None and capex_ttm is not None:
-        fcf_ttm = cfo_ttm - abs(capex_ttm)
-    else:
-        fcf_ttm = None
+    fcf_ttm    = fcf_ttm_raw or (cfo_ttm - abs(capex_ttm) if cfo_ttm and capex_ttm else None)
 
     assets_ttm  = fv(q_bs[qbs_sorted[0]].get("totalAssets"))      if qbs_sorted else None
     equity_ttm  = fv(q_bs[qbs_sorted[0]].get("totalStockholderEquity")) if qbs_sorted else None
     cur_lia_ttm = fv(q_bs[qbs_sorted[0]].get("totalCurrentLiabilities")) if qbs_sorted else None
     ltd_ttm     = fv(q_bs[qbs_sorted[0]].get("longTermDebt"))     if qbs_sorted else None
-    std_ttm     = (fv(q_bs[qbs_sorted[0]].get("shortLongTermDebt")) or fv(q_bs[qbs_sorted[0]].get("shortTermDebt"))) if qbs_sorted else None
+    std_ttm     = fv(q_bs[qbs_sorted[0]].get("shortLongTermDebt")) if qbs_sorted else None
     debt_ttm    = (ltd_ttm or 0) + (std_ttm or 0)
 
     # ── Annual values ─────────────────────────────────────────────────
@@ -5110,12 +4290,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     fcf_yr_raw= fv(a_cf[years_is[0]].get("freeCashFlow")) if years_is and years_is[0] in a_cf else None
     cfo_yr    = fv(a_cf[years_is[0]].get("totalCashFromOperatingActivities")) if years_is and years_is[0] in a_cf else None
     capex_yr  = fv(a_cf[years_is[0]].get("capitalExpenditures")) if years_is and years_is[0] in a_cf else None
-    if fcf_yr_raw is not None:
-        fcf_yr = fcf_yr_raw
-    elif cfo_yr is not None and capex_yr is not None:
-        fcf_yr = cfo_yr - abs(capex_yr)
-    else:
-        fcf_yr = None
+    fcf_yr    = fcf_yr_raw or (cfo_yr - abs(capex_yr) if cfo_yr and capex_yr else None)
     assets_yr = yr_bs("totalAssets")
     equity_yr = yr_bs("totalStockholderEquity")
     cur_lia_yr= yr_bs("totalCurrentLiabilities")
@@ -5133,53 +4308,21 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     def safe_div(a, b): return a / b if a is not None and b and b != 0 else None
     def pct(v): return v * 100 if v is not None else None
 
-    # ROA/ROE TTM: use average of Q0 and Q4 assets/equity for consistency with Year calc
-    qbs_sorted_roa = sorted(q_bs.keys(), reverse=True)
-    _assets_q4  = fv(q_bs[qbs_sorted_roa[4]].get("totalAssets"))        if len(qbs_sorted_roa) > 4 else None
-    _equity_q4  = fv(q_bs[qbs_sorted_roa[4]].get("totalStockholderEquity")) if len(qbs_sorted_roa) > 4 else None
-    _assets_avg_ttm = (assets_ttm + _assets_q4) / 2 if assets_ttm and _assets_q4 else assets_ttm
-    _equity_avg_ttm = (equity_ttm + _equity_q4) / 2 if equity_ttm and _equity_q4 else equity_ttm
-    roa_ttm   = safe_div(ni_ttm,   _assets_avg_ttm)
+    roa_ttm   = safe_div(ni_ttm,   assets_ttm)
     roa_yr    = safe_div(ni_yr,    assets_avg)
-    roe_ttm   = safe_div(ni_ttm,   _equity_avg_ttm)
+    roe_ttm   = safe_div(ni_ttm,   equity_ttm)
     roe_yr    = safe_div(ni_yr,    eq_avg)
-    # Return on Capital = NI / (Equity + Debt) — use avg(Q0,Q4) for TTM consistency
-    _equity_q4_roc = fv(q_bs[qbs_sorted_roa[4]].get("totalStockholderEquity")) if len(qbs_sorted_roa) > 4 else None
-    _debt_q4_roc   = ((fv(q_bs[qbs_sorted_roa[4]].get("longTermDebt")) or 0) +
-                      ((fv(q_bs[qbs_sorted_roa[4]].get("shortLongTermDebt")) or fv(q_bs[qbs_sorted_roa[4]].get("shortTermDebt")) or 0))) if len(qbs_sorted_roa) > 4 else None
-    _ic_ttm   = (equity_ttm or 0) + debt_ttm
-    if _equity_q4_roc is not None and _debt_q4_roc is not None:
-        _ic_q4  = (_equity_q4_roc or 0) + _debt_q4_roc
-        _ic_avg = (_ic_ttm + _ic_q4) / 2
-    else:
-        _ic_avg = _ic_ttm  # fall back to spot IC if Q4 data incomplete
-    roc_ttm   = safe_div(ni_ttm, _ic_avg)
-    roc_yr    = safe_div(ni_yr,  (equity_yr or 0) + debt_yr)
-
-    # ROCE = EBIT / Capital Employed (Assets - Current Liabilities) — avg for TTM
-    _cur_lia_q4_roce = fv(q_bs[qbs_sorted_roa[4]].get("totalCurrentLiabilities")) if len(qbs_sorted_roa) > 4 else None
-    _assets_q4_roce  = fv(q_bs[qbs_sorted_roa[4]].get("totalAssets"))             if len(qbs_sorted_roa) > 4 else None
+    # Return on Capital = NI / (Equity + Debt)
+    roc_ttm   = safe_div(ni_ttm,   (equity_ttm or 0) + debt_ttm)
+    roc_yr    = safe_div(ni_yr,    (equity_yr  or 0) + debt_yr)
+    # ROCE = EBIT / Capital Employed (Assets - Current Liabilities)
     cap_emp_ttm = (assets_ttm - cur_lia_ttm) if assets_ttm and cur_lia_ttm else None
-    _cap_emp_q4 = (_assets_q4_roce - _cur_lia_q4_roce) if _assets_q4_roce and _cur_lia_q4_roce else None
-    _cap_emp_avg = (cap_emp_ttm + _cap_emp_q4) / 2 if cap_emp_ttm and _cap_emp_q4 else cap_emp_ttm
     cap_emp_yr  = (assets_yr  - cur_lia_yr)  if assets_yr  and cur_lia_yr  else None
-    roce_ttm  = safe_div(ebit_ttm, _cap_emp_avg)
+    roce_ttm  = safe_div(ebit_ttm, cap_emp_ttm)
     roce_yr   = safe_div(ebit_yr,  cap_emp_yr)
     # ROIC = EBIT*(1-tax_rate) / Invested Capital — simplified: NI / (Equity + Debt)
-    # ROIC = NOPAT / IC; NOPAT = EBIT*(1-tax_rate)
-    _ebit_ttm_roic = ttm_sum(q_is, "ebit")
-    _tax_ttm  = ttm_sum(q_is, "incomeTaxExpense")
-    _pre_ttm  = ttm_sum(q_is, "incomeBeforeTax")  # correct pretax income field
-    _eff_tax_ttm = min(max(_tax_ttm / _pre_ttm, 0), 0.50) if _tax_ttm and _pre_ttm and _pre_ttm > 0 else 0.21
-    _nopat_ttm = _ebit_ttm_roic * (1 - _eff_tax_ttm) if _ebit_ttm_roic is not None else None
-    roic_ttm  = safe_div(_nopat_ttm, _ic_avg)  # use same avg IC as roc_ttm for consistency
-
-    _ebit_yr_roic = (fv(a_is[years_is[0]].get("ebit")) or fv(a_is[years_is[0]].get("operatingIncome"))) if years_is else None
-    _tax_yr  = fv(a_is[years_is[0]].get("incomeTaxExpense")) if years_is else None
-    _pre_yr  = fv(a_is[years_is[0]].get("incomeBeforeTax")) if years_is else None
-    _eff_tax_yr = min(max(_tax_yr / _pre_yr, 0), 0.50) if _tax_yr and _pre_yr and _pre_yr > 0 else 0.21
-    _nopat_yr = _ebit_yr_roic * (1 - _eff_tax_yr) if _ebit_yr_roic is not None else None
-    roic_yr   = safe_div(_nopat_yr, (equity_yr or 0) + debt_yr)
+    roic_ttm  = safe_div(ni_ttm, (equity_ttm or 0) + debt_ttm)
+    roic_yr   = safe_div(ni_yr,  (equity_yr  or 0) + debt_yr)
 
     gm_ttm    = safe_div(gp_ttm,     rev_ttm)
     gm_yr     = safe_div(gp_yr,      rev_yr)
@@ -5193,10 +4336,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     ebitdam_yr  = safe_div(ebitda_yr,  rev_yr)
     fcfm_ttm  = safe_div(fcf_ttm,    rev_ttm)
     fcfm_yr   = safe_div(fcf_yr,     rev_yr)
-    # Asset Turnover TTM: avg(Q0, Q4) assets for consistency with at_yr (uses assets_avg)
-    _at_assets_q4   = fv(q_bs[qbs_sorted[4]].get("totalAssets")) if len(qbs_sorted) > 4 else None
-    _at_assets_avg  = (assets_ttm + _at_assets_q4) / 2 if assets_ttm and _at_assets_q4 else assets_ttm
-    at_ttm    = safe_div(rev_ttm,    _at_assets_avg)
+    at_ttm    = safe_div(rev_ttm,    assets_ttm)
     at_yr     = safe_div(rev_yr,     assets_avg)
 
     # ── Quarterly (Q0) margins ────────────────────────────────────────
@@ -5222,362 +4362,111 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     # ── Historical averages ───────────────────────────────────────────
     def margin_hist(is_key_num, is_key_den, n, cf=False):
         ys = sorted(a_is.keys(), reverse=True)
-        vals, all_yr = [], []
+        vals = []
         for y in ys[:n]:
-            yr = y[:4]
             num = fv((a_cf if cf else a_is)[y].get(is_key_num)) if y in (a_cf if cf else a_is) else None
             den = fv(a_is[y].get(is_key_den))
-            if num is None:
-                all_yr.append((yr, None, f"{is_key_num} fehlt")); continue
-            if not den or den == 0:
-                all_yr.append((yr, None, f"{is_key_den} fehlt/0")); continue
-            v = num / den
-            vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
+            if num is not None and den and den != 0:
+                vals.append(num / den)
+        return sum(vals)/len(vals) if vals else None
 
     def return_hist(ni_key, asset_key, n, use_avg=False):
         ys = sorted(a_is.keys(), reverse=True)
-        vals, all_yr = [], []
+        vals = []
         for i, y in enumerate(ys[:n]):
-            yr  = y[:4]
             ni  = fv(a_is[y].get(ni_key))
             bs  = fv(a_bs[y].get(asset_key)) if y in a_bs else None
             if use_avg:
+                # Find correct prior year BS (same key as IS year y, one step back)
                 bsy_all = sorted(a_bs.keys(), reverse=True)
                 y_idx   = bsy_all.index(y) if y in bsy_all else None
                 if y_idx is not None and y_idx + 1 < len(bsy_all):
                     bs_p = fv(a_bs[bsy_all[y_idx + 1]].get(asset_key))
                     bs = (bs + bs_p) / 2 if bs and bs_p else bs
-            if ni is None:
-                all_yr.append((yr, None, f"{ni_key} fehlt")); continue
-            if not bs or bs == 0:
-                all_yr.append((yr, None, f"{asset_key} fehlt/0")); continue
-            v = ni / bs
-            vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
+            if ni is not None and bs and bs != 0:
+                vals.append(ni / bs)
+        return sum(vals)/len(vals) if vals else None
 
     def roce_hist(n):
-        # Use only years present in BOTH a_is and a_bs to avoid fiscal year mismatch
-        ys = sorted(set(a_is.keys()) & set(a_bs.keys()), reverse=True)
-        vals, all_yr = [], []
+        ys = sorted(a_is.keys(), reverse=True)
+        vals = []
         for y in ys[:n]:
-            yr = y[:4]
-            e  = (fv(a_is[y].get("ebit")) or fv(a_is[y].get("operatingIncome")))
+            e = fv(a_is[y].get("ebit"))
             bs = a_bs.get(y, {})
             ta = fv(bs.get("totalAssets"))
             cl = fv(bs.get("totalCurrentLiabilities"))
-            if e is None:
-                all_yr.append((yr, None, "EBIT fehlt")); continue
-            if not ta or not cl:
-                all_yr.append((yr, None, "Assets/CL fehlen")); continue
-            v = e / (ta - cl)
-            vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
+            if e is not None and ta and cl:
+                vals.append(e / (ta - cl))
+        return sum(vals)/len(vals) if vals else None
 
     def at_hist(n):
         ys = sorted(a_is.keys(), reverse=True)
         bsy_all = sorted(a_bs.keys(), reverse=True)
-        vals, all_yr = [], []
+        vals = []
         for y in ys[:n]:
-            yr = y[:4]
             r = fv(a_is[y].get("totalRevenue"))
             a = fv(a_bs[y].get("totalAssets")) if y in a_bs else None
             y_idx = bsy_all.index(y) if y in bsy_all else None
             a_p   = fv(a_bs[bsy_all[y_idx + 1]].get("totalAssets")) if y_idx is not None and y_idx + 1 < len(bsy_all) else None
             a_avg = (a + a_p)/2 if a and a_p else a
-            if not r:
-                all_yr.append((yr, None, "Revenue fehlt")); continue
-            if not a_avg or a_avg == 0:
-                all_yr.append((yr, None, "Assets fehlen")); continue
-            v = r / a_avg
-            vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
+            if r and a_avg and a_avg != 0: vals.append(r / a_avg)
+        return sum(vals)/len(vals) if vals else None
 
     def fcfm_hist(n):
         ys = sorted(a_is.keys(), reverse=True)
-        vals, all_yr = [], []
+        vals = []
         for y in ys[:n]:
-            yr  = y[:4]
             rev = fv(a_is[y].get("totalRevenue"))
             fcf = fv(a_cf[y].get("freeCashFlow")) if y in a_cf else None
             if not fcf and y in a_cf:
-                c  = fv(a_cf[y].get("totalCashFromOperatingActivities"))
-                cx = fv(a_cf[y].get("capitalExpenditures"))
+                c   = fv(a_cf[y].get("totalCashFromOperatingActivities"))
+                cx  = fv(a_cf[y].get("capitalExpenditures"))
                 fcf = c - abs(cx) if c and cx else None
-            if not rev or rev == 0:
-                all_yr.append((yr, None, "Revenue fehlt")); continue
-            if fcf is None:
-                all_yr.append((yr, None, "FCF fehlt")); continue
-            v = fcf / rev
-            vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
+            if fcf is not None and rev and rev != 0: vals.append(fcf / rev)
+        return sum(vals)/len(vals) if vals else None
 
     def roc_hist(n):
-        # Use only years present in BOTH a_is and a_bs to avoid fiscal year mismatch
-        ys = sorted(set(a_is.keys()) & set(a_bs.keys()), reverse=True)
-        vals, all_yr = [], []
-        for y in ys[:n]:
-            yr  = y[:4]
+        ys  = sorted(a_is.keys(), reverse=True)
+        bsy = sorted(a_bs.keys(), reverse=True)
+        vals = []
+        for i, y in enumerate(ys[:n]):
             ni  = fv(a_is[y].get("netIncome"))
             bs  = a_bs.get(y, {})
             eq  = fv(bs.get("totalStockholderEquity"))
             ltd = fv(bs.get("longTermDebt")) or 0
-            std = (fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0)
+            std = fv(bs.get("shortLongTermDebt")) or 0
             ic  = (eq or 0) + ltd + std
-            if ni is None:
-                all_yr.append((yr, None, "NI fehlt")); continue
-            if ic <= 0:
-                all_yr.append((yr, None, f"Inv.Capital ≤ 0 ({ic:,.0f})")); continue
-            v = ni / ic
-            vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
+            if ni is not None and ic > 0:
+                vals.append(ni / ic)
+        return sum(vals)/len(vals) if vals else None
 
-    roa_3y,  _hy_roa_3  = return_hist("netIncome","totalAssets",3,use_avg=True)
-    roa_5y,  _hy_roa_5  = return_hist("netIncome","totalAssets",5,use_avg=True)
-    roa_10y, _hy_roa_10 = return_hist("netIncome","totalAssets",10,use_avg=True)
-    roe_3y,  _hy_roe_3  = return_hist("netIncome","totalStockholderEquity",3,use_avg=True)
-    roe_5y,  _hy_roe_5  = return_hist("netIncome","totalStockholderEquity",5,use_avg=True)
-    roe_10y, _hy_roe_10 = return_hist("netIncome","totalStockholderEquity",10,use_avg=True)
-    roc_3y,  _hy_roc_3  = roc_hist(3);  roc_5y,  _hy_roc_5  = roc_hist(5);  roc_10y, _hy_roc_10  = roc_hist(10)
-    roce_3y, _hy_roce_3 = roce_hist(3); roce_5y, _hy_roce_5 = roce_hist(5); roce_10y,_hy_roce_10 = roce_hist(10)
+    roa_3y  = return_hist("netIncome","totalAssets",3,use_avg=True)
+    roa_5y  = return_hist("netIncome","totalAssets",5,use_avg=True)
+    roa_10y = return_hist("netIncome","totalAssets",10,use_avg=True)
+    roe_3y  = return_hist("netIncome","totalStockholderEquity",3,use_avg=True)
+    roe_5y  = return_hist("netIncome","totalStockholderEquity",5,use_avg=True)
+    roe_10y = return_hist("netIncome","totalStockholderEquity",10,use_avg=True)
+    roc_3y  = roc_hist(3);  roc_5y  = roc_hist(5);  roc_10y = roc_hist(10)
+    roce_3y = roce_hist(3); roce_5y = roce_hist(5);  roce_10y = roce_hist(10)
+    roic_3y = roc_hist(3);  roic_5y = roc_hist(5);  roic_10y = roc_hist(10)
 
-    def roic_hist(n):
-        """ROIC = NOPAT / Invested Capital
-        NOPAT = EBIT * (1 - effective_tax_rate)
-        IC = Equity + LT Debt + ST Debt
-        Effective tax rate = incomeTaxExpense / incomeBeforeTax, capped 0-50%"""
-        # Use intersection of IS and BS keys to avoid fiscal year mismatch
-        ys = sorted(set(a_is.keys()) & set(a_bs.keys()), reverse=True)
-        vals, all_yr = [], []
-        for y in ys[:n]:
-            yr    = y[:4]
-            ebit  = (fv(a_is[y].get("ebit")) or fv(a_is[y].get("operatingIncome")))
-            tax   = fv(a_is[y].get("incomeTaxExpense"))
-            # incomeBeforeTax is correct pretax income field
-            pre   = fv(a_is[y].get("incomeBeforeTax")) or fv(a_is[y].get("totalOtherIncomeExpenseNet"))
-            if tax is not None and pre and pre > 0:
-                eff_tax = min(max(tax / pre, 0), 0.50)
-            else:
-                eff_tax = 0.21
-            bs    = a_bs.get(y, {})
-            eq    = fv(bs.get("totalStockholderEquity")) or 0
-            ltd   = fv(bs.get("longTermDebt")) or 0
-            std   = (fv(bs.get("shortLongTermDebt")) or fv(bs.get("shortTermDebt")) or 0)
-            ic    = eq + ltd + std
-            if ebit is None:
-                all_yr.append((yr, None, "EBIT fehlt")); continue
-            if ic <= 0:
-                all_yr.append((yr, None, f"Inv.Capital ≤ 0")); continue
-            nopat = ebit * (1 - eff_tax)
-            v     = nopat / ic
-            vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
-
-    roic_3y, _hy_roic_3 = roic_hist(3); roic_5y, _hy_roic_5 = roic_hist(5); roic_10y,_hy_roic_10 = roic_hist(10)
-
-    gm_3y,   _hy_gm_3   = margin_hist("grossProfit",    "totalRevenue",3)
-    gm_5y,   _hy_gm_5   = margin_hist("grossProfit",    "totalRevenue",5)
-    gm_10y,  _hy_gm_10  = margin_hist("grossProfit",    "totalRevenue",10)
-    om_3y,   _hy_om_3   = margin_hist("operatingIncome","totalRevenue",3)
-    om_5y,   _hy_om_5   = margin_hist("operatingIncome","totalRevenue",5)
-    om_10y,  _hy_om_10  = margin_hist("operatingIncome","totalRevenue",10)
-    nm_3y,   _hy_nm_3   = margin_hist("netIncome",      "totalRevenue",3)
-    nm_5y,   _hy_nm_5   = margin_hist("netIncome",      "totalRevenue",5)
-    nm_10y,  _hy_nm_10  = margin_hist("netIncome",      "totalRevenue",10)
-    ebitm_3y,  _hy_ebitm_3  = margin_hist("ebit",   "totalRevenue",3)
-    ebitm_5y,  _hy_ebitm_5  = margin_hist("ebit",   "totalRevenue",5)
-    ebitm_10y, _hy_ebitm_10 = margin_hist("ebit",   "totalRevenue",10)
-    ebitdam_3y,  _hy_ebitdam_3  = margin_hist("ebitda","totalRevenue",3)
-    ebitdam_5y,  _hy_ebitdam_5  = margin_hist("ebitda","totalRevenue",5)
-    ebitdam_10y, _hy_ebitdam_10 = margin_hist("ebitda","totalRevenue",10)
-    fcfm_3y, _hy_fcfm_3 = fcfm_hist(3);  fcfm_5y, _hy_fcfm_5 = fcfm_hist(5);  fcfm_10y, _hy_fcfm_10 = fcfm_hist(10)
-    at_3y,   _hy_at_3   = at_hist(3);    at_5y,   _hy_at_5   = at_hist(5);    at_10y,   _hy_at_10   = at_hist(10)
-
-    # ── SBC, CapEx, FCF Conversion ────────────────────────────────────
-    def sbc_ttm_sum():
-        qs = sorted(q_cf.keys(), reverse=True)[:4]
-        vals = [fv(q_cf[q].get("stockBasedCompensation")) for q in qs]
-        n_valid = sum(1 for v in vals if v is not None)
-        if n_valid == 4:
-            return sum(vals)
-        elif n_valid == 3:
-            # Annualize 3 quarters to avoid ~25% understatement
-            return sum(v for v in vals if v is not None) * 4 / 3
-        return None
-
-    def sbc_yr(y):
-        return fv(a_cf.get(y, {}).get("stockBasedCompensation"))
-
-    def cfo_ttm_sum():
-        qs = sorted(q_cf.keys(), reverse=True)[:4]
-        vals = [fv(q_cf[q].get("totalCashFromOperatingActivities")) for q in qs]
-        return sum(v for v in vals if v is not None) if all(v is not None for v in vals) else None
-
-    # Current quarter values
-    q_sorted_cf = sorted(q_cf.keys(), reverse=True)
-    sbc_q     = fv(q_cf[q_sorted_cf[0]].get("stockBasedCompensation")) if q_sorted_cf else None
-    rev_q0_p  = fv(q_is[sorted(q_is.keys(), reverse=True)[0]].get("totalRevenue")) if q_is else None
-
-    sbc_ttm   = sbc_ttm_sum()
-    _rev_ttm_p_vals = [fv(q_is[q].get("totalRevenue")) for q in sorted(q_is.keys(), reverse=True)[:4]]
-    rev_ttm_p = sum(_rev_ttm_p_vals) if len(_rev_ttm_p_vals) == 4 and all(v is not None for v in _rev_ttm_p_vals) else None
-    cfo_ttm   = cfo_ttm_sum()
-    _ni_ttm_p_vals = [fv(q_is[q].get("netIncome")) for q in sorted(q_is.keys(), reverse=True)[:4]]
-    ni_ttm_p = sum(_ni_ttm_p_vals) if len(_ni_ttm_p_vals) == 4 and all(v is not None for v in _ni_ttm_p_vals) else None
-
-    # Annual (most recent)
-    y0_p      = sorted(a_is.keys(), reverse=True)[0] if a_is else None
-    sbc_yr0   = sbc_yr(y0_p) if y0_p else None
-    rev_yr0_p = fv(a_is[y0_p].get("totalRevenue")) if y0_p else None
-    cfo_yr0   = fv(a_cf.get(y0_p, {}).get("totalCashFromOperatingActivities")) if y0_p else None
-    ni_yr0_p  = fv(a_is[y0_p].get("netIncome")) if y0_p else None
-    def _fcf_yr_p(y):
-        d = a_cf.get(y, {})
-        f = fv(d.get("freeCashFlow"))
-        if f is None:
-            cfo_  = fv(d.get("totalCashFromOperatingActivities"))
-            capex_= fv(d.get("capitalExpenditures"))
-            f = cfo_ - abs(capex_) if cfo_ and capex_ else None
-        return f
-    fcf_yr0_p = _fcf_yr_p(y0_p) if y0_p else None
-
-    _capex_ttm_p_vals = [fv(q_cf[q].get("capitalExpenditures")) for q in sorted(q_cf.keys(), reverse=True)[:4]]
-    capex_ttm_p = abs(sum(_capex_ttm_p_vals)) if len(_capex_ttm_p_vals) == 4 and all(v is not None for v in _capex_ttm_p_vals) else None
-    _capex_yr0_raw = fv(a_cf.get(y0_p, {}).get("capitalExpenditures")) if y0_p else None
-    capex_yr0_p = abs(_capex_yr0_raw) if _capex_yr0_raw is not None else None
-    def _fcf_ttm_sum_p():
-        qs = sorted(q_cf.keys(), reverse=True)
-        vals = []
-        for q in qs[:4]:
-            f = fv(q_cf[q].get("freeCashFlow"))
-            if f is None:
-                cfo_  = fv(q_cf[q].get("totalCashFromOperatingActivities"))
-                capex_= fv(q_cf[q].get("capitalExpenditures"))
-                f = cfo_ - abs(capex_) if cfo_ and capex_ else None
-            if f is not None: vals.append(f)
-        return sum(vals) if len(vals) == 4 else None
-    fcf_ttm_p   = _fcf_ttm_sum_p()
-
-    def safe(a, b): return a/b if a is not None and b and b != 0 else None
-
-    # SBC / Revenue (%)
-    sbc_rev_q   = safe(sbc_q,    rev_q0_p)
-    sbc_rev_ttm = safe(sbc_ttm,  rev_ttm_p)
-    sbc_rev_yr  = safe(sbc_yr0,  rev_yr0_p)
-
-    # SBC-adjusted FCF = FCF - SBC
-    sbc_adj_fcf_ttm = (fcf_ttm_p - sbc_ttm)  if fcf_ttm_p is not None and sbc_ttm is not None else None
-    sbc_adj_fcf_yr  = (fcf_yr0_p - sbc_yr0)  if fcf_yr0_p is not None and sbc_yr0 is not None else None
-
-    # SBC-adjusted FCF Margin
-    sbc_adj_fcfm_ttm = safe(sbc_adj_fcf_ttm, rev_ttm_p)
-    sbc_adj_fcfm_yr  = safe(sbc_adj_fcf_yr,  rev_yr0_p)
-
-    # CapEx / Revenue (%)
-    capex_rev_ttm = safe(capex_ttm_p, rev_ttm_p)
-    capex_rev_yr  = safe(capex_yr0_p, rev_yr0_p)
-
-    # CapEx / Operating Cash Flow (%) — only meaningful when CFO > 0
-    capex_ocf_ttm = safe(capex_ttm_p, cfo_ttm)  if cfo_ttm  and cfo_ttm  > 0 else None
-    capex_ocf_yr  = safe(capex_yr0_p, cfo_yr0)  if cfo_yr0  and cfo_yr0  > 0 else None
-
-    # FCF Conversion = FCF / Net Income — only meaningful when NI > 0
-    # Negative NI would invert the ratio and make it uninterpretable
-    fcf_conv_ttm = safe(fcf_ttm_p, ni_ttm_p) if ni_ttm_p and ni_ttm_p > 0 else None
-    fcf_conv_yr  = safe(fcf_yr0_p, ni_yr0_p) if ni_yr0_p and ni_yr0_p > 0 else None
-
-    # Historical averages for new metrics
-    def sbc_rev_hist(n):
-        ys = sorted(a_is.keys(), reverse=True)
-        vals, all_yr = [], []
-        for y in ys[:n]:
-            yr = y[:4]
-            if y not in a_cf:
-                all_yr.append((yr, None, "Cash Flow fehlt")); continue
-            s = sbc_yr(y); r = fv(a_is[y].get("totalRevenue"))
-            if s is None: all_yr.append((yr, None, "SBC fehlt")); continue
-            if not r or r == 0: all_yr.append((yr, None, "Revenue fehlt")); continue
-            v = s/r; vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
-
-    def sbc_adj_fcfm_hist(n):
-        ys = sorted(a_is.keys(), reverse=True)
-        vals, all_yr = [], []
-        for y in ys[:n]:
-            yr = y[:4]
-            s = sbc_yr(y); fc = _fcf_yr_p(y); r = fv(a_is[y].get("totalRevenue"))
-            if s is None: all_yr.append((yr, None, "SBC fehlt")); continue
-            if fc is None: all_yr.append((yr, None, "FCF fehlt")); continue
-            if not r or r == 0: all_yr.append((yr, None, "Revenue fehlt")); continue
-            v = (fc - s)/r; vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
-
-    def capex_rev_hist(n):
-        ys = sorted(a_is.keys(), reverse=True)
-        vals, all_yr = [], []
-        for y in ys[:n]:
-            yr = y[:4]
-            cx = abs(fv(a_cf.get(y, {}).get("capitalExpenditures")) or 0)
-            r  = fv(a_is[y].get("totalRevenue"))
-            if not cx: all_yr.append((yr, None, "CapEx fehlt")); continue
-            if not r or r == 0: all_yr.append((yr, None, "Revenue fehlt")); continue
-            v = cx/r; vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
-
-    def capex_ocf_hist(n):
-        ys = sorted(a_cf.keys(), reverse=True)
-        vals, all_yr = [], []
-        for y in ys[:n]:
-            yr = y[:4]
-            cx_raw = fv(a_cf[y].get("capitalExpenditures"))
-            cx  = abs(cx_raw) if cx_raw is not None else None
-            cfo = fv(a_cf[y].get("totalCashFromOperatingActivities"))
-            if cx is None: all_yr.append((yr, None, "CapEx fehlt")); continue
-            if not cfo or cfo == 0: all_yr.append((yr, None, "CFO fehlt/0")); continue
-            if cfo < 0: all_yr.append((yr, None, f"neg. CFO ({cfo:,.0f})")); continue
-            v = cx/cfo; vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
-
-    def fcf_conv_hist(n):
-        ys = sorted(a_is.keys(), reverse=True)
-        vals, all_yr = [], []
-        for y in ys[:n]:
-            yr = y[:4]
-            fc = _fcf_yr_p(y); ni = fv(a_is[y].get("netIncome"))
-            if fc is None: all_yr.append((yr, None, "FCF fehlt")); continue
-            if ni is None: all_yr.append((yr, None, "NI fehlt")); continue
-            if ni == 0: all_yr.append((yr, None, "NI = 0")); continue
-            if ni < 0: all_yr.append((yr, None, f"neg. NI ({ni:,.0f})")); continue
-            v = fc/ni; vals.append(v); all_yr.append((yr, v, None))
-        avg = sum(vals)/len(vals) if vals else None
-        return avg, all_yr
-
-    sbc_rev_3y,      _hy_sbc_rev_3      = sbc_rev_hist(3)
-    sbc_rev_5y,      _hy_sbc_rev_5      = sbc_rev_hist(5)
-    sbc_rev_10y,     _hy_sbc_rev_10     = sbc_rev_hist(10)
-    sbc_adj_fcfm_3y, _hy_sbc_adj_fcfm_3 = sbc_adj_fcfm_hist(3)
-    sbc_adj_fcfm_5y, _hy_sbc_adj_fcfm_5 = sbc_adj_fcfm_hist(5)
-    sbc_adj_fcfm_10y,_hy_sbc_adj_fcfm_10= sbc_adj_fcfm_hist(10)
-    capex_rev_3y,    _hy_capex_rev_3    = capex_rev_hist(3)
-    capex_rev_5y,    _hy_capex_rev_5    = capex_rev_hist(5)
-    capex_rev_10y,   _hy_capex_rev_10   = capex_rev_hist(10)
-    capex_ocf_3y,    _hy_capex_ocf_3    = capex_ocf_hist(3)
-    capex_ocf_5y,    _hy_capex_ocf_5    = capex_ocf_hist(5)
-    capex_ocf_10y,   _hy_capex_ocf_10   = capex_ocf_hist(10)
-    fcf_conv_3y,     _hy_fcf_conv_3     = fcf_conv_hist(3)
-    fcf_conv_5y,     _hy_fcf_conv_5     = fcf_conv_hist(5)
-    fcf_conv_10y,    _hy_fcf_conv_10    = fcf_conv_hist(10)
+    gm_3y   = margin_hist("grossProfit",  "totalRevenue",3)
+    gm_5y   = margin_hist("grossProfit",  "totalRevenue",5)
+    gm_10y  = margin_hist("grossProfit",  "totalRevenue",10)
+    om_3y   = margin_hist("operatingIncome","totalRevenue",3)
+    om_5y   = margin_hist("operatingIncome","totalRevenue",5)
+    om_10y  = margin_hist("operatingIncome","totalRevenue",10)
+    nm_3y   = margin_hist("netIncome",    "totalRevenue",3)
+    nm_5y   = margin_hist("netIncome",    "totalRevenue",5)
+    nm_10y  = margin_hist("netIncome",    "totalRevenue",10)
+    ebitm_3y = margin_hist("ebit",        "totalRevenue",3)
+    ebitm_5y = margin_hist("ebit",        "totalRevenue",5)
+    ebitm_10y= margin_hist("ebit",        "totalRevenue",10)
+    ebitdam_3y  = margin_hist("ebitda",   "totalRevenue",3)
+    ebitdam_5y  = margin_hist("ebitda",   "totalRevenue",5)
+    ebitdam_10y = margin_hist("ebitda",   "totalRevenue",10)
+    fcfm_3y = fcfm_hist(3);  fcfm_5y = fcfm_hist(5);  fcfm_10y = fcfm_hist(10)
+    at_3y   = at_hist(3);    at_5y   = at_hist(5);    at_10y   = at_hist(10)
 
     # ── Grade thresholds ─────────────────────────────────────────────
     ROA_T   = [(15,"ap"),(10,"a"),(7,"am"),(5,"bp"),(3,"b"),(1,"bm"),(0,"cp")]
@@ -5590,22 +4479,8 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     NM_T    = [(25,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm")]
     EBITM_T = [(35,"ap"),(25,"a"),(20,"am"),(15,"bp"),(10,"b"),(5,"bm"),(0,"cp")]
     EBITDAM_T=[(40,"ap"),(30,"a"),(25,"am"),(20,"bp"),(15,"b"),(10,"bm"),(0,"cp")]
-    FCFM_T  = [(25,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm"),(-5,"cp"),(-15,"c"),(-30,"cm")]
+    FCFM_T  = [(25,"ap"),(15,"a"),(10,"am"),(7,"bp"),(3,"b"),(0,"bm")]
     AT_T    = [(2,"ap"),(1.5,"a"),(1,"am"),(0.7,"bp"),(0.4,"b"),(0.2,"bm"),(0,"cp")]
-    # SBC/Revenue: lower = better (less dilution)
-    # SBC/Revenue thresholds in % form (row uses pct=True → *100 before grading)
-    SBC_REV_T      = [(0,"ap"),(1,"a"),(2,"am"),(5,"bp"),(8,"b"),(12,"bm"),(20,"cp")]
-    SBC_REV_Ti     = [(20,"cp"),(12,"bm"),(8,"b"),(5,"bp"),(2,"am"),(1,"a"),(0,"ap")]
-    # SBC-adj FCF Margin: higher = better (already in % form)
-    SBC_FCFM_T     = [(20,"ap"),(15,"a"),(10,"am"),(5,"bp"),(0,"bm"),(-10,"cp")]
-    # CapEx/Revenue thresholds in % form (pct=True → *100)
-    CAPEX_REV_Ti   = [(30,"cp"),(20,"bm"),(15,"b"),(10,"bp"),(5,"am"),(2,"a"),(0,"ap")]
-    CAPEX_REV_T    = [(0,"ap"),(2,"a"),(5,"am"),(10,"bp"),(15,"b"),(20,"bm"),(30,"cp")]
-    # CapEx/OCF thresholds in % form (pct=True → *100)
-    CAPEX_OCF_T    = [(0,"ap"),(10,"a"),(20,"am"),(35,"bp"),(50,"b"),(75,"bm"),(100,"cp")]
-    CAPEX_OCF_Ti   = [(100,"cp"),(75,"bm"),(50,"b"),(35,"bp"),(20,"am"),(10,"a"),(0,"ap")]
-    # FCF Conversion: higher = better (1.0 = perfect conversion)
-    FCF_CONV_T     = [(1.2,"ap"),(1.0,"a"),(0.8,"am"),(0.6,"bp"),(0.4,"b"),(0.2,"bm"),(0,"cp")]
 
     def fmt(v, pct=False, decimals=2):
         if v is None: return "—"
@@ -5613,22 +4488,13 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         if pct: return f"{val:.{decimals}f} %"
         return f"{val:.{decimals}f}"
 
-    def row(label, cur, avg3, avg5, avg10, T, pct=True, hy3=None, hy5=None, hy10=None):
+    def row(label, cur, avg3, avg5, avg10, T, pct=True):
         cur_pct = cur * 100 if cur is not None and pct else cur
         a3  = avg3  * 100 if avg3  is not None and pct else avg3
         a5  = avg5  * 100 if avg5  is not None and pct else avg5
         a10 = avg10 * 100 if avg10 is not None and pct else avg10
         css, lbl = get_grade(cur_pct if cur_pct is not None else cur, T) if cur is not None else ("grade-na","—")
         f = lambda v: (f"{v:.2f} %" if pct else f"{v:.2f}") if v is not None else "—"
-        def conv(hy):
-            if not hy: return []
-            result = []
-            for item in hy:
-                yr, v, reason = item if len(item) == 3 else (*item, None)
-                v_scaled = v * 100 if v is not None and pct else v
-                fmt_v = f(v_scaled) if v_scaled is not None else None
-                result.append((yr, fmt_v, reason))
-            return result
         return {
             "label": label, "cur": cur_pct, "fmt": f(cur_pct if pct else cur),
             "css": css, "lbl": lbl,
@@ -5638,56 +4504,39 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
             "avg3_raw": a3, "avg5_raw": a5, "avg10_raw": a10,
             "T": T, "higher": True, "pct": pct,
             "group": label.split(" ")[0],
-            "hy3":  conv(hy3),
-            "hy5":  conv(hy5),
-            "hy10": conv(hy10),
         }
 
     rows = [
-        row("Return on Assets (TTM)",           roa_ttm,     roa_3y,     roa_5y,     roa_10y,     ROA_T, hy3=_hy_roa_3, hy5=_hy_roa_5, hy10=_hy_roa_10),
-        row("Return on Assets (Year)",           roa_yr,      roa_3y,     roa_5y,     roa_10y,     ROA_T, hy3=_hy_roa_3, hy5=_hy_roa_5, hy10=_hy_roa_10),
-        row("Return on Equity (TTM)",            roe_ttm,     roe_3y,     roe_5y,     roe_10y,     ROE_T, hy3=_hy_roe_3, hy5=_hy_roe_5, hy10=_hy_roe_10),
-        row("Return on Equity (Year)",           roe_yr,      roe_3y,     roe_5y,     roe_10y,     ROE_T, hy3=_hy_roe_3, hy5=_hy_roe_5, hy10=_hy_roe_10),
-        row("Return on Capital (TTM)",           roc_ttm,     roc_3y,     roc_5y,     roc_10y,     ROC_T, hy3=_hy_roc_3, hy5=_hy_roc_5, hy10=_hy_roc_10),
-        row("Return on Capital (Year)",          roc_yr,      roc_3y,     roc_5y,     roc_10y,     ROC_T, hy3=_hy_roc_3, hy5=_hy_roc_5, hy10=_hy_roc_10),
-        row("Return on Cap. Empl. (TTM)",        roce_ttm,    roce_3y,    roce_5y,    roce_10y,    ROCE_T, hy3=_hy_roce_3, hy5=_hy_roce_5, hy10=_hy_roce_10),
-        row("Return on Cap. Empl. (Year)",       roce_yr,     roce_3y,    roce_5y,    roce_10y,    ROCE_T, hy3=_hy_roce_3, hy5=_hy_roce_5, hy10=_hy_roce_10),
-        row("Return on Inv. Capital (TTM)",      roic_ttm,    roic_3y,    roic_5y,    roic_10y,    ROIC_T, hy3=_hy_roic_3, hy5=_hy_roic_5, hy10=_hy_roic_10),
-        row("Return on Inv. Capital (Year)",     roic_yr,     roic_3y,    roic_5y,    roic_10y,    ROIC_T, hy3=_hy_roic_3, hy5=_hy_roic_5, hy10=_hy_roic_10),
-        row("Gross Margin (Quarterly)",          gm_q,        gm_3y,      gm_5y,      gm_10y,      GM_T, hy3=_hy_gm_3, hy5=_hy_gm_5, hy10=_hy_gm_10),
-        row("Gross Margin (TTM)",                gm_ttm,      gm_3y,      gm_5y,      gm_10y,      GM_T, hy3=_hy_gm_3, hy5=_hy_gm_5, hy10=_hy_gm_10),
-        row("Gross Margin (Year)",               gm_yr,       gm_3y,      gm_5y,      gm_10y,      GM_T, hy3=_hy_gm_3, hy5=_hy_gm_5, hy10=_hy_gm_10),
-        row("Operating Margin (Quarterly)",      om_q,        om_3y,      om_5y,      om_10y,      OM_T, hy3=_hy_om_3, hy5=_hy_om_5, hy10=_hy_om_10),
-        row("Operating Margin (TTM)",            om_ttm,      om_3y,      om_5y,      om_10y,      OM_T, hy3=_hy_om_3, hy5=_hy_om_5, hy10=_hy_om_10),
-        row("Operating Margin (Year)",           om_yr,       om_3y,      om_5y,      om_10y,      OM_T, hy3=_hy_om_3, hy5=_hy_om_5, hy10=_hy_om_10),
-        row("Net Margin (Quarterly)",            nm_q,        nm_3y,      nm_5y,      nm_10y,      NM_T, hy3=_hy_nm_3, hy5=_hy_nm_5, hy10=_hy_nm_10),
-        row("Net Margin (TTM)",                  nm_ttm,      nm_3y,      nm_5y,      nm_10y,      NM_T, hy3=_hy_nm_3, hy5=_hy_nm_5, hy10=_hy_nm_10),
-        row("Net Margin (Year)",                 nm_yr,       nm_3y,      nm_5y,      nm_10y,      NM_T, hy3=_hy_nm_3, hy5=_hy_nm_5, hy10=_hy_nm_10),
-        row("EBIT Margin (Quarterly)",           ebitm_q,     ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T, hy3=_hy_ebitm_3, hy5=_hy_ebitm_5, hy10=_hy_ebitm_10),
-        row("EBIT Margin (TTM)",                 ebitm_ttm,   ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T, hy3=_hy_ebitm_3, hy5=_hy_ebitm_5, hy10=_hy_ebitm_10),
-        row("EBIT Margin (Year)",                ebitm_yr,    ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T, hy3=_hy_ebitm_3, hy5=_hy_ebitm_5, hy10=_hy_ebitm_10),
-        row("EBITDA Margin (Quarterly)",         ebitdam_q,   ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T, hy3=_hy_ebitdam_3, hy5=_hy_ebitdam_5, hy10=_hy_ebitdam_10),
-        row("EBITDA Margin (TTM)",               ebitdam_ttm, ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T, hy3=_hy_ebitdam_3, hy5=_hy_ebitdam_5, hy10=_hy_ebitdam_10),
-        row("EBITDA Margin (Year)",              ebitdam_yr,  ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T, hy3=_hy_ebitdam_3, hy5=_hy_ebitdam_5, hy10=_hy_ebitdam_10),
-        row("FCF Margin (Quarterly)",            fcfm_q,      fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T, hy3=_hy_fcfm_3, hy5=_hy_fcfm_5, hy10=_hy_fcfm_10),
-        row("FCF Margin (TTM)",                  fcfm_ttm,    fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T, hy3=_hy_fcfm_3, hy5=_hy_fcfm_5, hy10=_hy_fcfm_10),
-        row("FCF Margin (Year)",                 fcfm_yr,     fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T, hy3=_hy_fcfm_3, hy5=_hy_fcfm_5, hy10=_hy_fcfm_10),
-        row("Asset Turnover (TTM)",              at_ttm,      at_3y,      at_5y,      at_10y,      AT_T, pct=False, hy3=_hy_at_3, hy5=_hy_at_5, hy10=_hy_at_10),
-        row("Asset Turnover (Year)",             at_yr,       at_3y,      at_5y,      at_10y,      AT_T, pct=False, hy3=_hy_at_3, hy5=_hy_at_5, hy10=_hy_at_10),
-        # SBC Metrics
-        row("SBC / Revenue (Quarterly)",         sbc_rev_q,   sbc_rev_3y, sbc_rev_5y, sbc_rev_10y, SBC_REV_Ti, pct=True, hy3=_hy_sbc_rev_3, hy5=_hy_sbc_rev_5, hy10=_hy_sbc_rev_10),
-        row("SBC / Revenue (TTM)",               sbc_rev_ttm, sbc_rev_3y, sbc_rev_5y, sbc_rev_10y, SBC_REV_Ti, pct=True, hy3=_hy_sbc_rev_3, hy5=_hy_sbc_rev_5, hy10=_hy_sbc_rev_10),
-        row("SBC / Revenue (Year)",              sbc_rev_yr,  sbc_rev_3y, sbc_rev_5y, sbc_rev_10y, SBC_REV_Ti, pct=True, hy3=_hy_sbc_rev_3, hy5=_hy_sbc_rev_5, hy10=_hy_sbc_rev_10),
-        row("SBC-adj. FCF Margin (TTM)",         sbc_adj_fcfm_ttm, sbc_adj_fcfm_3y, sbc_adj_fcfm_5y, sbc_adj_fcfm_10y, SBC_FCFM_T, pct=True, hy3=_hy_sbc_adj_fcfm_3, hy5=_hy_sbc_adj_fcfm_5, hy10=_hy_sbc_adj_fcfm_10),
-        row("SBC-adj. FCF Margin (Year)",        sbc_adj_fcfm_yr,  sbc_adj_fcfm_3y, sbc_adj_fcfm_5y, sbc_adj_fcfm_10y, SBC_FCFM_T, pct=True, hy3=_hy_sbc_adj_fcfm_3, hy5=_hy_sbc_adj_fcfm_5, hy10=_hy_sbc_adj_fcfm_10),
-        # CapEx Metrics
-        row("CapEx / Revenue (TTM)",             capex_rev_ttm, capex_rev_3y, capex_rev_5y, capex_rev_10y, CAPEX_REV_T, pct=True, hy3=_hy_capex_rev_3, hy5=_hy_capex_rev_5, hy10=_hy_capex_rev_10),
-        row("CapEx / Revenue (Year)",            capex_rev_yr,  capex_rev_3y, capex_rev_5y, capex_rev_10y, CAPEX_REV_T, pct=True, hy3=_hy_capex_rev_3, hy5=_hy_capex_rev_5, hy10=_hy_capex_rev_10),
-        row("CapEx / Op. Cash Flow (TTM)",       capex_ocf_ttm, capex_ocf_3y, capex_ocf_5y, capex_ocf_10y, CAPEX_OCF_T, pct=True, hy3=_hy_capex_ocf_3, hy5=_hy_capex_ocf_5, hy10=_hy_capex_ocf_10),
-        row("CapEx / Op. Cash Flow (Year)",      capex_ocf_yr,  capex_ocf_3y, capex_ocf_5y, capex_ocf_10y, CAPEX_OCF_T, pct=True, hy3=_hy_capex_ocf_3, hy5=_hy_capex_ocf_5, hy10=_hy_capex_ocf_10),
-        # FCF Conversion
-        row("FCF Conversion (TTM)",              fcf_conv_ttm, fcf_conv_3y, fcf_conv_5y, fcf_conv_10y, FCF_CONV_T, pct=False, hy3=_hy_fcf_conv_3, hy5=_hy_fcf_conv_5, hy10=_hy_fcf_conv_10),
-        row("FCF Conversion (Year)",             fcf_conv_yr,  fcf_conv_3y, fcf_conv_5y, fcf_conv_10y, FCF_CONV_T, pct=False, hy3=_hy_fcf_conv_3, hy5=_hy_fcf_conv_5, hy10=_hy_fcf_conv_10),
+        row("Return on Assets (TTM)",           roa_ttm,     roa_3y,     roa_5y,     roa_10y,     ROA_T),
+        row("Return on Assets (Year)",           roa_yr,      roa_3y,     roa_5y,     roa_10y,     ROA_T),
+        row("Return on Equity (TTM)",            roe_ttm,     roe_3y,     roe_5y,     roe_10y,     ROE_T),
+        row("Return on Equity (Year)",           roe_yr,      roe_3y,     roe_5y,     roe_10y,     ROE_T),
+        row("Return on Capital (TTM)",           roc_ttm,     roc_3y,     roc_5y,     roc_10y,     ROC_T),
+        row("Return on Capital (Year)",          roc_yr,      roc_3y,     roc_5y,     roc_10y,     ROC_T),
+        row("Return on Cap. Empl. (TTM)",        roce_ttm,    roce_3y,    roce_5y,    roce_10y,    ROCE_T),
+        row("Return on Cap. Empl. (Year)",       roce_yr,     roce_3y,    roce_5y,    roce_10y,    ROCE_T),
+        row("Return on Inv. Capital (TTM)",      roic_ttm,    roic_3y,    roic_5y,    roic_10y,    ROIC_T),
+        row("Return on Inv. Capital (Year)",     roic_yr,     roic_3y,    roic_5y,    roic_10y,    ROIC_T),
+        row("Gross Margin (Quarterly)",          gm_q,        gm_3y,      gm_5y,      gm_10y,      GM_T),
+        row("Gross Margin (TTM)",                gm_ttm,      gm_3y,      gm_5y,      gm_10y,      GM_T),
+        row("Gross Margin (Year)",               gm_yr,       gm_3y,      gm_5y,      gm_10y,      GM_T),
+        row("Operating Margin (Quarterly)",      om_q,        om_3y,      om_5y,      om_10y,      OM_T),
+        row("Operating Margin (TTM)",            om_ttm,      om_3y,      om_5y,      om_10y,      OM_T),
+        row("Operating Margin (Year)",           om_yr,       om_3y,      om_5y,      om_10y,      OM_T),
+        row("Net Margin (Quarterly)",            nm_q,        nm_3y,      nm_5y,      nm_10y,      NM_T),
+        row("Net Margin (TTM)",                  nm_ttm,      nm_3y,      nm_5y,      nm_10y,      NM_T),
+        row("Net Margin (Year)",                 nm_yr,       nm_3y,      nm_5y,      nm_10y,      NM_T),
+        row("EBIT Margin (Quarterly)",           ebitm_q,     ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T),
+        row("EBIT Margin (TTM)",                 ebitm_ttm,   ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T),
+        row("EBIT Margin (Year)",                ebitm_yr,    ebitm_3y,   ebitm_5y,   ebitm_10y,   EBITM_T),
+        row("EBITDA Margin (Quarterly)",         ebitdam_q,   ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T),
+        row("EBITDA Margin (TTM)",               ebitdam_ttm, ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T),
+        row("EBITDA Margin (Year)",              ebitdam_yr,  ebitdam_3y, ebitdam_5y, ebitdam_10y, EBITDAM_T),
+        row("FCF Margin (Quarterly)",            fcfm_q,      fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
+        row("FCF Margin (TTM)",                  fcfm_ttm,    fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
+        row("FCF Margin (Year)",                 fcfm_yr,     fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
+        row("Asset Turnover (TTM)",              at_ttm,      at_3y,      at_5y,      at_10y,      AT_T, pct=False),
+        row("Asset Turnover (Year)",             at_yr,       at_3y,      at_5y,      at_10y,      AT_T, pct=False),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
@@ -5713,9 +4562,9 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         if r and r > 0:
             chart_rows.append({
                 "Year":         y[:4],
-                "Gross Margin": round(gp/r*100, 2) if gp is not None else None,
-                "Net Margin":   round(ni/r*100, 2) if ni is not None else None,
-                "FCF Margin":   round(fc/r*100, 2) if fc is not None else None,
+                "Gross Margin": round(gp/r*100, 2) if gp else None,
+                "Net Margin":   round(ni/r*100, 2) if ni else None,
+                "FCF Margin":   round(fc/r*100, 2) if fc else None,
             })
 
     return {
@@ -5827,7 +4676,7 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
         "interestExpense", "interestIncome", "totalOtherIncomeExpenseNet",
         "incomeBeforeTax", "incomeTaxExpense", "netIncome",
         "netIncomeApplicableToCommonShares", "netIncomeFromContinuingOps",
-        "depreciation", "depreciationAndAmortization", "depreciationAmortization",
+        "depreciation", "depreciationAndAmortization",
         "totalCashFromOperatingActivities", "capitalExpenditures",
         "freeCashFlow", "dividendsPaid",
         "totalCashflowsFromInvestingActivities", "totalCashFromFinancingActivities",
@@ -5908,12 +4757,12 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
             equity = ttm_row.get("totalStockholderEquity")
             debt   = ttm_row.get("longTermDebt")
 
-            ttm_row["grossMargin"]      = gp  / rev    if rev and gp     is not None else None
-            ttm_row["operatingMargin"]  = oi  / rev    if rev and oi     is not None else None
-            ttm_row["netMargin"]        = ni  / rev    if rev and ni     is not None else None
-            ttm_row["ebitdaMargin"]     = ebitda / rev if rev and ebitda is not None else None
-            ttm_row["roa"]              = ni / assets  if assets and ni  is not None else None
-            ttm_row["roe"]              = ni / equity  if equity and ni  is not None else None
+            ttm_row["grossMargin"]      = gp  / rev    if rev and gp     else None
+            ttm_row["operatingMargin"]  = oi  / rev    if rev and oi     else None
+            ttm_row["netMargin"]        = ni  / rev    if rev and ni     else None
+            ttm_row["ebitdaMargin"]     = ebitda / rev if rev and ebitda else None
+            ttm_row["roa"]              = ni / assets  if assets and ni  else None
+            ttm_row["roe"]              = ni / equity  if equity and ni  else None
             fcf = ttm_row.get("freeCashFlow")
             if not fcf:
                 if cfo is not None and capex is not None:
@@ -5931,8 +4780,7 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
             share_vals = []
             for q in window:
                 try:
-                    bs_q = bs_quarterly.get(q, {})
-                    s = bs_q.get("commonStockSharesOutstanding") or bs_q.get("weightedAverageShsOutDil")
+                    s = bs_quarterly.get(q, {}).get("commonStockSharesOutstanding")
                     if s: share_vals.append(float(s))
                 except: pass
             shares = sum(share_vals) / len(share_vals) if share_vals else None
@@ -6608,7 +5456,7 @@ with tab2:
                 st.markdown('<div class="section-header">Historical TTM — Rohdaten</div>', unsafe_allow_html=True)
                 show_growth_ttm = st.toggle("Growth anzeigen", key="growth_ttm")
                 raw_df = ttm_history.T.copy()
-                display_df = raw_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
+                display_df = raw_df.map(lambda x: fmt_num(x) if pd.notna(x) else "—")
                 if show_growth_ttm:
                     display_df = add_growth_rows(raw_df, display_df, period="TTM")
                 st.dataframe(display_df, use_container_width=True)
@@ -6640,7 +5488,7 @@ with tab2:
             st.markdown('<div class="section-header">Rohdaten</div>', unsafe_allow_html=True)
             show_growth = st.toggle("Growth anzeigen", key="growth_hist")
             raw_df = df_fin.T.copy()
-            display_df = raw_df.applymap(lambda x: fmt_num(x) if pd.notna(x) else "—")
+            display_df = raw_df.map(lambda x: fmt_num(x) if pd.notna(x) else "—")
             if show_growth:
                 display_df = add_growth_rows(raw_df, display_df, period=period_type)
             st.dataframe(display_df, use_container_width=True)
@@ -7244,32 +6092,50 @@ with tab2b:
             } for r in rows_expanded])
 
             if rows_expanded:
-                # Row-level styling: AVG/CAGR rows get a dimmed background
-                _is_sub = [
-                    r.get("is_avg_row", False) or "CAGR" in r["label"]
-                    for r in rows_expanded
-                ]
-                def _style_rows(row):
-                    idx = row.name
-                    if idx < len(_is_sub) and _is_sub[idx]:
-                        return ["background-color: #0d1320; color: #4b5563; font-style: italic; font-size: 11px"] * len(row)
-                    return [""] * len(row)
-
-                styled_df = df_all.style.apply(_style_rows, axis=1)
-
-                sel_event = st.dataframe(
-                    styled_df,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=600,
-                    on_select="rerun",
-                    selection_mode="single-row",
+                tbl_all = '''<table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead><tr style="color:#64748b;border-bottom:1px solid #2d3748;">
+                <th style="text-align:left;padding:6px 4px;font-weight:500;">Metric</th>
+                <th style="text-align:left;padding:6px 4px;font-weight:500;">Cat.</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">Value</th>
+                <th style="text-align:center;padding:6px 4px;font-weight:500;">Grade</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">3Y Avg</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">5Y Avg</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">10Y Avg</th>
+              </tr></thead><tbody>'''
+                for r in rows_expanded:
+                    is_avg  = r.get("is_avg_row", False)
+                    is_cagr = "CAGR" in r["label"]
+                    is_sel  = r["label"] == st.session_state.get("all_selected_metric", "")
+                    tab_lbl = r.get("tab", "")
+                    sel_bg  = "background:#1a2744;" if is_sel else ""
+                    if is_avg or is_cagr:
+                        tbl_all += (
+                            f'<tr style="border-bottom:1px solid #161d2e;background:#0d1320;">'
+                            f'<td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>'
+                            f'<td style="padding:3px 4px;color:#374151;font-size:11px;">{tab_lbl}</td>'
+                            f'<td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>'
+                            f'<td style="padding:3px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>'
+                            f'<td colspan="3"></td>'
+                            f'</tr>'
+                        )
+                    else:
+                        tbl_all += (
+                            f'<tr style="border-bottom:1px solid #1e2535;{sel_bg}cursor:pointer;">'
+                            f'<td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>'
+                            f'<td style="padding:6px 4px;color:#64748b;font-size:12px;">{tab_lbl}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>'
+                            f'<td style="padding:6px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg3","—")}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg5","—")}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg10","—")}</td>'
+                            f'</tr>'
+                        )
+                tbl_all += "</tbody></table>"
+                st.markdown(
+                    f'<div style="max-height:600px;overflow-y:auto;border:1px solid #2d3748;border-radius:8px;padding:4px;">'
+                    f'{tbl_all}</div>',
+                    unsafe_allow_html=True
                 )
-                # Update session state from clicked row
-                if sel_event.selection.rows:
-                    picked_idx = sel_event.selection.rows[0]
-                    if 0 <= picked_idx < len(rows_expanded):
-                        st.session_state["all_selected_metric"] = rows_expanded[picked_idx]["label"]
                 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
             st.download_button(
@@ -7326,39 +6192,23 @@ with tab2b:
                             f"Then: sum(values) / {_nyrs}"
                         )
                     drill_label = _parent["label"] if _parent else sel
-                    # Build yearly breakdown table from hy_vals stored on the row
-                    # hy_vals: [(year, fmt_val|None, reason|None), ...]
-                    _hy_vals  = row_data.get("hy_vals", []) if row_data else []
-                    _hy_comps = []
-                    if _hy_vals:
-                        _valid_count = 0
-                        for item in _hy_vals:
-                            yr, fv_str, reason = item if len(item) == 3 else (*item, None)
-                            if fv_str is not None:
-                                _hy_comps.append((f"  {yr}", fv_str, None))
-                                _valid_count += 1
-                            else:
-                                _hy_comps.append((f"  {yr}", f"— übersprungen", reason or ""))
-                        _hy_comps.append((f"  → Avg ({_valid_count} gültige Jahre)", row_data["fmt"] if row_data else "—", None))
-                    else:
-                        _hy_comps = [
-                            (f"{_nyrs}Y Avg Value", row_data["fmt"] if row_data else "—", None),
-                            ("── Based on same calculation as ──", "", None),
-                            (f"→ See drilldown of: {drill_label}", "↓ below", None),
-                        ]
                     dd = {
                         "formula": _method,
                         "fields":  [f"Same fields as: {drill_label}",
                                     "ℹ Historical year-end prices from Finqube DB (for value multiples)"],
                         "unit":    "",
-                        "components": _hy_comps,
+                        "components": [
+                            (f"{_nyrs}Y Avg Value", row_data["fmt"] if row_data else "—"),
+                            ("── Based on same calculation as ──", ""),
+                            (f"→ See drilldown of: {drill_label}", "↓ below"),
+                        ],
                         "result": row_data["fmt"] if row_data else "—",
                         "_show_parent_dd": True,
                         "_parent_label":   drill_label,
                     }
                 elif _cagr_match:
-                    # Reconstruct full label with CAGR period for compute_drilldown
-                    drill_label = f"{_cagr_match.group(1).strip()} ({_cagr_match.group(2)})"  # "Revenue Growth (3Y CAGR)"
+                    # Strip ↳ prefix — compute_drilldown uses label matching
+                    drill_label = _cagr_match.group(1).strip()  # "Revenue Growth (3Y CAGR)"
                     dd = compute_drilldown(drill_label, data, hl, val, price_data)
                 else:
                     drill_label = sel.lstrip("  ↳ ").strip()
@@ -7431,36 +6281,14 @@ with tab2b:
                         'text-transform:uppercase;letter-spacing:.05em;">Rohdaten</div>'
                         '<table style="width:100%;border-collapse:collapse;font-size:13px;">'
                     )
-                    for comp in dd["components"]:
-                        # support both 2-tuple (name, val) and 3-tuple (name, val, reason)
-                        if len(comp) == 3:
-                            name, value, skip_reason = comp
-                        else:
-                            name, value = comp; skip_reason = None
+                    for name, value in dd["components"]:
                         if not name: continue
-                        is_skipped = skip_reason is not None
-                        is_avg_row = name.strip().startswith("→")
-                        if is_skipped:
-                            card += (
-                                f'<tr style="border-bottom:1px solid #1e2535;opacity:0.5;">'
-                                f'<td style="padding:5px 2px;color:#64748b;font-style:italic;">{name}</td>'
-                                f'<td style="padding:5px 2px;text-align:right;color:#f59e0b;'
-                                f'font-size:11px;">{value} &nbsp;<span style="color:#64748b;">({skip_reason})</span></td></tr>'
-                            )
-                        elif is_avg_row:
-                            card += (
-                                f'<tr style="border-top:1px solid #3b82f6;background:#0a1628;">'
-                                f'<td style="padding:6px 2px;color:#93c5fd;font-weight:600;">{name}</td>'
-                                f'<td style="padding:6px 2px;text-align:right;color:#60a5fa;'
-                                f'font-weight:700;">{value}</td></tr>'
-                            )
-                        else:
-                            card += (
-                                f'<tr style="border-bottom:1px solid #1e2535;">'
-                                f'<td style="padding:5px 2px;color:#94a3b8;">{name}</td>'
-                                f'<td style="padding:5px 2px;text-align:right;color:#e2e8f0;'
-                                f'font-weight:600;">{value}</td></tr>'
-                            )
+                        card += (
+                            f'<tr style="border-bottom:1px solid #1e2535;">'
+                            f'<td style="padding:5px 2px;color:#94a3b8;">{name}</td>'
+                            f'<td style="padding:5px 2px;text-align:right;color:#e2e8f0;'
+                            f'font-weight:600;">{value}</td></tr>'
+                        )
                     card += '</table></div>'
                 # Historical averages
                 if row_data:
@@ -7557,7 +6385,7 @@ with tab3:
             except: return ""
 
         st.dataframe(
-            df_earn.style.applymap(color_surprise, subset=["Surprise %"]),
+            df_earn.style.map(color_surprise, subset=["Surprise %"]),
             use_container_width=True, hide_index=True,
         )
     else:
