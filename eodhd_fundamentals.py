@@ -1279,24 +1279,46 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 "result": num(pe_cur_used, 2) if pe_cur_used else "—"}
 
 
-        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
-                   [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
+        # P/E (Year): MCap / NI_common_Year → MCap / NI_Year
+        _ni_common_yr_dd = fv(isA.get("netIncomeApplicableToCommonShares"))
+        _ni_yr_dd        = fv(isA.get("netIncome"))
+        _pe_common_yr    = (mcap / _ni_common_yr_dd) if mcap and _ni_common_yr_dd and _ni_common_yr_dd > 0 else None
+        _pe_ni_yr        = (mcap / _ni_yr_dd)        if mcap and _ni_yr_dd        and _ni_yr_dd        > 0 else None
+        _pe_yr_used      = _pe_common_yr or _pe_ni_yr
+        if _pe_common_yr:
+            _yr_src_lbl = "MCap / NI_common_Year  (primary)"
+            _yr_src_val = _pe_common_yr
+        elif _pe_ni_yr:
+            _yr_src_lbl = "MCap / NI_Year  (fallback — NI_common not available)"
+            _yr_src_val = _pe_ni_yr
+        else:
+            _yr_src_lbl = "— (no data available)"
+            _yr_src_val = None
         return {
-            "formula": "Market Cap ÷ Net Income",
+            "formula": (
+                "MCap / netIncomeApplicableToCommonShares_Year  [primary]\n"
+                "MCap / netIncome_Year                         [fallback]\n"
+                "(no API fallback — annual NI almost always available)"
+            ),
             "fields":  ["Highlights.MarketCapitalization",
-                        "Income_Statement.netIncome (quarterly TTM sum)" if is_ttm else "Income_Statement.netIncome (annual)",
-                            "ℹ Market Cap / Price sourced from Finqube DB"],
+                        "Income_Statement.netIncomeApplicableToCommonShares (annual — primary)",
+                        "Income_Statement.netIncome (annual — fallback)",
+                        "ℹ Market Cap / Price sourced from Finqube DB"],
             "unit": "x",
             "components": [
+                ("── Self-Calculated ──",                         ""),
                 ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
-                (f"── Net Income {'TTM quarters' if is_ttm else dt} ──", ""),
-                *ni_comps,
-                ("── Calculation ──",                             ""),
-                (f"Market Cap ÷ Net Income",                      f"{raw(mcap)} ÷ {raw(ni)}"),
+                (f"NI_common_Year  [netIncomeApplicableToCommonShares {isA_dt}]",
+                 raw(_ni_common_yr_dd) if _ni_common_yr_dd else "— (not available)"),
+                ("MCap / NI_common_Year",  num(_pe_common_yr, 4) + " x" if _pe_common_yr else "—"),
+                (f"NI_Year  [netIncome {isA_dt}]",               raw(_ni_yr_dd) if _ni_yr_dd else "— (not available)"),
+                ("MCap / NI_Year",         num(_pe_ni_yr, 4) + " x" if _pe_ni_yr else "—"),
+                ("── Source used ──",                             ""),
+                (_yr_src_lbl,              num(_yr_src_val, 4) + " x" if _yr_src_val else "—"),
                 ("── Result ──",                                  ""),
-                ("P/E",                                           num(pe, 4) + " x"),
+                ("P/E (Year)",             num(_pe_yr_used, 4) + " x" if _pe_yr_used else "—"),
             ],
-            "result": num(pe, 2)}
+            "result": num(_pe_yr_used, 2) if _pe_yr_used else "—"}
 
     if "P/Sales" in L:
         is_ttm = "TTM" in L or "Cur" in L
@@ -6080,43 +6102,63 @@ with tab2b:
         col_tbl, col_drill = st.columns([3, 2])
 
         with col_tbl:
-            # ── Dataframe with row selection ──────────────────────────
+            # ── st.dataframe with row selection (checkbox) ────────────
             df_all = pd.DataFrame([{
                 "Metric":  r["label"],
                 "Cat.":    r.get("tab", ""),
                 "Value":   r["fmt"],
                 "Grade":   r["lbl"],
-                "3Y Avg":  r.get("avg3", "—"),
-                "5Y Avg":  r.get("avg5", "—"),
-                "10Y Avg": r.get("avg10", "—"),
+                "3Y":      r.get("avg3", "—"),
+                "5Y":      r.get("avg5", "—"),
+                "10Y":     r.get("avg10", "—"),
             } for r in rows_expanded])
 
-            if not df_all.empty:
-                sel_event = st.dataframe(
-                    df_all,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=600,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key="all_df_selection",
-                    column_config={
-                        "Metric":  st.column_config.TextColumn("Metric",  width="large"),
-                        "Cat.":    st.column_config.TextColumn("Cat.",    width="small"),
-                        "Value":   st.column_config.TextColumn("Value",   width="small"),
-                        "Grade":   st.column_config.TextColumn("Grade",   width="small"),
-                        "3Y Avg":  st.column_config.TextColumn("3Y Avg",  width="small"),
-                        "5Y Avg":  st.column_config.TextColumn("5Y Avg",  width="small"),
-                        "10Y Avg": st.column_config.TextColumn("10Y Avg", width="small"),
-                    },
+            if rows_expanded:
+                tbl_all = '''<table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead><tr style="color:#64748b;border-bottom:1px solid #2d3748;">
+                <th style="text-align:left;padding:6px 4px;font-weight:500;">Metric</th>
+                <th style="text-align:left;padding:6px 4px;font-weight:500;">Cat.</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">Value</th>
+                <th style="text-align:center;padding:6px 4px;font-weight:500;">Grade</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">3Y Avg</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">5Y Avg</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">10Y Avg</th>
+              </tr></thead><tbody>'''
+                for r in rows_expanded:
+                    is_avg  = r.get("is_avg_row", False)
+                    is_cagr = "CAGR" in r["label"]
+                    is_sel  = r["label"] == st.session_state.get("all_selected_metric", "")
+                    tab_lbl = r.get("tab", "")
+                    sel_bg  = "background:#1a2744;" if is_sel else ""
+                    if is_avg or is_cagr:
+                        tbl_all += (
+                            f'<tr style="border-bottom:1px solid #161d2e;background:#0d1320;">'
+                            f'<td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>'
+                            f'<td style="padding:3px 4px;color:#374151;font-size:11px;">{tab_lbl}</td>'
+                            f'<td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>'
+                            f'<td style="padding:3px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>'
+                            f'<td colspan="3"></td>'
+                            f'</tr>'
+                        )
+                    else:
+                        tbl_all += (
+                            f'<tr style="border-bottom:1px solid #1e2535;{sel_bg}cursor:pointer;">'
+                            f'<td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>'
+                            f'<td style="padding:6px 4px;color:#64748b;font-size:12px;">{tab_lbl}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>'
+                            f'<td style="padding:6px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg3","—")}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg5","—")}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg10","—")}</td>'
+                            f'</tr>'
+                        )
+                tbl_all += "</tbody></table>"
+                st.markdown(
+                    f'<div style="max-height:600px;overflow-y:auto;border:1px solid #2d3748;border-radius:8px;padding:4px;">'
+                    f'{tbl_all}</div>',
+                    unsafe_allow_html=True
                 )
-                # Update selection from clicked row
-                sel_rows = sel_event.selection.rows if sel_event and sel_event.selection else []
-                if sel_rows:
-                    clicked_label = rows_expanded[sel_rows[0]]["label"]
-                    if clicked_label != st.session_state.get("all_selected_metric"):
-                        st.session_state["all_selected_metric"] = clicked_label
-                        st.rerun()
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
             st.download_button(
                 label="⬇ Excel Download",
