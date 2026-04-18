@@ -954,6 +954,39 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
         row("FCF Yield (Year)",      fcf_yield_yr,   fcf_yield_3y, fcf_yield_5y, fcf_yield_10y,  FCFY_T, higher=True, pct=True),
     ]
 
+    # ── P/Tangible Book ──────────────────────────────────────────────
+    _gw_q_v  = fv(data["Financials"]["Balance_Sheet"].get("quarterly",{}).get(qbs_s[0],{}).get("goodWill")) or 0 if qbs_s else 0
+    _int_q_v = fv(data["Financials"]["Balance_Sheet"].get("quarterly",{}).get(qbs_s[0],{}).get("intangibleAssets")) or 0 if qbs_s else 0
+    _eq_q_v  = fv(data["Financials"]["Balance_Sheet"].get("quarterly",{}).get(qbs_s[0],{}).get("totalStockholderEquity")) if qbs_s else None
+    tbv_q    = (_eq_q_v - _gw_q_v - _int_q_v) if _eq_q_v is not None else None
+    ptbv_cur = (mcap / tbv_q) if mcap and tbv_q and tbv_q > 0 else None
+
+    _gw_a_v  = fv(a_bs.get(years_bs[0],{}).get("goodWill")) or 0 if years_bs else 0
+    _int_a_v = fv(a_bs.get(years_bs[0],{}).get("intangibleAssets")) or 0 if years_bs else 0
+    tbv_a    = (equity_yr - _gw_a_v - _int_a_v) if equity_yr is not None else None
+    ptbv_yr  = (mcap / tbv_a)  if mcap and tbv_a and tbv_a > 0 else None
+
+    def ptbv_hist(n):
+        ys = sorted(a_bs.keys(), reverse=True)
+        vals = []
+        for y in ys[:n]:
+            yr_str = y[:4]
+            price  = price_data.get(yr_str)
+            bs_y   = a_bs.get(y, {})
+            eq  = fv(bs_y.get("totalStockholderEquity"))
+            gw  = fv(bs_y.get("goodWill")) or fv(bs_y.get("goodwill")) or 0
+            inta= fv(bs_y.get("intangibleAssets")) or 0
+            shs = fv(bs_y.get("commonStockSharesOutstanding"))
+            tbv_y = (eq - gw - inta) if eq is not None else None
+            if price and shs and tbv_y and tbv_y > 0:
+                vals.append(price * shs / tbv_y)
+        return sum(vals)/len(vals) if vals else None
+
+    ptbv_3y = ptbv_hist(3); ptbv_5y = ptbv_hist(5); ptbv_10y = ptbv_hist(10)
+    PTBV_T  = [(0,"ap"),(1,"a"),(2,"am"),(3,"bp"),(5,"b"),(7,"bm"),(10,"cp")]
+    rows.append(row("P/Tangible Book (Cur)",  ptbv_cur, ptbv_3y, ptbv_5y, ptbv_10y, PTBV_T))
+    rows.append(row("P/Tangible Book (Year)", ptbv_yr,  ptbv_3y, ptbv_5y, ptbv_10y, PTBV_T))
+
     # ── Overall Score ────────────────────────────────────────────────
     grade_score = {"ap":100,"a":92,"am":84,"bp":76,"b":68,"bm":60,"cp":52,"c":44,"cm":36,"d":28,"na":0}
     scores = [grade_score.get(r["css"].replace("grade-",""), 0) for r in rows if r["css"] != "grade-na"]
@@ -1279,46 +1312,24 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 "result": num(pe_cur_used, 2) if pe_cur_used else "—"}
 
 
-        # P/E (Year): MCap / NI_common_Year → MCap / NI_Year
-        _ni_common_yr_dd = fv(isA.get("netIncomeApplicableToCommonShares"))
-        _ni_yr_dd        = fv(isA.get("netIncome"))
-        _pe_common_yr    = (mcap / _ni_common_yr_dd) if mcap and _ni_common_yr_dd and _ni_common_yr_dd > 0 else None
-        _pe_ni_yr        = (mcap / _ni_yr_dd)        if mcap and _ni_yr_dd        and _ni_yr_dd        > 0 else None
-        _pe_yr_used      = _pe_common_yr or _pe_ni_yr
-        if _pe_common_yr:
-            _yr_src_lbl = "MCap / NI_common_Year  (primary)"
-            _yr_src_val = _pe_common_yr
-        elif _pe_ni_yr:
-            _yr_src_lbl = "MCap / NI_Year  (fallback — NI_common not available)"
-            _yr_src_val = _pe_ni_yr
-        else:
-            _yr_src_lbl = "— (no data available)"
-            _yr_src_val = None
+        ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
+                   [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         return {
-            "formula": (
-                "MCap / netIncomeApplicableToCommonShares_Year  [primary]\n"
-                "MCap / netIncome_Year                         [fallback]\n"
-                "(no API fallback — annual NI almost always available)"
-            ),
+            "formula": "Market Cap ÷ Net Income",
             "fields":  ["Highlights.MarketCapitalization",
-                        "Income_Statement.netIncomeApplicableToCommonShares (annual — primary)",
-                        "Income_Statement.netIncome (annual — fallback)",
-                        "ℹ Market Cap / Price sourced from Finqube DB"],
+                        "Income_Statement.netIncome (quarterly TTM sum)" if is_ttm else "Income_Statement.netIncome (annual)",
+                            "ℹ Market Cap / Price sourced from Finqube DB"],
             "unit": "x",
             "components": [
-                ("── Self-Calculated ──",                         ""),
                 ("Market Cap  [Highlights.MarketCapitalization]", raw(mcap)),
-                (f"NI_common_Year  [netIncomeApplicableToCommonShares {isA_dt}]",
-                 raw(_ni_common_yr_dd) if _ni_common_yr_dd else "— (not available)"),
-                ("MCap / NI_common_Year",  num(_pe_common_yr, 4) + " x" if _pe_common_yr else "—"),
-                (f"NI_Year  [netIncome {isA_dt}]",               raw(_ni_yr_dd) if _ni_yr_dd else "— (not available)"),
-                ("MCap / NI_Year",         num(_pe_ni_yr, 4) + " x" if _pe_ni_yr else "—"),
-                ("── Source used ──",                             ""),
-                (_yr_src_lbl,              num(_yr_src_val, 4) + " x" if _yr_src_val else "—"),
+                (f"── Net Income {'TTM quarters' if is_ttm else dt} ──", ""),
+                *ni_comps,
+                ("── Calculation ──",                             ""),
+                (f"Market Cap ÷ Net Income",                      f"{raw(mcap)} ÷ {raw(ni)}"),
                 ("── Result ──",                                  ""),
-                ("P/E (Year)",             num(_pe_yr_used, 4) + " x" if _pe_yr_used else "—"),
+                ("P/E",                                           num(pe, 4) + " x"),
             ],
-            "result": num(_pe_yr_used, 2) if _pe_yr_used else "—"}
+            "result": num(pe, 2)}
 
     if "P/Sales" in L:
         is_ttm = "TTM" in L or "Cur" in L
@@ -2183,6 +2194,307 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {"formula": "Revenue ÷ Total Assets (avg Y0/Y-1 for annual)",
                 "fields": ["Income_Statement.totalRevenue", "Balance_Sheet.totalAssets"],
                 "unit": "x", "components": comps, "result": num(r, 2)}
+
+    # ── CapEx / Revenue ───────────────────────────────────────────────────────
+    if "CapEx / Revenue" in L:
+        is_q   = "Quarterly" in L
+        is_ttm = "TTM" in L
+        q0cf   = qcf_s[0] if qcf_s else None
+        if is_q:
+            cx_raw = fv(q_cf[q0cf].get("capitalExpenditures")) if q0cf else None
+            cx = abs(cx_raw) if cx_raw is not None else None
+            rev = fv(q_is[qis_s[0]].get("totalRevenue")) if qis_s else None
+            r   = (cx / rev) if cx and rev and rev > 0 else None
+            return {"formula": "|CapEx| ÷ Revenue × 100  (single quarter Q0)\nLower = less capital intensive",
+                    "fields": ["Cash_Flow.capitalExpenditures", "Income_Statement.totalRevenue"],
+                    "unit": "%",
+                    "components": [
+                        (f"Cash_Flow.capitalExpenditures  [{q0cf}]  (raw)", raw(cx_raw)),
+                        (f"|CapEx|  (abs value used)",                      raw(cx)),
+                        (f"Income_Statement.totalRevenue  [{qis_s[0] if qis_s else '—'}]", raw(rev)),
+                        ("── Calculation ──", ""),
+                        ("|CapEx| ÷ Revenue × 100",  f"{raw(cx)} ÷ {raw(rev)}"),
+                        ("── Result ──", ""),
+                        ("CapEx / Revenue (Q0)", num(r*100 if r else None, 4) + " %"),
+                    ], "result": num(r*100 if r else None, 2)}
+        cf_src = data["Financials"]["Cash_Flow"]
+        is_src = data["Financials"]["Income_Statement"]
+        if is_ttm:
+            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
+            qs_is = sorted(is_src.get("quarterly",{}).keys(), reverse=True)[:4]
+            cx_vals  = [fv(cf_src["quarterly"][q].get("capitalExpenditures")) for q in qs_cf]
+            rev_vals = [fv(is_src["quarterly"][q].get("totalRevenue")) for q in qs_is]
+            cx  = abs(sum(v for v in cx_vals if v is not None)) if any(v is not None for v in cx_vals) else None
+            rev = sum(v for v in rev_vals if v is not None) if all(v is not None for v in rev_vals) else None
+            comps = [(f"  Cash_Flow.capitalExpenditures  [{q}]", raw(fv(cf_src["quarterly"][q].get("capitalExpenditures")))) for q in qs_cf]
+            comps += [("  → |CapEx| TTM (abs)", raw(cx))]
+            comps += [(f"  Income_Statement.totalRevenue  [{q}]", raw(fv(is_src["quarterly"][q].get("totalRevenue")))) for q in qs_is]
+            comps += [("  → Revenue TTM", raw(rev))]
+        else:
+            ys = sorted(cf_src.get("yearly",{}).keys(), reverse=True)
+            y0 = ys[0] if ys else None
+            cx_raw2 = fv(cf_src["yearly"].get(y0,{}).get("capitalExpenditures")) if y0 else None
+            cx  = abs(cx_raw2) if cx_raw2 is not None else None
+            rev = fv(is_src["yearly"].get(y0,{}).get("totalRevenue")) if y0 else None
+            comps = [(f"Cash_Flow.capitalExpenditures  [{y0}]  (raw)", raw(cx_raw2)),
+                     (f"|CapEx|  (abs value)",                          raw(cx)),
+                     (f"Income_Statement.totalRevenue  [{y0}]",         raw(rev))]
+        r = (cx / rev) if cx and rev and rev > 0 else None
+        comps += [("── Calculation ──",""), ("|CapEx| ÷ Revenue × 100", f"{raw(cx)} ÷ {raw(rev)}"),
+                  ("── Result ──",""), ("CapEx / Revenue", num(r*100 if r else None,4) + " %")]
+        return {"formula": "|CapEx| ÷ Revenue × 100\n< 5% = capital-light (SaaS)\n5–15% = moderate\n> 20% = capital-intensive (Utilities/Industry)",
+                "fields": ["Cash_Flow.capitalExpenditures", "Income_Statement.totalRevenue"],
+                "unit": "%", "components": comps, "result": num(r*100 if r else None, 2)}
+
+    # ── CapEx / Op. CF ────────────────────────────────────────────────────────
+    if "CapEx / Op. CF" in L:
+        is_ttm = "TTM" in L
+        cf_src = data["Financials"]["Cash_Flow"]
+        if is_ttm:
+            qs = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
+            cx_vals  = [fv(cf_src["quarterly"][q].get("capitalExpenditures")) for q in qs]
+            cfo_vals = [fv(cf_src["quarterly"][q].get("totalCashFromOperatingActivities")) for q in qs]
+            cx  = abs(sum(v for v in cx_vals  if v is not None)) if any(v is not None for v in cx_vals) else None
+            cfo = sum(v for v in cfo_vals if v is not None) if all(v is not None for v in cfo_vals) else None
+            cx_comps  = [(f"  Cash_Flow.capitalExpenditures  [{q}]", raw(fv(cf_src["quarterly"][q].get("capitalExpenditures")))) for q in qs]
+            cfo_comps = [(f"  Cash_Flow.totalCashFromOperatingActivities  [{q}]", raw(fv(cf_src["quarterly"][q].get("totalCashFromOperatingActivities")))) for q in qs]
+        else:
+            ys = sorted(cf_src.get("yearly",{}).keys(), reverse=True)
+            y0 = ys[0] if ys else None
+            cx_raw3 = fv(cf_src["yearly"].get(y0,{}).get("capitalExpenditures")) if y0 else None
+            cx  = abs(cx_raw3) if cx_raw3 is not None else None
+            cfo = fv(cf_src["yearly"].get(y0,{}).get("totalCashFromOperatingActivities")) if y0 else None
+            cx_comps  = [(f"Cash_Flow.capitalExpenditures  [{y0}]  (raw)", raw(cx_raw3)), ("|CapEx| (abs)", raw(cx))]
+            cfo_comps = [(f"Cash_Flow.totalCashFromOperatingActivities  [{y0}]", raw(cfo))]
+        r = (cx / cfo) if cx and cfo and cfo > 0 else None
+        comps = [("── |CapEx| ──",""), *cx_comps, ("── Operating Cash Flow ──",""), *cfo_comps,
+                 ("── Calculation ──",""), ("|CapEx| ÷ CFO × 100", f"{raw(cx)} ÷ {raw(cfo)}"),
+                 ("── Result ──",""), ("CapEx / Op. CF", num(r*100 if r else None,4) + " %")]
+        return {"formula": "|CapEx| ÷ Operating Cash Flow × 100\nShows how much of operating cash goes to investment\n< 25% = very efficient, > 75% = capital-constrained",
+                "fields": ["Cash_Flow.capitalExpenditures", "Cash_Flow.totalCashFromOperatingActivities"],
+                "unit": "%", "components": comps, "result": num(r*100 if r else None, 2)}
+
+    # ── SBC / Revenue ─────────────────────────────────────────────────────────
+    if "SBC / Revenue" in L:
+        is_q   = "Quarterly" in L
+        is_ttm = "TTM" in L
+        cf_src = data["Financials"]["Cash_Flow"]
+        is_src = data["Financials"]["Income_Statement"]
+        if is_q:
+            q0cf = qcf_s[0] if qcf_s else None
+            sbc  = fv(cf_src.get("quarterly",{}).get(q0cf,{}).get("stockBasedCompensation")) if q0cf else None
+            rev  = fv(is_src.get("quarterly",{}).get(qis_s[0],{}).get("totalRevenue")) if qis_s else None
+            r    = (sbc / rev) if sbc and rev and rev > 0 else None
+            return {"formula": "SBC ÷ Revenue × 100  (single quarter Q0)\nLower = less dilutive to shareholders",
+                    "fields": ["Cash_Flow.stockBasedCompensation", "Income_Statement.totalRevenue"],
+                    "unit": "%",
+                    "components": [
+                        (f"Cash_Flow.stockBasedCompensation  [{q0cf}]", raw(sbc)),
+                        (f"Income_Statement.totalRevenue  [{qis_s[0] if qis_s else '—'}]", raw(rev)),
+                        ("── Calculation ──",""), ("SBC ÷ Revenue × 100", f"{raw(sbc)} ÷ {raw(rev)}"),
+                        ("── Result ──",""), ("SBC / Revenue (Q0)", num(r*100 if r else None,4) + " %"),
+                    ], "result": num(r*100 if r else None, 2)}
+        if is_ttm:
+            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
+            qs_is = sorted(is_src.get("quarterly",{}).keys(), reverse=True)[:4]
+            sbc_vals = [fv(cf_src["quarterly"][q].get("stockBasedCompensation")) for q in qs_cf]
+            rev_vals = [fv(is_src["quarterly"][q].get("totalRevenue")) for q in qs_is]
+            sbc = sum(v for v in sbc_vals if v is not None) if all(v is not None for v in sbc_vals) else None
+            rev = sum(v for v in rev_vals if v is not None) if all(v is not None for v in rev_vals) else None
+            comps = [(f"  Cash_Flow.stockBasedCompensation  [{q}]", raw(fv(cf_src["quarterly"][q].get("stockBasedCompensation")))) for q in qs_cf]
+            comps += [("  → SBC TTM", raw(sbc))]
+            comps += [(f"  Income_Statement.totalRevenue  [{q}]", raw(fv(is_src["quarterly"][q].get("totalRevenue")))) for q in qs_is]
+            comps += [("  → Revenue TTM", raw(rev))]
+        else:
+            ys = sorted(cf_src.get("yearly",{}).keys(), reverse=True)
+            y0 = ys[0] if ys else None
+            sbc = fv(cf_src["yearly"].get(y0,{}).get("stockBasedCompensation")) if y0 else None
+            rev = fv(is_src["yearly"].get(y0,{}).get("totalRevenue")) if y0 else None
+            comps = [(f"Cash_Flow.stockBasedCompensation  [{y0}]", raw(sbc)),
+                     (f"Income_Statement.totalRevenue  [{y0}]", raw(rev))]
+        r = (sbc / rev) if sbc and rev and rev > 0 else None
+        comps += [("── Calculation ──",""), ("SBC ÷ Revenue × 100", f"{raw(sbc)} ÷ {raw(rev)}"),
+                  ("── Result ──",""), ("SBC / Revenue", num(r*100 if r else None,4) + " %")]
+        return {"formula": "Stock-Based Compensation ÷ Revenue × 100\n< 2% = low dilution\n2–8% = moderate (typical tech)\n> 15% = high — SBC-adjusted FCF may differ significantly",
+                "fields": ["Cash_Flow.stockBasedCompensation", "Income_Statement.totalRevenue"],
+                "unit": "%", "components": comps, "result": num(r*100 if r else None, 2)}
+
+    # ── SBC-adj. FCF Margin ───────────────────────────────────────────────────
+    if "SBC-adj. FCF Margin" in L:
+        is_ttm = "TTM" in L
+        cf_src = data["Financials"]["Cash_Flow"]
+        is_src = data["Financials"]["Income_Statement"]
+        if is_ttm:
+            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
+            qs_is = sorted(is_src.get("quarterly",{}).keys(), reverse=True)[:4]
+            fcf_q_vals = [fv(cf_src["quarterly"][q].get("freeCashFlow")) for q in qs_cf]
+            sbc_vals   = [fv(cf_src["quarterly"][q].get("stockBasedCompensation")) for q in qs_cf]
+            rev_vals   = [fv(is_src["quarterly"][q].get("totalRevenue")) for q in qs_is]
+            fcf_v = sum(v for v in fcf_q_vals if v is not None) if all(v is not None for v in fcf_q_vals) else fcf_ttm
+            sbc_v = sum(v for v in sbc_vals if v is not None) if all(v is not None for v in sbc_vals) else None
+            rev_v = sum(v for v in rev_vals if v is not None) if all(v is not None for v in rev_vals) else None
+            period = f"TTM ({qcf_s[0][:7]}…{qcf_s[3][:7]})" if len(qcf_s) >= 4 else "TTM"
+        else:
+            ys = sorted(cf_src.get("yearly",{}).keys(), reverse=True)
+            y0 = ys[0] if ys else None
+            fcf_v = fv(cf_src["yearly"].get(y0,{}).get("freeCashFlow")) if y0 else None
+            sbc_v = fv(cf_src["yearly"].get(y0,{}).get("stockBasedCompensation")) if y0 else None
+            rev_v = fv(is_src["yearly"].get(y0,{}).get("totalRevenue")) if y0 else None
+            period = y0 or isA_dt
+        adj_fcf = (fcf_v - sbc_v) if fcf_v is not None and sbc_v is not None else None
+        r = (adj_fcf / rev_v) if adj_fcf is not None and rev_v and rev_v > 0 else None
+        return {"formula": "(FCF − SBC) ÷ Revenue × 100\nSBC-adjusted FCF removes stock-based comp as a real cost\nMore conservative than standard FCF Margin",
+                "fields": ["Cash_Flow.freeCashFlow", "Cash_Flow.stockBasedCompensation", "Income_Statement.totalRevenue"],
+                "unit": "%",
+                "components": [
+                    (f"FCF  [{period}]",                    raw(fcf_v)),
+                    (f"SBC  [Cash_Flow.stockBasedCompensation {period}]", raw(sbc_v)),
+                    (f"SBC-adj. FCF = FCF − SBC = {raw(fcf_v)} − {raw(sbc_v)}", raw(adj_fcf)),
+                    (f"Revenue  [{period}]",                 raw(rev_v)),
+                    ("── Calculation ──",""),
+                    ("(FCF − SBC) ÷ Revenue × 100",         f"{raw(adj_fcf)} ÷ {raw(rev_v)}"),
+                    ("── Result ──",""),
+                    ("SBC-adj. FCF Margin",                  num(r*100 if r else None, 4) + " %"),
+                ], "result": num(r*100 if r else None, 2)}
+
+    # ── FCF Conversion ────────────────────────────────────────────────────────
+    if "FCF Conversion" in L:
+        is_ttm = "TTM" in L
+        cf_src = data["Financials"]["Cash_Flow"]
+        is_src = data["Financials"]["Income_Statement"]
+        if is_ttm:
+            qs_cf = sorted(cf_src.get("quarterly",{}).keys(), reverse=True)[:4]
+            qs_is = sorted(is_src.get("quarterly",{}).keys(), reverse=True)[:4]
+            fcf_vals = [fv(cf_src["quarterly"][q].get("freeCashFlow")) for q in qs_cf]
+            ni_vals  = [fv(is_src["quarterly"][q].get("netIncome")) for q in qs_is]
+            fcf_v = sum(v for v in fcf_vals if v is not None) if all(v is not None for v in fcf_vals) else fcf_ttm
+            ni_v  = sum(v for v in ni_vals if v is not None) if all(v is not None for v in ni_vals) else ni_ttm
+            period = "TTM"
+        else:
+            ys = sorted(cf_src.get("yearly",{}).keys(), reverse=True)
+            y0 = ys[0] if ys else None
+            fcf_v = fv(cf_src["yearly"].get(y0,{}).get("freeCashFlow")) if y0 else None
+            ni_v  = fv(is_src["yearly"].get(y0,{}).get("netIncome")) if y0 else None
+            period = y0 or isA_dt
+        r = (fcf_v / ni_v) if fcf_v is not None and ni_v and ni_v > 0 else None
+        return {"formula": "FCF ÷ Net Income\n> 1.0 = FCF exceeds reported earnings (high quality)\n< 0.5 = earnings may be inflated vs. cash reality\nNegative NI → N/A",
+                "fields": ["Cash_Flow.freeCashFlow", "Income_Statement.netIncome"],
+                "unit": "x",
+                "components": [
+                    (f"FCF  [{period}]",          raw(fcf_v)),
+                    (f"Net Income  [{period}]",    raw(ni_v)),
+                    ("── Calculation ──",""),
+                    ("FCF ÷ Net Income",           f"{raw(fcf_v)} ÷ {raw(ni_v)}"),
+                    ("── Result ──",""),
+                    ("FCF Conversion",             num(r, 4) + " x" if r else "—"),
+                ], "result": num(r, 2) if r else "—"}
+
+    # ── Goodwill / Total Assets ───────────────────────────────────────────────
+    if "Goodwill / Total Assets" in L:
+        is_q = "Quarterly" in L
+        bs   = bsQ if is_q else bsA
+        dt   = bsQ_dt if is_q else bsA_dt
+        gw   = fv(bs.get("goodWill")) or fv(bs.get("goodwill"))
+        ta   = fv(bs.get("totalAssets"))
+        r    = (gw / ta) if gw is not None and ta and ta > 0 else None
+        return {"formula": "Goodwill ÷ Total Assets × 100\nHigh values (>30%) indicate M&A-driven growth\nImpairment risk increases with higher ratios",
+                "fields": ["Balance_Sheet.goodWill", "Balance_Sheet.totalAssets"],
+                "unit": "%",
+                "components": [
+                    (f"Balance_Sheet.goodWill  [{dt}]",       raw(gw)),
+                    (f"Balance_Sheet.totalAssets  [{dt}]",    raw(ta)),
+                    ("── Calculation ──",""),
+                    ("Goodwill ÷ Total Assets × 100",         f"{raw(gw)} ÷ {raw(ta)}"),
+                    ("── Result ──",""),
+                    ("Goodwill / Total Assets",               num(r*100 if r else None, 4) + " %"),
+                ], "result": num(r*100 if r else None, 2)}
+
+    # ── Goodwill / Equity ─────────────────────────────────────────────────────
+    if "Goodwill / Equity" in L:
+        is_q = "Quarterly" in L
+        bs   = bsQ if is_q else bsA
+        dt   = bsQ_dt if is_q else bsA_dt
+        gw   = fv(bs.get("goodWill")) or fv(bs.get("goodwill"))
+        eq   = fv(bs.get("totalStockholderEquity"))
+        r    = (gw / eq) if gw is not None and eq and eq > 0 else None
+        return {"formula": "Goodwill ÷ Stockholder Equity × 100\n>100% means equity is mostly acquisition premiums\nTangible equity = Equity − Goodwill − Intangibles",
+                "fields": ["Balance_Sheet.goodWill", "Balance_Sheet.totalStockholderEquity"],
+                "unit": "%",
+                "components": [
+                    (f"Balance_Sheet.goodWill  [{dt}]",                    raw(gw)),
+                    (f"Balance_Sheet.totalStockholderEquity  [{dt}]",      raw(eq)),
+                    ("── Calculation ──",""),
+                    ("Goodwill ÷ Equity × 100",                            f"{raw(gw)} ÷ {raw(eq)}"),
+                    ("── Result ──",""),
+                    ("Goodwill / Equity",                                   num(r*100 if r else None, 4) + " %"),
+                ], "result": num(r*100 if r else None, 2)}
+
+    # ── Goodwill Growth ───────────────────────────────────────────────────────
+    if "Goodwill Growth" in L:
+        bs0  = bsA; bs1 = a_bs.get(years_bs[1], {}) if len(years_bs) > 1 else {}
+        gw0  = fv(bs0.get("goodWill")) or fv(bs0.get("goodwill"))
+        gw1  = fv(bs1.get("goodWill")) or fv(bs1.get("goodwill"))
+        r    = ((gw0 / gw1 - 1) * 100) if gw0 and gw1 and gw1 > 0 else None
+        return {"formula": "(Goodwill[Y0] ÷ Goodwill[Y-1] − 1) × 100\nRising goodwill → active M&A; signals potential future impairment risk",
+                "fields": ["Balance_Sheet.goodWill"],
+                "unit": "%",
+                "components": [
+                    (f"Balance_Sheet.goodWill  [{bsA_dt}]  (Y0)",          raw(gw0)),
+                    (f"Balance_Sheet.goodWill  [{years_bs[1] if len(years_bs)>1 else '—'}]  (Y-1)", raw(gw1)),
+                    ("── Calculation ──",""),
+                    (f"({raw(gw0)} ÷ {raw(gw1)}) − 1 × 100",             ""),
+                    ("── Result ──",""),
+                    ("Goodwill Growth (YoY)",                               num(r, 4) + " %" if r else "—"),
+                ], "result": num(r, 2) if r else "—"}
+
+    # ── Share Count Change ────────────────────────────────────────────────────
+    if "Share Count Change" in L:
+        sh0 = fv(bsA.get("commonStockSharesOutstanding"))
+        bs1 = a_bs.get(years_bs[1], {}) if len(years_bs) > 1 else {}
+        sh1 = fv(bs1.get("commonStockSharesOutstanding"))
+        r   = ((sh0 / sh1 - 1) * 100) if sh0 and sh1 and sh1 > 0 else None
+        direction = "dilutive (shares increased)" if r and r > 0 else ("accretive — buybacks" if r and r < 0 else "—")
+        return {"formula": "(Shares[Y0] ÷ Shares[Y-1] − 1) × 100\nNegative = net buybacks (accretive)\nPositive = net dilution (SBC or new issuance)",
+                "fields": ["Balance_Sheet.commonStockSharesOutstanding"],
+                "unit": "%",
+                "components": [
+                    (f"Shares Outstanding  [{bsA_dt}]  (Y0)",              raw(sh0)),
+                    (f"Shares Outstanding  [{years_bs[1] if len(years_bs)>1 else '—'}]  (Y-1)", raw(sh1)),
+                    ("── Calculation ──",""),
+                    (f"({raw(sh0)} ÷ {raw(sh1)}) − 1 × 100",             ""),
+                    ("── Result ──",""),
+                    ("Share Count Change (YoY)",                            num(r, 4) + " %" if r else "—"),
+                    ("Direction",                                           direction),
+                ], "result": num(r, 2) if r else "—"}
+
+    # ── P/Tangible Book ───────────────────────────────────────────────────────
+    if "P/Tangible Book" in L:
+        is_q = "Cur" in L
+        bs   = bsQ if is_q else bsA
+        dt   = bsQ_dt if is_q else bsA_dt
+        eq   = fv(bs.get("totalStockholderEquity"))
+        gw   = fv(bs.get("goodWill")) or fv(bs.get("goodwill")) or 0
+        inta = fv(bs.get("intangibleAssets")) or 0
+        tbv  = (eq - gw - inta) if eq is not None else None
+        r    = (mcap / tbv) if mcap and tbv and tbv > 0 else None
+        return {"formula": "MCap ÷ Tangible Book Value\nTangible BV = Equity − Goodwill − Intangible Assets\nMore conservative than P/Book — excludes M&A premiums",
+                "fields": ["Highlights.MarketCapitalization",
+                           "Balance_Sheet.totalStockholderEquity",
+                           "Balance_Sheet.goodWill",
+                           "Balance_Sheet.intangibleAssets",
+                           "ℹ Market Cap / Price sourced from Finqube DB"],
+                "unit": "x",
+                "components": [
+                    ("Market Cap  [Highlights.MarketCapitalization]",       raw(mcap)),
+                    (f"Equity  [Balance_Sheet.totalStockholderEquity {dt}]", raw(eq)),
+                    (f"Goodwill  [Balance_Sheet.goodWill {dt}]",            raw(gw) if gw else "0 (not reported)"),
+                    (f"Intangibles  [Balance_Sheet.intangibleAssets {dt}]", raw(inta) if inta else "0 (not reported)"),
+                    (f"Tangible BV = {raw(eq)} − {raw(gw)} − {raw(inta)}", raw(tbv)),
+                    ("── Calculation ──",""),
+                    ("MCap ÷ Tangible BV",                                  f"{raw(mcap)} ÷ {raw(tbv)}"),
+                    ("── Result ──",""),
+                    ("P/Tangible Book",                                      num(r, 4) + " x" if r else "—  (TBV ≤ 0)"),
+                ], "result": num(r, 2) if r else "—"}
 
     # ═══════════════════════════════════════════════════════════════════
     # GROWTH
@@ -3785,6 +4097,78 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         row("Piotroski F-Score (Year)", pf_a,   h(yr_pf,3), h(yr_pf,5), h(yr_pf,10), PF_T, decimals=0),
     ]
 
+    # ── Goodwill & Share Count additions ─────────────────────────────
+    # Goodwill
+    _gw_q0  = fv(bsQ.get("goodWill")) or fv(bsQ.get("goodwill"))
+    _gw_a0  = fv(bsA.get("goodWill")) or fv(bsA.get("goodwill"))
+    _gw_a1  = fv(a_bs.get(years_bs[1], {}).get("goodWill")) or fv(a_bs.get(years_bs[1], {}).get("goodwill")) if len(years_bs) > 1 else None
+    _int_q0 = fv(bsQ.get("intangibleAssets"))
+    _int_a0 = fv(bsA.get("intangibleAssets"))
+
+    gw_ta_q  = (_gw_q0 / ta_q)  if _gw_q0 is not None and ta_q  and ta_q  > 0 else None
+    gw_ta_a  = (_gw_a0 / ta_a)  if _gw_a0 is not None and ta_a  and ta_a  > 0 else None
+    gw_eq_q  = (_gw_q0 / eq_q)  if _gw_q0 is not None and eq_q  and eq_q  > 0 else None
+    gw_eq_a  = (_gw_a0 / eq_a)  if _gw_a0 is not None and eq_a  and eq_a  > 0 else None
+    gw_gr_a  = ((_gw_a0 / _gw_a1 - 1) * 100) if _gw_a0 and _gw_a1 and _gw_a1 > 0 else None
+
+    # Share Count Change YoY
+    _sh_a0 = fv(bsA.get("commonStockSharesOutstanding"))
+    _sh_a1 = fv(a_bs.get(years_bs[1], {}).get("commonStockSharesOutstanding")) if len(years_bs) > 1 else None
+    sh_chg = ((_sh_a0 / _sh_a1 - 1) * 100) if _sh_a0 and _sh_a1 and _sh_a1 > 0 else None
+
+    def yr_gw_ta(i):
+        bs = a_bs.get(years_bs[i], {}) if i < len(years_bs) else {}
+        gw = fv(bs.get("goodWill")) or fv(bs.get("goodwill"))
+        ta = fv(bs.get("totalAssets"))
+        return (gw / ta) if gw is not None and ta and ta > 0 else None
+    def yr_gw_eq(i):
+        bs = a_bs.get(years_bs[i], {}) if i < len(years_bs) else {}
+        gw = fv(bs.get("goodWill")) or fv(bs.get("goodwill"))
+        eq = fv(bs.get("totalStockholderEquity"))
+        return (gw / eq) if gw is not None and eq and eq > 0 else None
+    def yr_gw_gr(i):
+        if i + 1 >= len(years_bs): return None
+        bs0 = a_bs.get(years_bs[i], {}); bs1 = a_bs.get(years_bs[i+1], {})
+        g0 = fv(bs0.get("goodWill")) or fv(bs0.get("goodwill"))
+        g1 = fv(bs1.get("goodWill")) or fv(bs1.get("goodwill"))
+        return (g0 / g1 - 1) * 100 if g0 and g1 and g1 > 0 else None
+    def yr_sh_chg(i):
+        if i + 1 >= len(years_bs): return None
+        s0 = fv(a_bs.get(years_bs[i], {}).get("commonStockSharesOutstanding"))
+        s1 = fv(a_bs.get(years_bs[i+1], {}).get("commonStockSharesOutstanding"))
+        return (s0 / s1 - 1) * 100 if s0 and s1 and s1 > 0 else None
+
+    GW_TA_T  = [(0,"ap"),(10,"a"),(20,"am"),(30,"bp"),(40,"b"),(55,"bm"),(70,"cp")]  # lower=better
+    GW_EQ_T  = [(0,"ap"),(25,"a"),(50,"am"),(75,"bp"),(100,"b"),(150,"bm"),(200,"cp")]  # lower=better
+    GW_GR_T  = [(0,"ap"),(5,"a"),(10,"am"),(20,"bp"),(30,"b"),(50,"bm")]  # lower=better
+    SH_CHG_T = [(-10,"ap"),(-5,"a"),(-2,"am"),(0,"bp"),(2,"b"),(5,"bm"),(10,"cp")]  # lower=better (dilution)
+
+    def row_h_inv(label, cur, avg3, avg5, avg10, T, pct=True, decimals=2):
+        """Lower-is-better health row."""
+        cur_v = cur * 100 if cur is not None and pct else cur
+        a3 = avg3 * 100 if avg3 is not None and pct else avg3
+        a5 = avg5 * 100 if avg5 is not None and pct else avg5
+        a10= avg10* 100 if avg10 is not None and pct else avg10
+        css, lbl = get_grade(cur_v, T) if cur_v is not None else ("grade-na","—")
+        fmt_f = lambda v: (f"{v:.{decimals}f} %" if pct else f"{v:.{decimals}f}") if v is not None else "—"
+        return {
+            "label": label, "fmt": fmt_f(cur_v),
+            "css": css, "lbl": lbl,
+            "avg3": fmt_f(a3), "avg5": fmt_f(a5), "avg10": fmt_f(a10),
+            "avg3_raw": a3, "avg5_raw": a5, "avg10_raw": a10,
+            "T": T, "higher": False, "pct": pct,
+            "group": label.split("/")[0].split(" ")[0],
+        }
+
+    rows += [
+        row_h_inv("Goodwill / Total Assets (Quarterly)", gw_ta_q, h(yr_gw_ta,3), h(yr_gw_ta,5), h(yr_gw_ta,10), GW_TA_T),
+        row_h_inv("Goodwill / Total Assets (Year)",      gw_ta_a, h(yr_gw_ta,3), h(yr_gw_ta,5), h(yr_gw_ta,10), GW_TA_T),
+        row_h_inv("Goodwill / Equity (Quarterly)",       gw_eq_q, h(yr_gw_eq,3), h(yr_gw_eq,5), h(yr_gw_eq,10), GW_EQ_T),
+        row_h_inv("Goodwill / Equity (Year)",            gw_eq_a, h(yr_gw_eq,3), h(yr_gw_eq,5), h(yr_gw_eq,10), GW_EQ_T),
+        row_h_inv("Goodwill Growth (Year)",              gw_gr_a, h(yr_gw_gr,3), h(yr_gw_gr,5), h(yr_gw_gr,10), GW_GR_T),
+        row_h_inv("Share Count Change (Year)",           sh_chg,  h(yr_sh_chg,3),h(yr_sh_chg,5),h(yr_sh_chg,10),SH_CHG_T),
+    ]
+
     # ── Overall Score ─────────────────────────────────────────────────
     grade_score = {"ap":100,"a":92,"am":84,"bp":76,"b":68,"bm":60,"cp":52,"c":44,"cm":36,"d":28,"na":0}
     scores = [grade_score.get(r["css"].replace("grade-",""), 0) for r in rows if r["css"] != "grade-na"]
@@ -4528,6 +4912,127 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
             "group": label.split(" ")[0],
         }
 
+    # ── CapEx metrics ────────────────────────────────────────────────────
+    capex_q0_raw = _q0cf("capitalExpenditures")
+    capex_q0     = abs(capex_q0_raw) if capex_q0_raw is not None else None
+    capex_ttm_raw= ttm_sum(q_cf, "capitalExpenditures")
+    capex_ttm_v  = abs(capex_ttm_raw) if capex_ttm_raw is not None else None
+    capex_yr_raw = fv(a_cf[years_is[0]].get("capitalExpenditures")) if years_is and years_is[0] in a_cf else None
+    capex_yr_v   = abs(capex_yr_raw) if capex_yr_raw is not None else None
+
+    capex_rev_q   = (capex_q0 / rev_q0)    if capex_q0 and rev_q0 and rev_q0 > 0 else None
+    capex_rev_ttm = (capex_ttm_v / rev_ttm) if capex_ttm_v and rev_ttm and rev_ttm > 0 else None
+    capex_rev_yr  = (capex_yr_v / rev_yr)   if capex_yr_v and rev_yr and rev_yr > 0 else None
+    capex_ocf_ttm = (capex_ttm_v / cfo_ttm) if capex_ttm_v and cfo_ttm and cfo_ttm > 0 else None
+    capex_ocf_yr  = (capex_yr_v / cfo_yr)   if capex_yr_v else None
+
+    # ── SBC metrics ───────────────────────────────────────────────────────────
+    sbc_q0    = _q0cf("stockBasedCompensation")
+    sbc_ttm_v = ttm_sum(q_cf, "stockBasedCompensation")
+    sbc_yr_v  = fv(a_cf[years_is[0]].get("stockBasedCompensation")) if years_is and years_is[0] in a_cf else None
+
+    sbc_rev_q   = (sbc_q0 / rev_q0)      if sbc_q0 and rev_q0 and rev_q0 > 0 else None
+    sbc_rev_ttm = (sbc_ttm_v / rev_ttm)  if sbc_ttm_v and rev_ttm and rev_ttm > 0 else None
+    sbc_rev_yr  = (sbc_yr_v / rev_yr)    if sbc_yr_v and rev_yr and rev_yr > 0 else None
+
+    # SBC-adjusted FCF = FCF - SBC
+    sbc_adj_fcf_ttm = (fcf_ttm - sbc_ttm_v) if fcf_ttm is not None and sbc_ttm_v is not None else None
+    sbc_adj_fcf_yr  = (fcf_yr  - sbc_yr_v)  if fcf_yr  is not None and sbc_yr_v  is not None else None
+    sbc_adj_fcfm_ttm = (sbc_adj_fcf_ttm / rev_ttm) if sbc_adj_fcf_ttm is not None and rev_ttm and rev_ttm > 0 else None
+    sbc_adj_fcfm_yr  = (sbc_adj_fcf_yr  / rev_yr)  if sbc_adj_fcf_yr  is not None and rev_yr  and rev_yr  > 0 else None
+
+    # ── FCF Conversion = FCF / Net Income ─────────────────────────────────────
+    fcf_conv_ttm = (fcf_ttm / ni_ttm) if fcf_ttm is not None and ni_ttm and ni_ttm > 0 else None
+    fcf_conv_yr  = (fcf_yr  / ni_yr)  if fcf_yr  is not None and ni_yr  and ni_yr  > 0 else None
+
+    # ── Historical avgs for new metrics ──────────────────────────────────────
+    def capex_rev_hist(n):
+        ys = sorted(a_is.keys(), reverse=True)
+        vals = []
+        for y in ys[:n]:
+            rev = fv(a_is[y].get("totalRevenue"))
+            cx  = fv(a_cf.get(y, {}).get("capitalExpenditures"))
+            if rev and cx and rev > 0: vals.append(abs(cx) / rev)
+        return sum(vals)/len(vals) if vals else None
+
+    def capex_ocf_hist(n):
+        ys = sorted(a_is.keys(), reverse=True)
+        vals = []
+        for y in ys[:n]:
+            cfo = fv(a_cf.get(y, {}).get("totalCashFromOperatingActivities"))
+            cx  = fv(a_cf.get(y, {}).get("capitalExpenditures"))
+            if cfo and cx and cfo > 0: vals.append(abs(cx) / cfo)
+        return sum(vals)/len(vals) if vals else None
+
+    def sbc_rev_hist(n):
+        ys = sorted(a_is.keys(), reverse=True)
+        vals = []
+        for y in ys[:n]:
+            rev = fv(a_is[y].get("totalRevenue"))
+            sbc = fv(a_cf.get(y, {}).get("stockBasedCompensation"))
+            if rev and sbc and rev > 0: vals.append(sbc / rev)
+        return sum(vals)/len(vals) if vals else None
+
+    def sbc_adj_fcfm_hist(n):
+        ys = sorted(a_is.keys(), reverse=True)
+        vals = []
+        for y in ys[:n]:
+            rev = fv(a_is[y].get("totalRevenue"))
+            sbc = fv(a_cf.get(y, {}).get("stockBasedCompensation")) or 0
+            fcf_y = fv(a_cf.get(y, {}).get("freeCashFlow"))
+            if not fcf_y:
+                cfo  = fv(a_cf.get(y, {}).get("totalCashFromOperatingActivities"))
+                capex= fv(a_cf.get(y, {}).get("capitalExpenditures"))
+                fcf_y = cfo - abs(capex) if cfo and capex else None
+            if rev and fcf_y is not None and rev > 0:
+                vals.append((fcf_y - sbc) / rev)
+        return sum(vals)/len(vals) if vals else None
+
+    def fcf_conv_hist(n):
+        ys = sorted(a_is.keys(), reverse=True)
+        vals = []
+        for y in ys[:n]:
+            ni  = fv(a_is[y].get("netIncome"))
+            fcf_y = fv(a_cf.get(y, {}).get("freeCashFlow"))
+            if not fcf_y:
+                cfo  = fv(a_cf.get(y, {}).get("totalCashFromOperatingActivities"))
+                capex= fv(a_cf.get(y, {}).get("capitalExpenditures"))
+                fcf_y = cfo - abs(capex) if cfo and capex else None
+            if ni and fcf_y is not None and ni > 0:
+                vals.append(fcf_y / ni)
+        return sum(vals)/len(vals) if vals else None
+
+    capex_rev_3y = capex_rev_hist(3); capex_rev_5y = capex_rev_hist(5); capex_rev_10y = capex_rev_hist(10)
+    capex_ocf_3y = capex_ocf_hist(3); capex_ocf_5y = capex_ocf_hist(5); capex_ocf_10y = capex_ocf_hist(10)
+    sbc_rev_3y   = sbc_rev_hist(3);   sbc_rev_5y   = sbc_rev_hist(5);   sbc_rev_10y   = sbc_rev_hist(10)
+    sbc_adj_3y   = sbc_adj_fcfm_hist(3); sbc_adj_5y = sbc_adj_fcfm_hist(5); sbc_adj_10y = sbc_adj_fcfm_hist(10)
+    fcf_conv_3y  = fcf_conv_hist(3);  fcf_conv_5y  = fcf_conv_hist(5);  fcf_conv_10y  = fcf_conv_hist(10)
+
+    # ── Grade thresholds for new metrics ─────────────────────────────────────
+    CAPEX_REV_T  = [(0,"ap"),(3,"a"),(5,"am"),(8,"bp"),(12,"b"),(18,"bm"),(25,"cp")]    # lower=better
+    CAPEX_OCF_T  = [(0,"ap"),(20,"a"),(30,"am"),(40,"bp"),(50,"b"),(65,"bm"),(80,"cp")] # lower=better
+    SBC_REV_T    = [(0,"ap"),(2,"a"),(4,"am"),(6,"bp"),(10,"b"),(15,"bm"),(20,"cp")]    # lower=better
+    SBCM_T       = [(-5,"ap"),(0,"a"),(3,"am"),(5,"bp"),(8,"b"),(10,"bm"),(0,"cp")]     # higher=better
+    FCF_CONV_T   = [(150,"ap"),(120,"a"),(100,"am"),(80,"bp"),(60,"b"),(40,"bm"),(20,"cp")] # higher=better
+
+    def row_inv(label, cur, avg3, avg5, avg10, T):
+        """For lower-is-better metrics as % (CapEx/Rev, SBC/Rev)."""
+        cur_pct = cur * 100 if cur is not None else None
+        a3  = avg3  * 100 if avg3  is not None else None
+        a5  = avg5  * 100 if avg5  is not None else None
+        a10 = avg10 * 100 if avg10 is not None else None
+        # lower is better → negate for grading
+        css, lbl = get_grade(-cur_pct, [(-t, g) for t, g in T]) if cur_pct is not None else ("grade-na","—")
+        f = lambda v: f"{v:.2f} %" if v is not None else "—"
+        return {
+            "label": label, "cur": cur_pct, "fmt": f(cur_pct),
+            "css": css, "lbl": lbl,
+            "avg3": f(a3), "avg5": f(a5), "avg10": f(a10),
+            "avg3_raw": a3, "avg5_raw": a5, "avg10_raw": a10,
+            "T": T, "higher": False, "pct": True,
+            "group": label.split(" ")[0],
+        }
+
     rows = [
         row("Return on Assets (TTM)",           roa_ttm,     roa_3y,     roa_5y,     roa_10y,     ROA_T),
         row("Return on Assets (Year)",           roa_yr,      roa_3y,     roa_5y,     roa_10y,     ROA_T),
@@ -4559,6 +5064,21 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
         row("FCF Margin (Year)",                 fcfm_yr,     fcfm_3y,    fcfm_5y,    fcfm_10y,    FCFM_T),
         row("Asset Turnover (TTM)",              at_ttm,      at_3y,      at_5y,      at_10y,      AT_T, pct=False),
         row("Asset Turnover (Year)",             at_yr,       at_3y,      at_5y,      at_10y,      AT_T, pct=False),
+        # ── CapEx Metrics ─────────────────────────────────────────────────
+        row_inv("CapEx / Revenue (Quarterly)",   capex_rev_q,   capex_rev_3y, capex_rev_5y, capex_rev_10y, CAPEX_REV_T),
+        row_inv("CapEx / Revenue (TTM)",         capex_rev_ttm, capex_rev_3y, capex_rev_5y, capex_rev_10y, CAPEX_REV_T),
+        row_inv("CapEx / Revenue (Year)",        capex_rev_yr,  capex_rev_3y, capex_rev_5y, capex_rev_10y, CAPEX_REV_T),
+        row_inv("CapEx / Op. CF (TTM)",          capex_ocf_ttm, capex_ocf_3y, capex_ocf_5y, capex_ocf_10y, CAPEX_OCF_T),
+        row_inv("CapEx / Op. CF (Year)",         capex_ocf_yr,  capex_ocf_3y, capex_ocf_5y, capex_ocf_10y, CAPEX_OCF_T),
+        # ── SBC Metrics ───────────────────────────────────────────────────
+        row_inv("SBC / Revenue (Quarterly)",     sbc_rev_q,   sbc_rev_3y, sbc_rev_5y, sbc_rev_10y, SBC_REV_T),
+        row_inv("SBC / Revenue (TTM)",           sbc_rev_ttm, sbc_rev_3y, sbc_rev_5y, sbc_rev_10y, SBC_REV_T),
+        row_inv("SBC / Revenue (Year)",          sbc_rev_yr,  sbc_rev_3y, sbc_rev_5y, sbc_rev_10y, SBC_REV_T),
+        row("SBC-adj. FCF Margin (TTM)",         sbc_adj_fcfm_ttm, sbc_adj_3y, sbc_adj_5y, sbc_adj_10y, FCFM_T),
+        row("SBC-adj. FCF Margin (Year)",        sbc_adj_fcfm_yr,  sbc_adj_3y, sbc_adj_5y, sbc_adj_10y, FCFM_T),
+        # ── FCF Conversion ────────────────────────────────────────────────
+        row("FCF Conversion (TTM)",              fcf_conv_ttm, fcf_conv_3y, fcf_conv_5y, fcf_conv_10y, FCF_CONV_T, pct=False),
+        row("FCF Conversion (Year)",             fcf_conv_yr,  fcf_conv_3y, fcf_conv_5y, fcf_conv_10y, FCF_CONV_T, pct=False),
     ]
 
     # ── Overall Score ─────────────────────────────────────────────────
@@ -6102,43 +6622,63 @@ with tab2b:
         col_tbl, col_drill = st.columns([3, 2])
 
         with col_tbl:
-            # ── st.dataframe with tickbox row selection ───────────────
+            # ── st.dataframe with row selection (checkbox) ────────────
             df_all = pd.DataFrame([{
                 "Metric":  r["label"],
                 "Cat.":    r.get("tab", ""),
                 "Value":   r["fmt"],
                 "Grade":   r["lbl"],
-                "3Y Avg":  r.get("avg3", "—"),
-                "5Y Avg":  r.get("avg5", "—"),
-                "10Y Avg": r.get("avg10", "—"),
+                "3Y":      r.get("avg3", "—"),
+                "5Y":      r.get("avg5", "—"),
+                "10Y":     r.get("avg10", "—"),
             } for r in rows_expanded])
 
-            if not df_all.empty:
-                sel_event = st.dataframe(
-                    df_all,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=600,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key="all_df_selection",
-                    column_config={
-                        "Metric":  st.column_config.TextColumn("Metric",  width="large"),
-                        "Cat.":    st.column_config.TextColumn("Cat.",    width="small"),
-                        "Value":   st.column_config.TextColumn("Value",   width="small"),
-                        "Grade":   st.column_config.TextColumn("Grade",   width="small"),
-                        "3Y Avg":  st.column_config.TextColumn("3Y Avg",  width="small"),
-                        "5Y Avg":  st.column_config.TextColumn("5Y Avg",  width="small"),
-                        "10Y Avg": st.column_config.TextColumn("10Y Avg", width="small"),
-                    },
+            if rows_expanded:
+                tbl_all = '''<table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <thead><tr style="color:#64748b;border-bottom:1px solid #2d3748;">
+                <th style="text-align:left;padding:6px 4px;font-weight:500;">Metric</th>
+                <th style="text-align:left;padding:6px 4px;font-weight:500;">Cat.</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">Value</th>
+                <th style="text-align:center;padding:6px 4px;font-weight:500;">Grade</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">3Y Avg</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">5Y Avg</th>
+                <th style="text-align:right;padding:6px 4px;font-weight:500;">10Y Avg</th>
+              </tr></thead><tbody>'''
+                for r in rows_expanded:
+                    is_avg  = r.get("is_avg_row", False)
+                    is_cagr = "CAGR" in r["label"]
+                    is_sel  = r["label"] == st.session_state.get("all_selected_metric", "")
+                    tab_lbl = r.get("tab", "")
+                    sel_bg  = "background:#1a2744;" if is_sel else ""
+                    if is_avg or is_cagr:
+                        tbl_all += (
+                            f'<tr style="border-bottom:1px solid #161d2e;background:#0d1320;">'
+                            f'<td style="padding:3px 4px 3px 18px;color:#64748b;font-size:11px;font-style:italic;">{r["label"]}</td>'
+                            f'<td style="padding:3px 4px;color:#374151;font-size:11px;">{tab_lbl}</td>'
+                            f'<td style="padding:3px 4px;text-align:right;color:#94a3b8;font-size:11px;">{r["fmt"]}</td>'
+                            f'<td style="padding:3px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>'
+                            f'<td colspan="3"></td>'
+                            f'</tr>'
+                        )
+                    else:
+                        tbl_all += (
+                            f'<tr style="border-bottom:1px solid #1e2535;{sel_bg}cursor:pointer;">'
+                            f'<td style="padding:6px 4px;color:#cbd5e1;">{r["label"]}</td>'
+                            f'<td style="padding:6px 4px;color:#64748b;font-size:12px;">{tab_lbl}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#e2e8f0;font-weight:600;">{r["fmt"]}</td>'
+                            f'<td style="padding:6px 4px;text-align:center;">{grade_badge(r["css"], r["lbl"])}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg3","—")}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg5","—")}</td>'
+                            f'<td style="padding:6px 4px;text-align:right;color:#94a3b8;">{r.get("avg10","—")}</td>'
+                            f'</tr>'
+                        )
+                tbl_all += "</tbody></table>"
+                st.markdown(
+                    f'<div style="max-height:600px;overflow-y:auto;border:1px solid #2d3748;border-radius:8px;padding:4px;">'
+                    f'{tbl_all}</div>',
+                    unsafe_allow_html=True
                 )
-                # Update selection from clicked row
-                sel_rows = sel_event.selection.rows if sel_event and sel_event.selection else []
-                if sel_rows:
-                    clicked = rows_expanded[sel_rows[0]]["label"]
-                    if clicked != st.session_state.get("all_selected_metric"):
-                        st.session_state["all_selected_metric"] = clicked
-                        st.rerun()
+                st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
             st.download_button(
                 label="⬇ Excel Download",
