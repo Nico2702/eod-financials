@@ -955,9 +955,9 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     ]
 
     # ── P/Tangible Book ──────────────────────────────────────────────
-    _gw_q_v  = fv(data["Financials"]["Balance_Sheet"].get("quarterly",{}).get(qbs_s[0],{}).get("goodWill")) or 0 if qbs_s else 0
-    _int_q_v = fv(data["Financials"]["Balance_Sheet"].get("quarterly",{}).get(qbs_s[0],{}).get("intangibleAssets")) or 0 if qbs_s else 0
-    _eq_q_v  = fv(data["Financials"]["Balance_Sheet"].get("quarterly",{}).get(qbs_s[0],{}).get("totalStockholderEquity")) if qbs_s else None
+    _gw_q_v  = fv(data["Financials"]["Balance_Sheet"].get("quarterly",{}).get(_qbs_vs[0],{}).get("goodWill")) or 0 if _qbs_vs else 0
+    _int_q_v = fv(data["Financials"]["Balance_Sheet"].get("quarterly",{}).get(_qbs_vs[0],{}).get("intangibleAssets")) or 0 if _qbs_vs else 0
+    _eq_q_v  = fv(data["Financials"]["Balance_Sheet"].get("quarterly",{}).get(_qbs_vs[0],{}).get("totalStockholderEquity")) if _qbs_vs else None
     tbv_q    = (_eq_q_v - _gw_q_v - _int_q_v) if _eq_q_v is not None else None
     ptbv_cur = (mcap / tbv_q) if mcap and tbv_q and tbv_q > 0 else None
 
