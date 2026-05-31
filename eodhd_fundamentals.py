@@ -1797,7 +1797,6 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         is_ttm = "TTM" in L
         ni     = ni_ttm if is_ttm else ni_a
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
-        r      = safe(ni, ta)
         ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         comps  = [
@@ -1805,24 +1804,22 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             *ni_comps,
         ]
         if is_ttm:
-            # Q0 + Q4 avg
-            ta_q4 = fv(q_bs[qbs_s[4]].get("totalAssets")) if len(qbs_s) > 4 else None
+            ta_q4      = fv(q_bs[qbs_s[4]].get("totalAssets")) if len(qbs_s) > 4 else None
             ta_avg_ttm = (ta_q + ta_q4) / 2 if ta_q and ta_q4 else ta_q
             ta = ta_avg_ttm
-            r  = safe(ni, ta)
             comps += [
-                (f"Total Assets Q0  [Balance_Sheet.totalAssets {bsQ_dt}]",         raw(ta_q)),
+                (f"Total Assets Q0  [Balance_Sheet.totalAssets {bsQ_dt}]",                              raw(ta_q)),
                 (f"Total Assets Q4  [Balance_Sheet.totalAssets {qbs_s[4][:7] if len(qbs_s)>4 else '—'}]", raw(ta_q4)),
-                (f"Avg Assets = ({raw(ta_q)} + {raw(ta_q4)}) ÷ 2  (used)",        raw(ta_avg_ttm)),
+                (f"Avg Assets = ({raw(ta_q)} + {raw(ta_q4)}) ÷ 2  (used)",                              raw(ta_avg_ttm)),
             ]
         else:
             ta = ta_avg
-            r  = safe(ni, ta)
             comps += [
-                (f"Total Assets Y0  [Balance_Sheet.totalAssets {bsA_dt}]",         raw(ta_a)),
-                (f"Total Assets Y-1  [Balance_Sheet.totalAssets {bsA1_dt}]",       raw(ta_a1) if ta_a1 else "— (not available)"),
-                (f"Avg Assets = ({raw(ta_a)} + {raw(ta_a1 or 0)}) ÷ 2  (used)",   raw(ta_avg)),
+                (f"Total Assets Y0  [Balance_Sheet.totalAssets {bsA_dt}]",        raw(ta_a)),
+                (f"Total Assets Y-1  [Balance_Sheet.totalAssets {bsA1_dt}]",      raw(ta_a1) if ta_a1 else "— (not available)"),
+                (f"Avg Assets = ({raw(ta_a)} + {raw(ta_a1 or 0)}) ÷ 2  (used)",  raw(ta_avg)),
             ]
+        r = safe(ni, ta)
         comps += [
             ("── Calculation ──",           ""),
             (f"NI ÷ Avg Assets × 100",      f"{raw(ni)} ÷ {raw(ta)}"),
