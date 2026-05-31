@@ -726,15 +726,22 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     pfcf_cur = (mcap / fcf_ttm) if mcap and fcf_ttm and fcf_ttm > 0 else None
     pfcf_yr  = (mcap / fcf_yr)  if mcap and fcf_yr  and fcf_yr  > 0 else None
 
-    ev_rev_cur = fv(val.get("EnterpriseValueRevenue"))
-    ev_rev_yr  = (ev / rev_yr)      if ev and rev_yr    and rev_yr    > 0 else None
-    # EV/EBIT (Cur): use EBIT TTM (rolling 4Q) — "Cur" implies current/TTM basis
-    ev_ebit_cur= (ev / ebit_ttm)    if ev and ebit_ttm  and ebit_ttm  > 0 else None
-    ev_ebit_yr = (ev / ebit_yr)     if ev and ebit_yr   and ebit_yr   > 0 else None
-    # EV/EBITDA (Cur): API field primary, fallback EBITDA TTM self-calc
+    # ── EBIT/EBITDA TTM for EV multiples ─────────────────────────
+    def _ttm_vs(stmt, key):
+        qs = sorted(stmt.keys(), reverse=True)
+        vals = [fv(stmt[q].get(key)) for q in qs[:4]]
+        return sum(vals) if len(vals)==4 and all(v is not None for v in vals) else None
+    _q_is_ev      = data["Financials"]["Income_Statement"].get("quarterly", {})
+    ebit_ttm_vs   = _ttm_vs(_q_is_ev, "ebit")
+    ebitda_ttm_vs = _ttm_vs(_q_is_ev, "ebitda")
+
+    ev_rev_cur    = fv(val.get("EnterpriseValueRevenue"))
+    ev_rev_yr     = (ev / rev_yr)         if ev and rev_yr        and rev_yr        > 0 else None
+    ev_ebit_cur   = (ev / ebit_ttm_vs)    if ev and ebit_ttm_vs   and ebit_ttm_vs   > 0 else None
+    ev_ebit_yr    = (ev / ebit_yr)         if ev and ebit_yr       and ebit_yr       > 0 else None
     ev_ebitda_cur = fv(val.get("EnterpriseValueEbitda")) or \
-                    ((ev / ebitda_ttm) if ev and ebitda_ttm and ebitda_ttm > 0 else None)
-    ev_ebitda_yr  = (ev / ebitda_yr)  if ev and ebitda_yr  and ebitda_yr  > 0 else None
+                    ((ev / ebitda_ttm_vs)  if ev and ebitda_ttm_vs and ebitda_ttm_vs > 0 else None)
+    ev_ebitda_yr  = (ev / ebitda_yr)       if ev and ebitda_yr     and ebitda_yr     > 0 else None
 
     earn_yield_cur = (1 / pe_cur * 100)      if pe_cur and pe_cur > 0 else None
     earn_yield_yr  = (ni_yr / mcap * 100)    if ni_yr and mcap and mcap > 0 else None
