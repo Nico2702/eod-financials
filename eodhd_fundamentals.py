@@ -1796,7 +1796,6 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     if "Return on Assets" in L:
         is_ttm = "TTM" in L
         ni     = ni_ttm if is_ttm else ni_a
-        ta     = ta_q   if is_ttm else ta_avg   # avg Y0/Y-1 for annual, latest Q for TTM
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         r      = safe(ni, ta)
         ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
@@ -1806,12 +1805,23 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             *ni_comps,
         ]
         if is_ttm:
-            comps.append((f"Total Assets  [Balance_Sheet.totalAssets {bsQ_dt}]  (latest Q, no avg)", raw(ta_q)))
-        else:
+            # Q0 + Q4 avg
+            ta_q4 = fv(q_bs[qbs_s[4]].get("totalAssets")) if len(qbs_s) > 4 else None
+            ta_avg_ttm = (ta_q + ta_q4) / 2 if ta_q and ta_q4 else ta_q
+            ta = ta_avg_ttm
+            r  = safe(ni, ta)
             comps += [
-                (f"Total Assets Y0  [Balance_Sheet.totalAssets {bsA_dt}]",       raw(ta_a)),
-                (f"Total Assets Y-1  [Balance_Sheet.totalAssets {bsA1_dt}]",     raw(ta_a1) if ta_a1 else "— (not available)"),
-                (f"Avg Assets = ({raw(ta_a)} + {raw(ta_a1 or 0)}) ÷ 2  (used)", raw(ta_avg)),
+                (f"Total Assets Q0  [Balance_Sheet.totalAssets {bsQ_dt}]",         raw(ta_q)),
+                (f"Total Assets Q4  [Balance_Sheet.totalAssets {qbs_s[4][:7] if len(qbs_s)>4 else '—'}]", raw(ta_q4)),
+                (f"Avg Assets = ({raw(ta_q)} + {raw(ta_q4)}) ÷ 2  (used)",        raw(ta_avg_ttm)),
+            ]
+        else:
+            ta = ta_avg
+            r  = safe(ni, ta)
+            comps += [
+                (f"Total Assets Y0  [Balance_Sheet.totalAssets {bsA_dt}]",         raw(ta_a)),
+                (f"Total Assets Y-1  [Balance_Sheet.totalAssets {bsA1_dt}]",       raw(ta_a1) if ta_a1 else "— (not available)"),
+                (f"Avg Assets = ({raw(ta_a)} + {raw(ta_a1 or 0)}) ÷ 2  (used)",   raw(ta_avg)),
             ]
         comps += [
             ("── Calculation ──",           ""),
@@ -1819,16 +1829,14 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             ("── Result ──",                ""),
             ("ROA",                          pct(r)),
         ]
-        return {"formula": "Net Income ÷ Total Assets × 100\n(Annual: avg of Y0 and Y-1 assets; TTM: latest quarter assets)",
+        return {"formula": "Net Income ÷ Avg Total Assets × 100\n(TTM: avg of Q0 and Q4 assets; Annual: avg of Y0 and Y-1)",
                 "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalAssets"],
                 "unit": "%", "components": comps, "result": pct(r)}
 
     if "Return on Equity" in L and "Cap" not in L and "Inv" not in L:
         is_ttm = "TTM" in L
         ni     = ni_ttm if is_ttm else ni_a
-        eq     = eq_q   if is_ttm else eq_avg
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
-        r      = safe(ni, eq)
         ni_comps = ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else \
                    [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]
         comps  = [
@@ -1836,20 +1844,29 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             *ni_comps,
         ]
         if is_ttm:
-            comps.append((f"Equity  [Balance_Sheet.totalStockholderEquity {bsQ_dt}]  (latest Q)", raw(eq_q)))
-        else:
+            eq_q4 = fv(q_bs[qbs_s[4]].get("totalStockholderEquity")) if len(qbs_s) > 4 else None
+            eq_avg_ttm = (eq_q + eq_q4) / 2 if eq_q and eq_q4 else eq_q
+            eq = eq_avg_ttm
             comps += [
-                (f"Equity Y0  [Balance_Sheet.totalStockholderEquity {bsA_dt}]",       raw(eq_a)),
-                (f"Equity Y-1  [Balance_Sheet.totalStockholderEquity {bsA1_dt}]",     raw(eq_a1) if eq_a1 else "— (not available)"),
-                (f"Avg Equity = ({raw(eq_a)} + {raw(eq_a1 or 0)}) ÷ 2  (used)",      raw(eq_avg)),
+                (f"Equity Q0  [Balance_Sheet.totalStockholderEquity {bsQ_dt}]",    raw(eq_q)),
+                (f"Equity Q4  [Balance_Sheet {qbs_s[4][:7] if len(qbs_s)>4 else '—'}]", raw(eq_q4)),
+                (f"Avg Equity = ({raw(eq_q)} + {raw(eq_q4)}) ÷ 2  (used)",        raw(eq_avg_ttm)),
             ]
+        else:
+            eq = eq_avg
+            comps += [
+                (f"Equity Y0  [Balance_Sheet.totalStockholderEquity {bsA_dt}]",    raw(eq_a)),
+                (f"Equity Y-1  [Balance_Sheet.totalStockholderEquity {bsA1_dt}]",  raw(eq_a1) if eq_a1 else "— (not available)"),
+                (f"Avg Equity = ({raw(eq_a)} + {raw(eq_a1 or 0)}) ÷ 2  (used)",   raw(eq_avg)),
+            ]
+        r = safe(ni, eq)
         comps += [
             ("── Calculation ──",       ""),
             ("NI ÷ Avg Equity × 100",   f"{raw(ni)} ÷ {raw(eq)}"),
             ("── Result ──",            ""),
             ("ROE",                      pct(r)),
         ]
-        return {"formula": "Net Income ÷ Stockholder Equity × 100\n(Annual: avg of Y0 and Y-1 equity; TTM: latest quarter equity)",
+        return {"formula": "Net Income ÷ Avg Stockholder Equity × 100\n(TTM: avg Q0+Q4; Annual: avg Y0+Y-1)",
                 "fields": ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity"],
                 "unit": "%", "components": comps, "result": pct(r)}
 
@@ -4314,13 +4331,19 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     eq_avg      = (equity_yr + eq_prev) / 2   if equity_yr and eq_prev else equity_yr
     assets_avg  = (assets_yr + assets_prev) / 2 if assets_yr and assets_prev else assets_yr
 
+    # TTM: use avg of Q0 and Q4 assets/equity (same quarter prior year) — methodically consistent
+    assets_ttm_q4 = fv(q_bs[qbs_sorted[4]].get("totalAssets"))       if len(qbs_sorted) > 4 else None
+    equity_ttm_q4 = fv(q_bs[qbs_sorted[4]].get("totalStockholderEquity")) if len(qbs_sorted) > 4 else None
+    assets_ttm_avg = (assets_ttm + assets_ttm_q4) / 2 if assets_ttm and assets_ttm_q4 else assets_ttm
+    equity_ttm_avg = (equity_ttm + equity_ttm_q4) / 2 if equity_ttm and equity_ttm_q4 else equity_ttm
+
     # ── Current ratios ────────────────────────────────────────────────
     def safe_div(a, b): return a / b if a is not None and b and b != 0 else None
     def pct(v): return v * 100 if v is not None else None
 
-    roa_ttm   = safe_div(ni_ttm,   assets_ttm)
+    roa_ttm   = safe_div(ni_ttm,   assets_ttm_avg)
     roa_yr    = safe_div(ni_yr,    assets_avg)
-    roe_ttm   = safe_div(ni_ttm,   equity_ttm)
+    roe_ttm   = safe_div(ni_ttm,   equity_ttm_avg)
     roe_yr    = safe_div(ni_yr,    eq_avg)
     # Return on Capital = NI / (Equity + Debt)
     roc_ttm   = safe_div(ni_ttm,   (equity_ttm or 0) + debt_ttm)
