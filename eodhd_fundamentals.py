@@ -1870,43 +1870,62 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     if "Return on Cap. Empl" in L or "Return on Capital Empl" in L:
         is_ttm = "TTM" in L
         ebit   = ebit_ttm if is_ttm else ebit_a
-        ta     = ta_q if is_ttm else ta_a
-        cl     = cl_q if is_ttm else cl_a
-        ce     = (ta - cl) if ta and cl else None
         dt_e   = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
-        dt_bs  = bsQ_dt if is_ttm else bsA_dt
-        r      = safe(ebit, ce)
+        if is_ttm:
+            _q4b   = q_bs[qbs_s[4]] if len(qbs_s) > 4 else {}
+            ta_q4  = fv(_q4b.get("totalAssets"))
+            cl_q4  = fv(_q4b.get("totalCurrentLiabilities"))
+            ta_avg = (ta_q + ta_q4) / 2 if ta_q and ta_q4 else ta_q
+            cl_avg = (cl_q + cl_q4) / 2 if cl_q and cl_q4 else cl_q
+            ta = ta_avg; cl = cl_avg
+            ta_lbl = f"Avg Assets Q0+Q4 = ({raw(ta_q)} + {raw(ta_q4)}) ÷ 2"
+            cl_lbl = f"Avg CL Q0+Q4 = ({raw(cl_q)} + {raw(cl_q4)}) ÷ 2"
+        else:
+            ta = ta_a; cl = cl_a
+            ta_lbl = f"Total Assets  [Balance_Sheet.totalAssets {bsA_dt}]"
+            cl_lbl = f"Current Liabilities  [Balance_Sheet.totalCurrentLiabilities {bsA_dt}]"
+        ce = (ta - cl) if ta and cl else None
+        r  = safe(ebit, ce)
         return {
-            "formula": "EBIT ÷ Capital Employed × 100\nCapital Employed = Total Assets − Current Liabilities",
+            "formula": "EBIT ÷ Avg Capital Employed × 100\nCapital Employed = Total Assets − Current Liabilities\n(TTM: avg Q0+Q4; Annual: latest year)",
             "fields":  ["Income_Statement.ebit", "Balance_Sheet.totalAssets", "Balance_Sheet.totalCurrentLiabilities"],
             "unit": "%",
             "components": [
-                (f"── EBIT {'TTM quarters' if is_ttm else dt_e} ──",                  ""),
+                (f"── EBIT {'TTM quarters' if is_ttm else dt_e} ──", ""),
                 *(ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm else
                   [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]),
-                (f"Total Assets  [Balance_Sheet.totalAssets {dt_bs}]",               raw(ta)),
-                (f"Current Liabilities  [Balance_Sheet.totalCurrentLiabilities {dt_bs}]", raw(cl)),
-                (f"Capital Employed = {raw(ta)} − {raw(cl)}",                        raw(ce)),
-                ("── Calculation ──",                                                  ""),
-                (f"EBIT ÷ Capital Employed × 100",                                    f"{raw(ebit)} ÷ {raw(ce)}"),
-                ("── Result ──",                                                       ""),
-                ("ROCE",                                                               pct(r)),
+                (ta_lbl,                                               raw(ta)),
+                (cl_lbl,                                               raw(cl)),
+                (f"Capital Employed = {raw(ta)} − {raw(cl)}",         raw(ce)),
+                ("── Calculation ──",                                  ""),
+                (f"EBIT ÷ Capital Employed × 100",                    f"{raw(ebit)} ÷ {raw(ce)}"),
+                ("── Result ──",                                        ""),
+                ("ROCE",                                                pct(r)),
             ],
             "result": pct(r)}
 
     if "Return on Inv" in L or "ROIC" in L:
         is_ttm = "TTM" in L
         ni     = ni_ttm if is_ttm else ni_a
-        eq     = eq_q if is_ttm else eq_a
-        ltd    = ltd_q if is_ttm else ltd_a
-        std    = std_q if is_ttm else std_a
-        debt   = ltd + std
-        ic     = ic_ttm if is_ttm else ic_a
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         dt_bs  = bsQ_dt if is_ttm else bsA_dt
-        r      = safe(ni, ic)
+        if is_ttm:
+            _q4b  = q_bs[qbs_s[4]] if len(qbs_s) > 4 else {}
+            eq_q4 = fv(_q4b.get("totalStockholderEquity"))
+            ltd_q4= fv(_q4b.get("longTermDebt")) or 0
+            std_q4= fv(_q4b.get("shortLongTermDebt")) or 0
+            eq    = (eq_q + eq_q4) / 2 if eq_q and eq_q4 else eq_q
+            ltd   = (ltd_q + ltd_q4) / 2
+            std   = (std_q + std_q4) / 2
+            ic    = (eq or 0) + ltd + std
+            avg_note = "  (avg Q0+Q4)"
+        else:
+            eq = eq_a; ltd = ltd_a; std = std_a
+            ic = ic_a; avg_note = ""
+        debt = ltd + std
+        r    = safe(ni, ic)
         return {
-            "formula": "Net Income ÷ Invested Capital × 100\nInvested Capital = Equity + Long-Term Debt + Short-Term Debt",
+            "formula": "Net Income ÷ Avg Invested Capital × 100\nInvested Capital = Equity + Long-Term Debt + Short-Term Debt\n(TTM: avg Q0+Q4; Annual: latest year)",
             "fields":  ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity",
                         "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
             "unit": "%",
@@ -1914,29 +1933,38 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──",             ""),
                 *(ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else
                   [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]),
-                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",            raw(eq)),
-                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",              raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt_bs}]",        raw(std)),
-                (f"Total Debt = {raw(ltd)} + {raw(std)}",                             raw(debt)),
-                (f"Invested Capital = {raw(eq)} + {raw(debt)}",                       raw(ic)),
-                ("── Calculation ──",                                                   ""),
-                (f"NI ÷ Invested Capital × 100",                                       f"{raw(ni)} ÷ {raw(ic)}"),
-                ("── Result ──",                                                        ""),
-                ("ROIC",                                                                pct(r)),
+                (f"Equity{avg_note}  [Balance_Sheet.totalStockholderEquity {dt_bs}]",  raw(eq)),
+                (f"Long-Term Debt{avg_note}  [Balance_Sheet.longTermDebt {dt_bs}]",    raw(ltd)),
+                (f"Short-Term Debt{avg_note}  [Balance_Sheet.shortLongTermDebt {dt_bs}]", raw(std)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)}",                              raw(debt)),
+                (f"Invested Capital = {raw(eq)} + {raw(debt)}",                        raw(ic)),
+                ("── Calculation ──",                                                    ""),
+                (f"NI ÷ Invested Capital × 100",                                        f"{raw(ni)} ÷ {raw(ic)}"),
+                ("── Result ──",                                                         ""),
+                ("ROIC",                                                                 pct(r)),
             ],
             "result": pct(r)}
 
     if "Return on Capital" in L and "Empl" not in L:
         is_ttm = "TTM" in L
         ni     = ni_ttm if is_ttm else ni_a
-        eq     = eq_q if is_ttm else eq_a
-        ltd    = ltd_q if is_ttm else ltd_a
-        std    = std_q if is_ttm else std_a
-        debt   = ltd + std
-        ic     = ic_ttm if is_ttm else ic_a
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         dt_bs  = bsQ_dt if is_ttm else bsA_dt
-        r      = safe(ni, ic)
+        if is_ttm:
+            _q4b  = q_bs[qbs_s[4]] if len(qbs_s) > 4 else {}
+            eq_q4 = fv(_q4b.get("totalStockholderEquity"))
+            ltd_q4= fv(_q4b.get("longTermDebt")) or 0
+            std_q4= fv(_q4b.get("shortLongTermDebt")) or 0
+            eq    = (eq_q + eq_q4) / 2 if eq_q and eq_q4 else eq_q
+            ltd   = (ltd_q + ltd_q4) / 2
+            std   = (std_q + std_q4) / 2
+            ic    = (eq or 0) + ltd + std
+            avg_note2 = "  (avg Q0+Q4)"
+        else:
+            eq = eq_a; ltd = ltd_a; std = std_a
+            ic = ic_a; avg_note2 = ""
+        debt = ltd + std
+        r    = safe(ni, ic)
         return {
             "formula": "Net Income ÷ (Equity + Debt) × 100",
             "fields":  ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity",
@@ -1946,15 +1974,15 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──", ""),
                 *(ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else
                   [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]),
-                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",  raw(eq)),
-                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",    raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt_bs}]", raw(std)),
-                (f"Total Debt = {raw(ltd)} + {raw(std)}",                    raw(debt)),
-                (f"Invested Capital = {raw(eq)} + {raw(debt)}",              raw(ic)),
-                ("── Calculation ──",                                         ""),
-                (f"NI ÷ (Eq + Debt) × 100",                                 f"{raw(ni)} ÷ {raw(ic)}"),
-                ("── Result ──",                                              ""),
-                ("ROC",                                                        pct(r)),
+                (f"Equity{avg_note2}  [Balance_Sheet.totalStockholderEquity {dt_bs}]",  raw(eq)),
+                (f"Long-Term Debt{avg_note2}  [Balance_Sheet.longTermDebt {dt_bs}]",    raw(ltd)),
+                (f"Short-Term Debt{avg_note2}  [Balance_Sheet.shortLongTermDebt {dt_bs}]", raw(std)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)}",                               raw(debt)),
+                (f"Invested Capital = {raw(eq)} + {raw(debt)}",                         raw(ic)),
+                ("── Calculation ──",                                                    ""),
+                (f"NI ÷ (Eq + Debt) × 100",                                            f"{raw(ni)} ÷ {raw(ic)}"),
+                ("── Result ──",                                                         ""),
+                ("ROC",                                                                   pct(r)),
             ],
             "result": pct(r)}
 
@@ -4342,16 +4370,27 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     roa_yr    = safe_div(ni_yr,    assets_avg)
     roe_ttm   = safe_div(ni_ttm,   equity_ttm_avg)
     roe_yr    = safe_div(ni_yr,    eq_avg)
-    # Return on Capital = NI / (Equity + Debt)
-    roc_ttm   = safe_div(ni_ttm,   (equity_ttm or 0) + debt_ttm)
+
+    # Q4 balance sheet values for TTM averages
+    _q4 = q_bs[qbs_sorted[4]] if len(qbs_sorted) > 4 else {}
+    ltd_ttm_q4    = fv(_q4.get("longTermDebt")) or 0
+    std_ttm_q4    = fv(_q4.get("shortLongTermDebt")) or 0
+    debt_ttm_q4   = ltd_ttm_q4 + std_ttm_q4
+    cur_lia_ttm_q4= fv(_q4.get("totalCurrentLiabilities"))
+
+    debt_ttm_avg   = (debt_ttm + debt_ttm_q4) / 2
+    cur_lia_ttm_avg= (cur_lia_ttm + cur_lia_ttm_q4) / 2 if cur_lia_ttm and cur_lia_ttm_q4 else cur_lia_ttm
+
+    # Return on Capital = NI / avg(Equity + Debt)
+    roc_ttm   = safe_div(ni_ttm,   (equity_ttm_avg or 0) + debt_ttm_avg)
     roc_yr    = safe_div(ni_yr,    (equity_yr  or 0) + debt_yr)
-    # ROCE = EBIT / Capital Employed (Assets - Current Liabilities)
-    cap_emp_ttm = (assets_ttm - cur_lia_ttm) if assets_ttm and cur_lia_ttm else None
+    # ROCE = EBIT / avg Capital Employed (Assets - Current Liabilities)
+    cap_emp_ttm = (assets_ttm_avg - cur_lia_ttm_avg) if assets_ttm_avg and cur_lia_ttm_avg else None
     cap_emp_yr  = (assets_yr  - cur_lia_yr)  if assets_yr  and cur_lia_yr  else None
     roce_ttm  = safe_div(ebit_ttm, cap_emp_ttm)
     roce_yr   = safe_div(ebit_yr,  cap_emp_yr)
-    # ROIC = EBIT*(1-tax_rate) / Invested Capital — simplified: NI / (Equity + Debt)
-    roic_ttm  = safe_div(ni_ttm, (equity_ttm or 0) + debt_ttm)
+    # ROIC = NI / avg Invested Capital (Equity + Debt)
+    roic_ttm  = safe_div(ni_ttm, (equity_ttm_avg or 0) + debt_ttm_avg)
     roic_yr   = safe_div(ni_yr,  (equity_yr  or 0) + debt_yr)
 
     gm_ttm    = safe_div(gp_ttm,     rev_ttm)
