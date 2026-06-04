@@ -303,12 +303,14 @@ def compute_kennzahlen(data, hl, val, tech):
     assets   = latest(ttm_bs, "totalAssets")
     equity   = latest(ttm_bs, "totalStockholderEquity")
     lt_debt  = latest(ttm_bs, "longTermDebt")
-    st_debt  = latest(ttm_bs, "shortLongTermDebt")
+    st_debt  = latest(ttm_bs, "shortTermDebt")
+    clo_debt = latest(ttm_bs, "capitalLeaseObligations")
     cash     = (latest(ttm_bs, "cash") or latest(ttm_bs, "cashAndEquivalents") or 0) + (latest(ttm_bs, "shortTermInvestments") or 0)
     cur_ass  = latest(ttm_bs, "totalCurrentAssets")
     cur_lia  = latest(ttm_bs, "totalCurrentLiabilities")
     inv      = latest(ttm_bs, "inventory")
-    total_debt = (lt_debt or 0) + (st_debt or 0) if lt_debt or st_debt else None
+    # Total Debt = longTermDebt + shortTermDebt + capitalLeaseObligations (Finqube-aligned)
+    total_debt = (lt_debt or 0) + (st_debt or 0) + (clo_debt or 0) if (lt_debt or st_debt or clo_debt) else None
 
     # EV: use Highlights value, fallback to MarketCap + Debt - Cash
     if not ev and mcap:
@@ -641,9 +643,11 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
     )
     equity_yr= yr(a_bs, "totalStockholderEquity")
     lt_debt  = yr(a_bs, "longTermDebt")
-    st_debt  = yr(a_bs, "shortLongTermDebt")
+    st_debt  = yr(a_bs, "shortTermDebt")
+    clo_debt = yr(a_bs, "capitalLeaseObligations")
     cash_yr  = (yr(a_bs, "cash") or yr(a_bs, "cashAndEquivalents") or 0) + (yr(a_bs, "shortTermInvestments") or 0)
-    total_debt = (lt_debt or 0) + (st_debt or 0)
+    # Total Debt = longTermDebt + shortTermDebt + capitalLeaseObligations (Finqube-aligned)
+    total_debt = (lt_debt or 0) + (st_debt or 0) + (clo_debt or 0)
 
     # EV: from Valuation, fallback calculated
     ev = ev_raw or (mcap + total_debt - (cash_yr or 0) if mcap else None)
@@ -806,7 +810,7 @@ def compute_value_score(data: dict, hl: dict, val: dict, price_data: dict = None
                 # For EV multiples: approximate EV per year as price * shares + debt - cash
                 bs_y   = data["Financials"]["Balance_Sheet"]["yearly"].get(y, {})
                 ltd    = fv(bs_y.get("longTermDebt")) or 0
-                std    = fv(bs_y.get("shortLongTermDebt")) or 0
+                std    = fv(bs_y.get("shortTermDebt")) or 0
                 csh    = (fv(bs_y.get("cash")) or fv(bs_y.get("cashAndEquivalents")) or 0) + (fv(bs_y.get("shortTermInvestments")) or 0)
                 shs    = fv(bs_y.get("commonStockSharesOutstanding"))
                 if not shs: continue
@@ -1164,8 +1168,9 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     # ── BS quarterly ──────────────────────────────────────────────────
     cash_q = (fv(bsQ.get("cash")) or fv(bsQ.get("cashAndEquivalents")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
     ltd_q  = fv(bsQ.get("longTermDebt")) or 0
-    std_q  = fv(bsQ.get("shortLongTermDebt")) or 0
-    debt_q = ltd_q + std_q
+    std_q  = fv(bsQ.get("shortTermDebt")) or 0
+    clo_q  = fv(bsQ.get("capitalLeaseObligations")) or 0
+    debt_q = ltd_q + std_q + clo_q  # Finqube-aligned
     eq_q   = fv(bsQ.get("totalStockholderEquity"))
     ta_q   = fv(bsQ.get("totalAssets"))
     ca_q   = fv(bsQ.get("totalCurrentAssets"))
@@ -1178,8 +1183,9 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
     # ── BS annual ─────────────────────────────────────────────────────
     cash_a = (fv(bsA.get("cash")) or fv(bsA.get("cashAndEquivalents")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
     ltd_a  = fv(bsA.get("longTermDebt")) or 0
-    std_a  = fv(bsA.get("shortLongTermDebt")) or 0
-    debt_a = ltd_a + std_a
+    std_a  = fv(bsA.get("shortTermDebt")) or 0
+    clo_a  = fv(bsA.get("capitalLeaseObligations")) or 0
+    debt_a = ltd_a + std_a + clo_a  # Finqube-aligned
     eq_a   = fv(bsA.get("totalStockholderEquity"))
     ta_a   = fv(bsA.get("totalAssets"))
     ca_a   = fv(bsA.get("totalCurrentAssets"))
@@ -1198,8 +1204,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
 
     nd_q  = debt_q - (cash_q or 0)
     nd_a  = debt_a - (cash_a or 0)
-    ic_ttm = (eq_q or 0) + debt_q
-    ic_a   = (eq_a or 0) + debt_a
+    ic_ttm = (eq_q or 0) + debt_q  # debt_q already includes CLO
+    ic_a   = (eq_a or 0) + debt_a  # debt_a already includes CLO
     ce_ttm = (ta_q - cl_q) if ta_q and cl_q else None
     ce_a   = (ta_a - cl_a) if ta_a and cl_a else None
 
@@ -1900,25 +1906,27 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         eq     = eq_q if is_ttm else eq_a
         ltd    = ltd_q if is_ttm else ltd_a
         std    = std_q if is_ttm else std_a
-        debt   = ltd + std
-        ic     = ic_ttm if is_ttm else ic_a
+        clo    = clo_q if is_ttm else clo_a
+        debt   = ltd + std + clo
+        ic     = (eq or 0) + debt
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         dt_bs  = bsQ_dt if is_ttm else bsA_dt
         r      = safe(ni, ic)
         return {
-            "formula": "Net Income ÷ Invested Capital × 100\nInvested Capital = Equity + Long-Term Debt + Short-Term Debt\n(Q0 snapshot for TTM)",
+            "formula": "Net Income ÷ Invested Capital × 100\nInvested Capital = Equity + LTD + STD + Cap. Lease Obl.\n(Finqube-aligned; Q0 snapshot for TTM)",
             "fields":  ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity",
-                        "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
+                        "Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations"],
             "unit": "%",
             "components": [
                 (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──",             ""),
                 *(ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else
                   [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]),
-                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",            raw(eq)),
-                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",              raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt_bs}]",        raw(std)),
-                (f"Total Debt = {raw(ltd)} + {raw(std)}",                              raw(debt)),
-                (f"Invested Capital = {raw(eq)} + {raw(debt)}",                        raw(ic)),
+                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",                        raw(eq)),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",                          raw(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt_bs}]",                        raw(std)),
+                (f"Cap. Lease Obl.  [Balance_Sheet.capitalLeaseObligations {dt_bs}]",              raw(clo)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)} + {raw(clo)}",                             raw(debt)),
+                (f"Invested Capital = {raw(eq)} + {raw(debt)}",                                    raw(ic)),
                 ("── Calculation ──",                                                    ""),
                 (f"NI ÷ Invested Capital × 100",                                        f"{raw(ni)} ÷ {raw(ic)}"),
                 ("── Result ──",                                                         ""),
@@ -1932,25 +1940,27 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         eq     = eq_q if is_ttm else eq_a
         ltd    = ltd_q if is_ttm else ltd_a
         std    = std_q if is_ttm else std_a
-        debt   = ltd + std
-        ic     = ic_ttm if is_ttm else ic_a
+        clo    = clo_q if is_ttm else clo_a
+        debt   = ltd + std + clo
+        ic     = (eq or 0) + debt
         dt_ni  = f"TTM ({qis_s[0][:7]}…{qis_s[3][:7]})" if is_ttm else isA_dt
         dt_bs  = bsQ_dt if is_ttm else bsA_dt
         r      = safe(ni, ic)
         return {
             "formula": "Net Income ÷ (Equity + Debt) × 100",
             "fields":  ["Income_Statement.netIncome", "Balance_Sheet.totalStockholderEquity",
-                        "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
+                        "Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations"],
             "unit": "%",
             "components": [
                 (f"── Net Income {'TTM quarters' if is_ttm else dt_ni} ──", ""),
                 *(ttm_rows(q_is, "netIncome", "Income_Statement.netIncome") if is_ttm else
                   [(f"Income_Statement.netIncome  [{isA_dt}]", raw(ni))]),
-                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",  raw(eq)),
-                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",    raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt_bs}]", raw(std)),
-                (f"Total Debt = {raw(ltd)} + {raw(std)}",                               raw(debt)),
-                (f"Invested Capital = {raw(eq)} + {raw(debt)}",                         raw(ic)),
+                (f"Equity  [Balance_Sheet.totalStockholderEquity {dt_bs}]",                   raw(eq)),
+                (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt_bs}]",                     raw(ltd)),
+                (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt_bs}]",                   raw(std)),
+                (f"Cap. Lease Obl.  [Balance_Sheet.capitalLeaseObligations {dt_bs}]",         raw(clo)),
+                (f"Total Debt = {raw(ltd)} + {raw(std)} + {raw(clo)}",                        raw(debt)),
+                (f"Invested Capital = {raw(eq)} + {raw(debt)}",                               raw(ic)),
                 ("── Calculation ──",                                                    ""),
                 (f"NI ÷ (Eq + Debt) × 100",                                            f"{raw(ni)} ÷ {raw(ic)}"),
                 ("── Result ──",                                                         ""),
@@ -2742,13 +2752,13 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         return {
             "formula": "Cash & Equivalents ÷ Total Debt",
             "fields":  ["Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Balance_Sheet.longTermDebt",
-                        "Balance_Sheet.shortLongTermDebt"],
+                        "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations"],
             "unit": "x",
             "components": [
                 ("── Cash breakdown ──",                                   ""),
                 *(cash_comps(bsQ if is_q else bsA, dt)[0]),
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",    bn(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]", bn(std)),
+                (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt}]", bn(std)),
                 (f"Total Debt = {bn(ltd)} + {bn(std)}",                  bn(debt)),
                 ("── Calculation ──",                                      ""),
                 (f"Cash ÷ Total Debt",                                    f"{bn(cash)} ÷ {bn(debt)}"),
@@ -2764,7 +2774,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         r    = safe(debt, cap)
         return {
             "formula": "Total Debt ÷ (Total Debt + Equity)",
-            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations",
                         "Balance_Sheet.totalStockholderEquity"],
             "unit": "x",
             "components": [
@@ -2816,7 +2826,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 ]
         comps += [
             (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",          raw(ltd)),
-            (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",    raw(std)),
+            (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt}]",    raw(std)),
             (f"Total Debt = {raw(ltd)} + {raw(std)}",                       raw(debt)),
             ("── Calculation ──",                                             ""),
             (f"FCF ÷ Total Debt  =  {raw(fcf)} ÷ {raw(debt)}",              ""),
@@ -2824,7 +2834,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             ("FCF/Debt",                                                      num(r, 4) + " x"),
         ]
         return {"formula": "Free Cash Flow ÷ Total Debt",
-                "fields": ["Cash_Flow.freeCashFlow", "Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt"],
+                "fields": ["Cash_Flow.freeCashFlow", "Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations"],
                 "unit": "x", "components": comps, "result": num(r, 2)}
 
     if "Interest Coverage" in L:
@@ -2878,7 +2888,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         r  = safe(debt, eq)
         return {
             "formula": "Total Debt ÷ Stockholder Equity",
-            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations",
                         "Balance_Sheet.totalStockholderEquity"],
             "unit": "x",
             "components": [
@@ -2901,12 +2911,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         r    = safe(nd, eq)
         return {
             "formula": "Net Debt ÷ Equity\nNet Debt = Total Debt − Cash",
-            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations",
                         "Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Balance_Sheet.totalStockholderEquity"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt}]",  raw(std)),
                 (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
                 ("── Cash breakdown ──",                                        ""),
                 *(cash_comps(bsQ if is_q else bsA, dt)[0]),
@@ -2944,7 +2954,7 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         r  = safe(debt, ta)
         return {
             "formula": "Total Debt ÷ Total Assets",
-            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Balance_Sheet.totalAssets"],
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations", "Balance_Sheet.totalAssets"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [{dt}]",           bn(ltd)),
@@ -2966,12 +2976,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         r    = safe(nd, ta)
         return {
             "formula": "Net Debt ÷ Total Assets\nNet Debt = Total Debt − Cash",
-            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations",
                         "Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Balance_Sheet.totalAssets"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt}]",  raw(std)),
                 (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
                 ("── Cash breakdown ──",                                        ""),
                 *(cash_comps(bsQ if is_q else bsA, dt)[0]),
@@ -2992,11 +3002,11 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ebit_comps = ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm2 else                      [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]
         return {
             "formula": "Total Debt ÷ EBIT",
-            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Income_Statement.ebit"],
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations", "Income_Statement.ebit"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt}]",  raw(std)),
                 (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
                 (f"── EBIT {'TTM quarters' if is_ttm2 else isA_dt} ──",      ""),
                 *ebit_comps,
@@ -3017,12 +3027,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ebit_comps = ttm_rows(q_is, "ebit", "Income_Statement.ebit") if is_ttm2 else                      [(f"Income_Statement.ebit  [{isA_dt}]", raw(ebit))]
         return {
             "formula": "Net Debt ÷ EBIT\nNet Debt = Total Debt − Cash",
-            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations",
                         "Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Income_Statement.ebit"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt}]",  raw(std)),
                 (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
                 ("── Cash breakdown ──",                                          ""),
                 *(cash_comps(bsQ if is_ttm2 else bsA, dt)[0]),
@@ -3044,11 +3054,11 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ebitda_comps = ttm_rows(q_is, "ebitda", "Income_Statement.ebitda") if is_ttm2 else                        [(f"Income_Statement.ebitda  [{isA_dt}]", raw(ebitda))]
         return {
             "formula": "Total Debt ÷ EBITDA",
-            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt", "Income_Statement.ebitda"],
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations", "Income_Statement.ebitda"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt}]",  raw(std)),
                 (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
                 (f"── EBITDA {'TTM quarters' if is_ttm2 else isA_dt} ──",    ""),
                 *ebitda_comps,
@@ -3069,12 +3079,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         ebitda_comps = ttm_rows(q_is, "ebitda", "Income_Statement.ebitda") if is_ttm2 else                        [(f"Income_Statement.ebitda  [{isA_dt}]", raw(ebitda))]
         return {
             "formula": "Net Debt ÷ EBITDA\nNet Debt = Total Debt − Cash",
-            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortLongTermDebt",
+            "fields":  ["Balance_Sheet.longTermDebt", "Balance_Sheet.shortTermDebt", "Balance_Sheet.capitalLeaseObligations",
                         "Balance_Sheet.cash + shortTermInvestments (cashAndEquivalents fallback)", "Income_Statement.ebitda"],
             "unit": "x",
             "components": [
                 (f"Long-Term Debt  [Balance_Sheet.longTermDebt {dt}]",        raw(ltd)),
-                (f"Short-Term Debt  [Balance_Sheet.shortLongTermDebt {dt}]",  raw(std)),
+                (f"Short-Term Debt  [Balance_Sheet.shortTermDebt {dt}]",  raw(std)),
                 (f"Total Debt = {raw(ltd)} + {raw(std)}",                     raw(debt)),
                 ("── Cash breakdown ──",                                          ""),
                 *(cash_comps(bsQ if is_ttm2 else bsA, dt)[0]),
@@ -3336,7 +3346,7 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
             fcf  = cfo - abs(capex) if cfo and capex else None
         eq   = fv(bs_d.get("totalStockholderEquity"))
         ltd  = fv(bs_d.get("longTermDebt")) or 0
-        std  = fv(bs_d.get("shortLongTermDebt")) or 0
+        std  = fv(bs_d.get("shortTermDebt")) or 0
         ic   = (eq or 0) + ltd + std
         roic = ni/ic if ni and ic and ic != 0 else None
         gm   = gp/rev if gp and rev and rev != 0 else None
@@ -3355,7 +3365,7 @@ def compute_quality_score(data: dict, hl: dict, price_data: dict = None) -> dict
         bs_d = a_bs[y]; cf_d = a_cf.get(y, {}); is_d = a_is.get(y, {})
         eq   = fv(bs_d.get("totalStockholderEquity"))
         ltd  = fv(bs_d.get("longTermDebt")) or 0
-        std  = fv(bs_d.get("shortLongTermDebt")) or 0
+        std  = fv(bs_d.get("shortTermDebt")) or 0
         debt = ltd + std
         ca   = fv(bs_d.get("totalCurrentAssets"))
         cl   = fv(bs_d.get("totalCurrentLiabilities"))
@@ -3411,8 +3421,9 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     bsQ  = q_bs.get(qbs[0], {}) if qbs else {}
     cash_q  = (fv(bsQ.get("cash")) or fv(bsQ.get("cashAndEquivalents")) or 0) + (fv(bsQ.get("shortTermInvestments")) or 0)
     ltd_q   = fv(bsQ.get("longTermDebt"))  or 0
-    std_q   = fv(bsQ.get("shortLongTermDebt")) or 0
-    debt_q  = ltd_q + std_q
+    std_q   = fv(bsQ.get("shortTermDebt")) or 0
+    clo_q   = fv(bsQ.get("capitalLeaseObligations")) or 0
+    debt_q  = ltd_q + std_q + clo_q  # Finqube-aligned
     eq_q    = fv(bsQ.get("totalStockholderEquity"))
     ta_q    = fv(bsQ.get("totalAssets"))
     ca_q    = fv(bsQ.get("totalCurrentAssets"))
@@ -3429,8 +3440,9 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     cfA  = a_cf.get(years[0], {}) if years else {}
     cash_a  = (fv(bsA.get("cash")) or fv(bsA.get("cashAndEquivalents")) or 0) + (fv(bsA.get("shortTermInvestments")) or 0)
     ltd_a   = fv(bsA.get("longTermDebt"))  or 0
-    std_a   = fv(bsA.get("shortLongTermDebt")) or 0
-    debt_a  = ltd_a + std_a
+    std_a   = fv(bsA.get("shortTermDebt")) or 0
+    clo_a   = fv(bsA.get("capitalLeaseObligations")) or 0
+    debt_a  = ltd_a + std_a + clo_a  # Finqube-aligned
     eq_a    = fv(bsA.get("totalStockholderEquity"))
     ta_a    = fv(bsA.get("totalAssets"))
     ca_a    = fv(bsA.get("totalCurrentAssets"))
@@ -3613,16 +3625,16 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
     def yr_cd(i):
         bs = a_bs.get(years_bs[i], {}); cf = a_cf.get(years_bs[i], {})
         c = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d = (fv(bs.get("longTermDebt")) or 0) + (fv(bs.get("shortLongTermDebt")) or 0)
+        d = (fv(bs.get("longTermDebt")) or 0) + (fv(bs.get("shortTermDebt")) or 0)
         return safe(c, d)
     def yr_dc(i):
         bs = a_bs.get(years_bs[i], {})
-        d = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         e = fv(bs.get("totalStockholderEquity"))
         return safe(d, d+(e or 0)) if e else None
     def yr_fd(i):
         bs = a_bs.get(years_bs[i], {})
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         fc = get_fcf_annual(years_bs[i])
         return safe(fc, d)
     def yr_ic(i):
@@ -3636,13 +3648,13 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(c, cl)
     def yr_de(i):
         bs  = a_bs.get(years_bs[i], {})
-        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         e   = fv(bs.get("totalStockholderEquity"))
         return safe(d, e)
     def yr_nde(i):
         bs  = a_bs.get(years_bs[i], {})
         c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         e   = fv(bs.get("totalStockholderEquity"))
         return safe(d-(c or 0), e)
     def yr_ea(i):
@@ -3650,30 +3662,30 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         return safe(fv(bs.get("totalStockholderEquity")), fv(bs.get("totalAssets")))
     def yr_da(i):
         bs  = a_bs.get(years_bs[i], {})
-        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         return safe(d, fv(bs.get("totalAssets")))
     def yr_nda(i):
         bs  = a_bs.get(years_bs[i], {})
         c   = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d   = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         return safe(d-(c or 0), fv(bs.get("totalAssets")))
     def yr_debit(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         return safe(d, fv(is_d.get("ebit")))
     def yr_ndebit(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         return safe(d-(c or 0), fv(is_d.get("ebit")))
     def yr_debitda(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         return safe(d, fv(is_d.get("ebitda")))
     def yr_ndebitda(i):
         bs = a_bs.get(years_bs[i], {}); is_d= a_is.get(years_bs[i], {})
         c  = (fv(bs.get("cash")) or fv(bs.get("cashAndEquivalents")) or 0) + (fv(bs.get("shortTermInvestments")) or 0)
-        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortLongTermDebt")) or 0)
+        d  = (fv(bs.get("longTermDebt")) or 0)+(fv(bs.get("shortTermDebt")) or 0)
         return safe(d-(c or 0), fv(is_d.get("ebitda")))
     def yr_cur(i):
         bs = a_bs.get(years_bs[i], {})
@@ -4301,7 +4313,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     equity_ttm  = fv(q_bs[qbs_sorted[0]].get("totalStockholderEquity")) if qbs_sorted else None
     cur_lia_ttm = fv(q_bs[qbs_sorted[0]].get("totalCurrentLiabilities")) if qbs_sorted else None
     ltd_ttm     = fv(q_bs[qbs_sorted[0]].get("longTermDebt"))     if qbs_sorted else None
-    std_ttm     = fv(q_bs[qbs_sorted[0]].get("shortLongTermDebt")) if qbs_sorted else None
+    std_ttm     = fv(q_bs[qbs_sorted[0]].get("shortTermDebt")) if qbs_sorted else None
     debt_ttm    = (ltd_ttm or 0) + (std_ttm or 0)
 
     # ── Annual values ─────────────────────────────────────────────────
@@ -4319,7 +4331,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
     equity_yr = yr_bs("totalStockholderEquity")
     cur_lia_yr= yr_bs("totalCurrentLiabilities")
     ltd_yr    = yr_bs("longTermDebt")
-    std_yr    = yr_bs("shortLongTermDebt")
+    std_yr    = yr_bs("shortTermDebt")
     debt_yr   = (ltd_yr or 0) + (std_yr or 0)
 
     # avg equity / assets for ROE/ROA
@@ -4465,7 +4477,7 @@ def compute_profitability_score(data: dict, hl: dict, price_data: dict = None) -
             bs  = a_bs.get(y, {})
             eq  = fv(bs.get("totalStockholderEquity"))
             ltd = fv(bs.get("longTermDebt")) or 0
-            std = fv(bs.get("shortLongTermDebt")) or 0
+            std = fv(bs.get("shortTermDebt")) or 0
             ic  = (eq or 0) + ltd + std
             if ni is not None and ic > 0:
                 vals.append(ni / ic)
@@ -4721,7 +4733,7 @@ def calculate_ttm_history(data: dict, statement: str) -> pd.DataFrame:
         "totalAssets", "totalCurrentAssets", "cash", "cashAndEquivalents",
         "cashAndShortTermInvestments", "shortTermInvestments",
         "netReceivables", "inventory", "otherCurrentAssets",
-        "totalCurrentLiabilities", "shortLongTermDebt", "shortLongTermDebtTotal",
+        "totalCurrentLiabilities", "shortTermDebt", "capitalLeaseObligations",
         "shortTermDebt", "longTermDebt", "longTermDebtTotal",
         "totalLiab", "totalStockholderEquity", "retainedEarnings",
         "commonStock", "goodWill", "intangibleAssets",
@@ -5366,7 +5378,7 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with row2_c2:
-        # Total cash = cash + shortTermInvestments, Total debt = shortLongTermDebt + longTermDebt
+        # Total cash = cash + shortTermInvestments, Total debt = longTermDebt + shortTermDebt + capitalLeaseObligations
         if not df_bs_chart.empty:
             cash_s = df_bs_chart.get("cash", pd.Series(dtype=float))
             cae_s  = df_bs_chart.get("cashAndEquivalents", pd.Series(dtype=float))
@@ -5374,7 +5386,7 @@ with tab1:
             cash_s = cash_s.combine_first(cae_s)
             sti_s  = df_bs_chart.get("shortTermInvestments", pd.Series(dtype=float))
             ltd_s  = df_bs_chart.get("longTermDebt", pd.Series(dtype=float))
-            std_s  = df_bs_chart.get("shortLongTermDebt", pd.Series(dtype=float))
+            std_s  = df_bs_chart.get("shortTermDebt", pd.Series(dtype=float))
 
             total_cash = cash_s.add(sti_s, fill_value=0)
             total_debt = ltd_s.add(std_s, fill_value=0)
