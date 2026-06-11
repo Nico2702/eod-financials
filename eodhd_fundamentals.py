@@ -3207,36 +3207,60 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "result": num(z, 2) if z else "—"}
 
     if "Piotroski" in L:
-        # Recompute values for display
+        is_ttm = "Cur" in L
         a_is_dd = data["Financials"]["Income_Statement"].get("yearly", {})
         a_cf_dd = data["Financials"]["Cash_Flow"].get("yearly", {})
         a_bs_dd = data["Financials"]["Balance_Sheet"].get("yearly", {})
+        q_is_dd = data["Financials"]["Income_Statement"].get("quarterly", {})
+        q_cf_dd = data["Financials"]["Cash_Flow"].get("quarterly", {})
+        q_bs_dd = data["Financials"]["Balance_Sheet"].get("quarterly", {})
         yrs_dd  = sorted(a_is_dd.keys(), reverse=True)
         ybs_dd  = sorted(a_bs_dd.keys(), reverse=True)
+        qis_dd  = sorted(q_is_dd.keys(), reverse=True)
+        qcf_dd  = sorted(q_cf_dd.keys(), reverse=True)
+        qbs_dd  = sorted(q_bs_dd.keys(), reverse=True)
 
         def _fv(v):
             try: return float(v) if v not in (None,"","NA","None") else None
             except: return None
 
-        y0 = yrs_dd[0] if yrs_dd else None
-        y1 = yrs_dd[1] if len(yrs_dd)>1 else None
-        y0b= ybs_dd[0] if ybs_dd else None
-        y1b= ybs_dd[1] if len(ybs_dd)>1 else None
-        y2b= ybs_dd[2] if len(ybs_dd)>2 else None
+        def ttm4(stmt, key, offset=0):
+            qs = sorted(stmt.keys(), reverse=True)
+            vals = [_fv(stmt[qs[i+offset]].get(key)) for i in range(4) if i+offset < len(qs)]
+            return sum(vals) if len(vals)==4 and all(v is not None for v in vals) else None
 
-        is0 = a_is_dd.get(y0, {}); is1 = a_is_dd.get(y1, {})
-        cf0 = a_cf_dd.get(y0, {})
-        bs0 = a_bs_dd.get(y0b, {}); bs1 = a_bs_dd.get(y1b, {}); bs2 = a_bs_dd.get(y2b, {})
-
-        ni0  = _fv(is0.get("netIncome"));       ni1  = _fv(is1.get("netIncome"))
-        cfo0 = _fv(cf0.get("totalCashFromOperatingActivities"))
-        ta0  = _fv(bs0.get("totalAssets"));     ta1  = _fv(bs1.get("totalAssets")); ta2 = _fv(bs2.get("totalAssets"))
-        ltd0 = _fv(bs0.get("longTermDebt")) or 0; ltd1 = _fv(bs1.get("longTermDebt")) or 0
-        ca0  = _fv(bs0.get("totalCurrentAssets")); ca1 = _fv(bs1.get("totalCurrentAssets"))
-        cl0  = _fv(bs0.get("totalCurrentLiabilities")); cl1 = _fv(bs1.get("totalCurrentLiabilities"))
-        sh0  = _fv(bs0.get("commonStockSharesOutstanding")); sh1 = _fv(bs1.get("commonStockSharesOutstanding"))
-        gp0  = _fv(is0.get("grossProfit")); gp1 = _fv(is1.get("grossProfit"))
-        rev0 = _fv(is0.get("totalRevenue")); rev1 = _fv(is1.get("totalRevenue"))
+        if is_ttm and len(qis_dd) >= 8 and len(qbs_dd) >= 5:
+            ni0  = ttm4(q_is_dd, "netIncome", 0);    ni1  = ttm4(q_is_dd, "netIncome", 4)
+            cfo0 = ttm4(q_cf_dd, "totalCashFromOperatingActivities", 0)
+            rev0 = ttm4(q_is_dd, "totalRevenue", 0); rev1 = ttm4(q_is_dd, "totalRevenue", 4)
+            gp0  = ttm4(q_is_dd, "grossProfit", 0);  gp1  = ttm4(q_is_dd, "grossProfit", 4)
+            bs_q0 = q_bs_dd.get(qbs_dd[0], {}); bs_q4 = q_bs_dd.get(qbs_dd[4], {}) if len(qbs_dd)>4 else {}
+            bs_q8 = q_bs_dd.get(qbs_dd[8], {}) if len(qbs_dd)>8 else {}
+            ta0  = _fv(bs_q0.get("totalAssets")); ta1 = _fv(bs_q4.get("totalAssets")); ta2 = _fv(bs_q8.get("totalAssets"))
+            ltd0 = _fv(bs_q0.get("longTermDebt")) or 0; ltd1 = _fv(bs_q4.get("longTermDebt")) or 0
+            ca0  = _fv(bs_q0.get("totalCurrentAssets"));  ca1 = _fv(bs_q4.get("totalCurrentAssets"))
+            cl0  = _fv(bs_q0.get("totalCurrentLiabilities")); cl1 = _fv(bs_q4.get("totalCurrentLiabilities"))
+            sh0  = _fv(bs_q0.get("commonStockSharesOutstanding")); sh1 = _fv(bs_q4.get("commonStockSharesOutstanding"))
+            y0   = f"TTM ({qis_dd[0][:7]}…{qis_dd[3][:7]})" if len(qis_dd)>=4 else "TTM"
+            y1   = f"prev TTM ({qis_dd[4][:7]}…{qis_dd[7][:7]})" if len(qis_dd)>=8 else "prev TTM"
+            y0b  = qbs_dd[0][:7] if qbs_dd else "—"; y1b = qbs_dd[4][:7] if len(qbs_dd)>4 else "—"
+            y2b  = qbs_dd[8][:7] if len(qbs_dd)>8 else None
+        else:
+            y0 = yrs_dd[0] if yrs_dd else None; y1 = yrs_dd[1] if len(yrs_dd)>1 else None
+            y0b= ybs_dd[0] if ybs_dd else None; y1b= ybs_dd[1] if len(ybs_dd)>1 else None
+            y2b= ybs_dd[2] if len(ybs_dd)>2 else None
+            is0 = a_is_dd.get(y0, {}); is1 = a_is_dd.get(y1, {})
+            cf0 = a_cf_dd.get(y0, {})
+            bs0 = a_bs_dd.get(y0b, {}); bs1 = a_bs_dd.get(y1b, {}); bs2 = a_bs_dd.get(y2b, {})
+            ni0  = _fv(is0.get("netIncome"));   ni1  = _fv(is1.get("netIncome"))
+            cfo0 = _fv(cf0.get("totalCashFromOperatingActivities"))
+            ta0  = _fv(bs0.get("totalAssets"));  ta1 = _fv(bs1.get("totalAssets")); ta2 = _fv(bs2.get("totalAssets"))
+            ltd0 = _fv(bs0.get("longTermDebt")) or 0; ltd1 = _fv(bs1.get("longTermDebt")) or 0
+            ca0  = _fv(bs0.get("totalCurrentAssets"));  ca1 = _fv(bs1.get("totalCurrentAssets"))
+            cl0  = _fv(bs0.get("totalCurrentLiabilities")); cl1 = _fv(bs1.get("totalCurrentLiabilities"))
+            sh0  = _fv(bs0.get("commonStockSharesOutstanding")); sh1 = _fv(bs1.get("commonStockSharesOutstanding"))
+            rev0 = _fv(is0.get("totalRevenue")); rev1 = _fv(is1.get("totalRevenue"))
+            gp0  = _fv(is0.get("grossProfit"));  gp1  = _fv(is1.get("grossProfit"))
 
         ta_avg0 = (ta0+ta1)/2 if ta0 and ta1 else ta0
         ta_avg1 = (ta1+ta2)/2 if ta1 and ta2 else ta1
@@ -3256,8 +3280,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
 
         f1 = ni0 is not None and ni0 > 0
         f2 = cfo0 is not None and cfo0 > 0
-        f3 = roa0 is not None and roa1 is not None and roa0 > roa1
-        f4 = cfo0 is not None and ni0 is not None and cfo0 > ni0
+        f3 = cfo0 is not None and ni0 is not None and cfo0 > ni0
+        f4 = roa0 is not None and roa1 is not None and roa0 > roa1
         f5 = ltd0 < ltd1
         f6 = cr0 is not None and cr1 is not None and cr0 > cr1
         f7 = sh0 is not None and sh1 is not None and sh0 <= sh1
@@ -3265,8 +3289,9 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
         f9 = at0 is not None and at1 is not None and at0 > at1
         total = sum([f1,f2,f3,f4,f5,f6,f7,f8,f9])
 
+        mode_note = "TTM rolling 4Q vs prior TTM" if is_ttm else "Annual Y0 vs Y-1"
         return {
-            "formula": "9 binary criteria (0 or 1 each)\n8–9 = Strong  |  5–7 = Neutral  |  0–4 = Weak",
+            "formula": f"9 binary criteria (0 or 1 each) — {mode_note}\n8–9 = Strong  |  5–7 = Neutral  |  0–4 = Weak",
             "fields":  ["Income_Statement.netIncome", "Cash_Flow.totalCashFromOperatingActivities",
                         "Balance_Sheet.totalAssets", "Balance_Sheet.longTermDebt",
                         "Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities",
@@ -3274,36 +3299,36 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                         "Income_Statement.grossProfit", "Income_Statement.totalRevenue"],
             "unit": "/9",
             "components": [
-                ("── Profitability ──",                                                          ""),
-                (f"F1: Net Income > 0",                                                         tick(f1)),
-                (f"  netIncome  [{y0[:4]}]",                                                    _raw(ni0)),
-                (f"F2: CFO > 0",                                                                tick(f2)),
-                (f"  totalCashFromOperatingActivities  [{y0[:4]}]",                            _raw(cfo0)),
-                (f"F3: CFO > Net Income",                                                       tick(f4)),
-                (f"  CFO  [{y0[:4]}]",                                                         _raw(cfo0)),
-                (f"  Net Income  [{y0[:4]}]",                                                   _raw(ni0)),
-                (f"F4: ROA improved",                                                           tick(f3)),
-                (f"  ROA [{y0[:4]}]  =  NI {_raw(ni0)} ÷ Avg Assets {_raw(ta_avg0)}",             f"{pn(roa0)} %"),
-                (f"  ROA [{y1[:4] if y1 else '—'}]  =  NI {_raw(ni1)} ÷ Avg Assets {_raw(ta_avg1)}", f"{pn(roa1)} %"),
-                ("── Leverage / Liquidity ──",                                                  ""),
-                (f"F5: LTD reduced",                                                            tick(f5)),
-                (f"  longTermDebt  [{y0b[:4] if y0b else '—'}]",                               _raw(ltd0)),
-                (f"  longTermDebt  [{y1b[:4] if y1b else '—'}]",                               _raw(ltd1)),
-                (f"F6: Current Ratio improved",                                                 tick(f6)),
-                (f"  CA {_raw(ca0)} ÷ CL {_raw(cl0)}  [{y0b[:4] if y0b else '—'}]",              f"{pn(cr0)}x"),
-                (f"  CA {_raw(ca1)} ÷ CL {_raw(cl1)}  [{y1b[:4] if y1b else '—'}]",              f"{pn(cr1)}x"),
-                (f"F7: No new shares issued",                                                   tick(f7)),
-                (f"  Shares Outstanding  [{y0b[:4] if y0b else '—'}]",                         fmt_sh(sh0)),
-                (f"  Shares Outstanding  [{y1b[:4] if y1b else '—'}]",                         fmt_sh(sh1)),
-                ("── Efficiency ──",                                                            ""),
-                (f"F8: Gross Margin improved",                                                  tick(f8)),
-                (f"  GP {_raw(gp0)} ÷ Rev {_raw(rev0)}  [{y0[:4]}]",                              f"{pn(gm0)} %"),
-                (f"  GP {_raw(gp1)} ÷ Rev {_raw(rev1)}  [{y1[:4] if y1 else '—'}]",              f"{pn(gm1)} %"),
-                (f"F9: Asset Turnover improved",                                                tick(f9)),
-                (f"  Rev {_raw(rev0)} ÷ Avg Assets {_raw(ta_avg0)}  [{y0[:4]}]",                  f"{pn(at0)}x"),
-                (f"  Rev {_raw(rev1)} ÷ Avg Assets {_raw(ta_avg1)}  [{y1[:4] if y1 else '—'}]",  f"{pn(at1)}x"),
-                ("── Result ──",                                                                ""),
-                (f"Total Score",                                                                f"{total} / 9"),
+                ("── Profitability ──",                                                           ""),
+                (f"F1: Net Income > 0",                                                          tick(f1)),
+                (f"  netIncome  [{y0}]",                                                         _raw(ni0)),
+                (f"F2: CFO > 0",                                                                 tick(f2)),
+                (f"  totalCashFromOperatingActivities  [{y0}]",                                  _raw(cfo0)),
+                (f"F3: CFO > Net Income",                                                        tick(f3)),
+                (f"  CFO  [{y0}]",                                                               _raw(cfo0)),
+                (f"  Net Income  [{y0}]",                                                        _raw(ni0)),
+                (f"F4: ROA improved",                                                            tick(f4)),
+                (f"  ROA [{y0}]  =  NI {_raw(ni0)} ÷ Avg Assets {_raw(ta_avg0)}",              f"{pn(roa0)} %"),
+                (f"  ROA [{y1}]  =  NI {_raw(ni1)} ÷ Avg Assets {_raw(ta_avg1)}",              f"{pn(roa1)} %"),
+                ("── Leverage / Liquidity ──",                                                   ""),
+                (f"F5: LTD reduced",                                                             tick(f5)),
+                (f"  longTermDebt  [{y0b}]",                                                     _raw(ltd0)),
+                (f"  longTermDebt  [{y1b}]",                                                     _raw(ltd1)),
+                (f"F6: Current Ratio improved",                                                  tick(f6)),
+                (f"  CA {_raw(ca0)} ÷ CL {_raw(cl0)}  [{y0b}]",                                f"{pn(cr0)}x"),
+                (f"  CA {_raw(ca1)} ÷ CL {_raw(cl1)}  [{y1b}]",                                f"{pn(cr1)}x"),
+                (f"F7: No new shares issued",                                                    tick(f7)),
+                (f"  Shares Outstanding  [{y0b}]",                                              fmt_sh(sh0)),
+                (f"  Shares Outstanding  [{y1b}]",                                              fmt_sh(sh1)),
+                ("── Efficiency ──",                                                             ""),
+                (f"F8: Gross Margin improved",                                                   tick(f8)),
+                (f"  GP {_raw(gp0)} ÷ Rev {_raw(rev0)}  [{y0}]",                               f"{pn(gm0)} %"),
+                (f"  GP {_raw(gp1)} ÷ Rev {_raw(rev1)}  [{y1}]",                               f"{pn(gm1)} %"),
+                (f"F9: Asset Turnover improved",                                                 tick(f9)),
+                (f"  Rev {_raw(rev0)} ÷ Avg Assets {_raw(ta_avg0)}  [{y0}]",                   f"{pn(at0)}x"),
+                (f"  Rev {_raw(rev1)} ÷ Avg Assets {_raw(ta_avg1)}  [{y1}]",                   f"{pn(at1)}x"),
+                ("── Result ──",                                                                 ""),
+                (f"Total Score",                                                                 f"{total} / 9"),
             ],
             "result": str(total)}
 
@@ -3685,8 +3710,74 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
 
     bs_prev_a = a_bs.get(years_bs[1], {}) if len(years_bs) > 1 else None
     pf_a = piotroski(isA, cfA, bsA, bs_prev_a) if years else None
-    # Current (uses latest quarterly data with annual income/cf)
-    pf_cur = pf_a  # best proxy without full quarterly prior year
+
+    # ── TTM-based Piotroski (Cur) ─────────────────────────────────────
+    def piotroski_ttm():
+        """TTM Piotroski: uses rolling 4Q for flow metrics, Q0 vs Q-4 for balance sheet."""
+        qs_is  = sorted(q_is.keys(),  reverse=True)
+        qs_cf  = sorted(q_cf.keys(),  reverse=True)
+        qs_bs  = sorted(q_bs.keys(),  reverse=True)
+        if len(qs_is) < 8 or len(qs_bs) < 5:
+            return None  # need 8Q IS and 5Q BS for prev TTM comparison
+
+        def ttm4(stmt, key, offset=0):
+            qs = sorted(stmt.keys(), reverse=True)
+            vals = [fv(stmt[qs[i+offset]].get(key)) for i in range(4) if i+offset < len(qs)]
+            return sum(vals) if len(vals)==4 and all(v is not None for v in vals) else None
+
+        # Current TTM (Q0–Q3)
+        ni_t    = ttm4(q_is, "netIncome",    0)
+        cfo_t   = ttm4(q_cf, "totalCashFromOperatingActivities", 0)
+        rev_t   = ttm4(q_is, "totalRevenue", 0)
+        gp_t    = ttm4(q_is, "grossProfit",  0)
+
+        # Prior TTM (Q4–Q7)
+        ni_pt   = ttm4(q_is, "netIncome",    4)
+        cfo_pt  = ttm4(q_cf, "totalCashFromOperatingActivities", 4)
+        rev_pt  = ttm4(q_is, "totalRevenue", 4)
+        gp_pt   = ttm4(q_is, "grossProfit",  4)
+
+        # Q0 balance sheet
+        bs_q0   = q_bs[qs_bs[0]]; bs_q4 = q_bs[qs_bs[4]] if len(qs_bs)>4 else {}
+        ta_q0   = fv(bs_q0.get("totalAssets"));  ta_q4 = fv(bs_q4.get("totalAssets"))
+        ltd_q0  = fv(bs_q0.get("longTermDebt")) or 0
+        ltd_q4  = fv(bs_q4.get("longTermDebt")) or 0
+        ca_q0   = fv(bs_q0.get("totalCurrentAssets"));   ca_q4 = fv(bs_q4.get("totalCurrentAssets"))
+        cl_q0   = fv(bs_q0.get("totalCurrentLiabilities")); cl_q4 = fv(bs_q4.get("totalCurrentLiabilities"))
+        sh_q0   = fv(bs_q0.get("commonStockSharesOutstanding"))
+        sh_q4   = fv(bs_q4.get("commonStockSharesOutstanding"))
+
+        # Avg assets for ROA
+        ta_avg_t  = (ta_q0 + ta_q4) / 2 if ta_q0 and ta_q4 else ta_q0
+        # Prior avg assets (Q4+Q8)
+        bs_q8   = q_bs[qs_bs[8]] if len(qs_bs)>8 else {}
+        ta_q8   = fv(bs_q8.get("totalAssets"))
+        ta_avg_pt = (ta_q4 + ta_q8) / 2 if ta_q4 and ta_q8 else ta_q4
+
+        roa_t   = (ni_t  / ta_avg_t)  if ni_t  and ta_avg_t  else None
+        roa_pt  = (ni_pt / ta_avg_pt) if ni_pt and ta_avg_pt else None
+        gm_t    = (gp_t  / rev_t)  if gp_t  and rev_t  else None
+        gm_pt   = (gp_pt / rev_pt) if gp_pt and rev_pt else None
+        at_t    = (rev_t  / ta_avg_t)  if rev_t  and ta_avg_t  else None
+        at_pt   = (rev_pt / ta_avg_pt) if rev_pt and ta_avg_pt else None
+        cr_q0   = (ca_q0 / cl_q0) if ca_q0 and cl_q0 else None
+        cr_q4   = (ca_q4 / cl_q4) if ca_q4 and cl_q4 else None
+
+        sc = 0
+        if ni_t  and ni_t  > 0: sc += 1                         # F1
+        if cfo_t and cfo_t > 0: sc += 1                         # F2
+        if cfo_t and ni_t  and cfo_t > ni_t: sc += 1            # F3
+        if roa_t and roa_pt and roa_t > roa_pt: sc += 1         # F4
+        if ltd_q0 < ltd_q4: sc += 1                             # F5
+        if cr_q0  and cr_q4 and cr_q0 > cr_q4: sc += 1         # F6
+        if sh_q0  and sh_q4 and sh_q0 <= sh_q4: sc += 1        # F7
+        if gm_t   and gm_pt and gm_t  > gm_pt: sc += 1         # F8
+        if at_t   and at_pt and at_t  > at_pt: sc += 1          # F9
+        return sc
+
+    pf_cur = piotroski_ttm() if pf_a is not None else None
+    if pf_cur is None:
+        pf_cur = pf_a  # fallback to annual if insufficient quarterly history
 
     # ── Historical averages (annual) ──────────────────────────────────
     def hist_avg(fn, n):
