@@ -3207,8 +3207,67 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "result": num(z, 2) if z else "—"}
 
     if "Piotroski" in L:
+        # Recompute values for display
+        a_is_dd = data["Financials"]["Income_Statement"].get("yearly", {})
+        a_cf_dd = data["Financials"]["Cash_Flow"].get("yearly", {})
+        a_bs_dd = data["Financials"]["Balance_Sheet"].get("yearly", {})
+        yrs_dd  = sorted(a_is_dd.keys(), reverse=True)
+        ybs_dd  = sorted(a_bs_dd.keys(), reverse=True)
+
+        def _fv(v):
+            try: return float(v) if v not in (None,"","NA","None") else None
+            except: return None
+
+        y0 = yrs_dd[0] if yrs_dd else None
+        y1 = yrs_dd[1] if len(yrs_dd)>1 else None
+        y0b= ybs_dd[0] if ybs_dd else None
+        y1b= ybs_dd[1] if len(ybs_dd)>1 else None
+        y2b= ybs_dd[2] if len(ybs_dd)>2 else None
+
+        is0 = a_is_dd.get(y0, {}); is1 = a_is_dd.get(y1, {})
+        cf0 = a_cf_dd.get(y0, {})
+        bs0 = a_bs_dd.get(y0b, {}); bs1 = a_bs_dd.get(y1b, {}); bs2 = a_bs_dd.get(y2b, {})
+
+        ni0  = _fv(is0.get("netIncome"));       ni1  = _fv(is1.get("netIncome"))
+        cfo0 = _fv(cf0.get("totalCashFromOperatingActivities"))
+        ta0  = _fv(bs0.get("totalAssets"));     ta1  = _fv(bs1.get("totalAssets")); ta2 = _fv(bs2.get("totalAssets"))
+        ltd0 = _fv(bs0.get("longTermDebt")) or 0; ltd1 = _fv(bs1.get("longTermDebt")) or 0
+        ca0  = _fv(bs0.get("totalCurrentAssets")); ca1 = _fv(bs1.get("totalCurrentAssets"))
+        cl0  = _fv(bs0.get("totalCurrentLiabilities")); cl1 = _fv(bs1.get("totalCurrentLiabilities"))
+        sh0  = _fv(bs0.get("commonStockSharesOutstanding")); sh1 = _fv(bs1.get("commonStockSharesOutstanding"))
+        gp0  = _fv(is0.get("grossProfit")); gp1 = _fv(is1.get("grossProfit"))
+        rev0 = _fv(is0.get("totalRevenue")); rev1 = _fv(is1.get("totalRevenue"))
+
+        ta_avg0 = (ta0+ta1)/2 if ta0 and ta1 else ta0
+        ta_avg1 = (ta1+ta2)/2 if ta1 and ta2 else ta1
+        roa0 = (ni0/ta_avg0*100) if ni0 and ta_avg0 else None
+        roa1 = (ni1/ta_avg1*100) if ni1 and ta_avg1 else None
+        cr0  = (ca0/cl0) if ca0 and cl0 else None
+        cr1  = (ca1/cl1) if ca1 and cl1 else None
+        gm0  = (gp0/rev0*100) if gp0 and rev0 else None
+        gm1  = (gp1/rev1*100) if gp1 and rev1 else None
+        at0  = (rev0/ta_avg0) if rev0 and ta_avg0 else None
+        at1  = (rev1/ta_avg1) if rev1 and ta_avg1 else None
+
+        def tick(cond): return "✅  1pt" if cond else "❌  0pt"
+        def pn(v, dec=2): return f"{v:,.{dec}f}" if v is not None else "—"
+        def bn(v): return f"{v/1e9:,.2f}B" if v is not None else "—"
+        def mn(v): return f"{v/1e6:,.0f}M" if v is not None else "—"
+        def fmt_sh(v): return f"{v/1e6:,.1f}M" if v is not None else "—"
+
+        f1 = ni0 is not None and ni0 > 0
+        f2 = cfo0 is not None and cfo0 > 0
+        f3 = roa0 is not None and roa1 is not None and roa0 > roa1
+        f4 = cfo0 is not None and ni0 is not None and cfo0 > ni0
+        f5 = ltd0 < ltd1
+        f6 = cr0 is not None and cr1 is not None and cr0 > cr1
+        f7 = sh0 is not None and sh1 is not None and sh0 <= sh1
+        f8 = gm0 is not None and gm1 is not None and gm0 > gm1
+        f9 = at0 is not None and at1 is not None and at0 > at1
+        total = sum([f1,f2,f3,f4,f5,f6,f7,f8,f9])
+
         return {
-            "formula": "9 binary criteria (0 or 1 each) — sum = F-Score\n8–9 Strong | 5–7 Neutral | 0–4 Weak",
+            "formula": "9 binary criteria (0 or 1 each)\n8–9 = Strong  |  5–7 = Neutral  |  0–4 = Weak",
             "fields":  ["Income_Statement.netIncome", "Cash_Flow.totalCashFromOperatingActivities",
                         "Balance_Sheet.totalAssets", "Balance_Sheet.longTermDebt",
                         "Balance_Sheet.totalCurrentAssets", "Balance_Sheet.totalCurrentLiabilities",
@@ -3216,22 +3275,22 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                         "Income_Statement.grossProfit", "Income_Statement.totalRevenue"],
             "unit": "/9",
             "components": [
-                ("── Profitability ──",          ""),
-                ("F1: Net Income > 0",           "Income_Statement.netIncome > 0"),
-                ("F2: CFO > 0",                  "Cash_Flow.totalCashFromOperatingActivities > 0"),
-                ("F3: ΔROA > 0",                 "ROA[Y0] > ROA[Y-1]"),
-                ("F4: Accrual (CFO > NI)",       "CFO > Net Income"),
-                ("── Leverage / Liquidity ──",   ""),
-                ("F5: LTD < prev LTD",           "longTermDebt[Y0] < longTermDebt[Y-1]"),
-                ("F6: Δ Current Ratio > 0",      "CurrentRatio[Y0] > CurrentRatio[Y-1]"),
-                ("F7: No new shares issued",     "Shares[Y0] ≤ Shares[Y-1]"),
-                ("── Efficiency ──",             ""),
-                ("F8: Δ Gross Margin > 0",       "GrossMargin[Y0] > GrossMargin[Y-1]"),
-                ("F9: Δ Asset Turnover > 0",     "AssetTurnover[Y0] > AssetTurnover[Y-1]"),
-                ("── Result ──",                 ""),
-                ("Score",                        "See Health tab for computed value"),
+                ("── Profitability ──",                                         ""),
+                (f"F1: Net Income > 0",                                         f"{tick(f1)}  |  NI = {bn(ni0)}"),
+                (f"F2: CFO > 0",                                                f"{tick(f2)}  |  CFO = {bn(cfo0)}"),
+                (f"F3: ROA improved  [{y0[:4]} vs {y1[:4] if y1 else '—'}]",   f"{tick(f3)}  |  {pn(roa0)} % vs {pn(roa1)} %"),
+                (f"F4: CFO > Net Income",                                       f"{tick(f4)}  |  {bn(cfo0)} > {bn(ni0)}"),
+                ("── Leverage / Liquidity ──",                                  ""),
+                (f"F5: LTD reduced  [{y0b[:4] if y0b else '—'} vs {y1b[:4] if y1b else '—'}]", f"{tick(f5)}  |  {bn(ltd0)} vs {bn(ltd1)}"),
+                (f"F6: Current Ratio improved",                                 f"{tick(f6)}  |  {pn(cr0)} vs {pn(cr1)}"),
+                (f"F7: No new shares  [{y0b[:4] if y0b else '—'} vs {y1b[:4] if y1b else '—'}]", f"{tick(f7)}  |  {fmt_sh(sh0)} vs {fmt_sh(sh1)}"),
+                ("── Efficiency ──",                                            ""),
+                (f"F8: Gross Margin improved",                                  f"{tick(f8)}  |  {pn(gm0)} % vs {pn(gm1)} %"),
+                (f"F9: Asset Turnover improved",                                f"{tick(f9)}  |  {pn(at0,'2')}x vs {pn(at1,'2')}x"),
+                ("── Result ──",                                                ""),
+                (f"Total Score",                                                f"{total} / 9"),
             ],
-            "result": "See Health tab"}
+            "result": str(total)}
 
     return UNKNOWN
 
