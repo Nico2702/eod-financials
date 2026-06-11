@@ -3251,9 +3251,8 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
 
         def tick(cond): return "✅  1pt" if cond else "❌  0pt"
         def pn(v, dec=2): return f"{v:,.{dec}f}" if v is not None else "—"
-        def bn(v): return f"{v/1e9:,.2f}B" if v is not None else "—"
-        def mn(v): return f"{v/1e6:,.0f}M" if v is not None else "—"
-        def fmt_sh(v): return f"{v/1e6:,.1f}M" if v is not None else "—"
+        def _raw(v): return f"{v:,.0f}" if v is not None else "—"
+        def fmt_sh(v): return f"{v:,.0f}" if v is not None else "—"
 
         f1 = ni0 is not None and ni0 > 0
         f2 = cfo0 is not None and cfo0 > 0
@@ -3275,20 +3274,36 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                         "Income_Statement.grossProfit", "Income_Statement.totalRevenue"],
             "unit": "/9",
             "components": [
-                ("── Profitability ──",                                         ""),
-                (f"F1: Net Income > 0",                                         f"{tick(f1)}  |  NI = {bn(ni0)}"),
-                (f"F2: CFO > 0",                                                f"{tick(f2)}  |  CFO = {bn(cfo0)}"),
-                (f"F3: ROA improved  [{y0[:4]} vs {y1[:4] if y1 else '—'}]",   f"{tick(f3)}  |  {pn(roa0)} % vs {pn(roa1)} %"),
-                (f"F4: CFO > Net Income",                                       f"{tick(f4)}  |  {bn(cfo0)} > {bn(ni0)}"),
-                ("── Leverage / Liquidity ──",                                  ""),
-                (f"F5: LTD reduced  [{y0b[:4] if y0b else '—'} vs {y1b[:4] if y1b else '—'}]", f"{tick(f5)}  |  {bn(ltd0)} vs {bn(ltd1)}"),
-                (f"F6: Current Ratio improved",                                 f"{tick(f6)}  |  {pn(cr0)} vs {pn(cr1)}"),
-                (f"F7: No new shares  [{y0b[:4] if y0b else '—'} vs {y1b[:4] if y1b else '—'}]", f"{tick(f7)}  |  {fmt_sh(sh0)} vs {fmt_sh(sh1)}"),
-                ("── Efficiency ──",                                            ""),
-                (f"F8: Gross Margin improved",                                  f"{tick(f8)}  |  {pn(gm0)} % vs {pn(gm1)} %"),
-                (f"F9: Asset Turnover improved",                                f"{tick(f9)}  |  {pn(at0,'2')}x vs {pn(at1,'2')}x"),
-                ("── Result ──",                                                ""),
-                (f"Total Score",                                                f"{total} / 9"),
+                ("── Profitability ──",                                                          ""),
+                (f"F1: Net Income > 0",                                                         tick(f1)),
+                (f"  netIncome  [{y0[:4]}]",                                                    _raw(ni0)),
+                (f"F2: CFO > 0",                                                                tick(f2)),
+                (f"  totalCashFromOperatingActivities  [{y0[:4]}]",                            _raw(cfo0)),
+                (f"F3: ROA improved",                                                           tick(f3)),
+                (f"  ROA [{y0[:4]}]  =  NI {_raw(ni0)} ÷ Avg Assets {_raw(ta_avg0)}",             f"{pn(roa0)} %"),
+                (f"  ROA [{y1[:4] if y1 else '—'}]  =  NI {_raw(ni1)} ÷ Avg Assets {_raw(ta_avg1)}", f"{pn(roa1)} %"),
+                (f"F4: CFO > Net Income",                                                       tick(f4)),
+                (f"  CFO  [{y0[:4]}]",                                                         _raw(cfo0)),
+                (f"  Net Income  [{y0[:4]}]",                                                   _raw(ni0)),
+                ("── Leverage / Liquidity ──",                                                  ""),
+                (f"F5: LTD reduced",                                                            tick(f5)),
+                (f"  longTermDebt  [{y0b[:4] if y0b else '—'}]",                               _raw(ltd0)),
+                (f"  longTermDebt  [{y1b[:4] if y1b else '—'}]",                               _raw(ltd1)),
+                (f"F6: Current Ratio improved",                                                 tick(f6)),
+                (f"  CA {_raw(ca0)} ÷ CL {_raw(cl0)}  [{y0b[:4] if y0b else '—'}]",              f"{pn(cr0)}x"),
+                (f"  CA {_raw(ca1)} ÷ CL {_raw(cl1)}  [{y1b[:4] if y1b else '—'}]",              f"{pn(cr1)}x"),
+                (f"F7: No new shares issued",                                                   tick(f7)),
+                (f"  Shares Outstanding  [{y0b[:4] if y0b else '—'}]",                         fmt_sh(sh0)),
+                (f"  Shares Outstanding  [{y1b[:4] if y1b else '—'}]",                         fmt_sh(sh1)),
+                ("── Efficiency ──",                                                            ""),
+                (f"F8: Gross Margin improved",                                                  tick(f8)),
+                (f"  GP {_raw(gp0)} ÷ Rev {_raw(rev0)}  [{y0[:4]}]",                              f"{pn(gm0)} %"),
+                (f"  GP {_raw(gp1)} ÷ Rev {_raw(rev1)}  [{y1[:4] if y1 else '—'}]",              f"{pn(gm1)} %"),
+                (f"F9: Asset Turnover improved",                                                tick(f9)),
+                (f"  Rev {_raw(rev0)} ÷ Avg Assets {_raw(ta_avg0)}  [{y0[:4]}]",                  f"{pn(at0)}x"),
+                (f"  Rev {_raw(rev1)} ÷ Avg Assets {_raw(ta_avg1)}  [{y1[:4] if y1 else '—'}]",  f"{pn(at1)}x"),
+                ("── Result ──",                                                                ""),
+                (f"Total Score",                                                                f"{total} / 9"),
             ],
             "result": str(total)}
 
