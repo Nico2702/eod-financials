@@ -3217,12 +3217,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
             "unit": "/9",
             "components": [
                 ("── Profitability ──",          ""),
-                ("F1: ROA > 0",                  "Net Income ÷ Total Assets > 0"),
+                ("F1: Net Income > 0",           "Income_Statement.netIncome > 0"),
                 ("F2: CFO > 0",                  "Cash_Flow.totalCashFromOperatingActivities > 0"),
                 ("F3: ΔROA > 0",                 "ROA[Y0] > ROA[Y-1]"),
-                ("F4: Accrual (CFO > NI)",       "CFO ÷ TA > NI ÷ TA"),
+                ("F4: Accrual (CFO > NI)",       "CFO > Net Income"),
                 ("── Leverage / Liquidity ──",   ""),
-                ("F5: Δ Total Debt Ratio < 0",   "(LTD+STD+CLO)/TA[Y0] < (LTD+STD+CLO)/TA[Y-1]"),
+                ("F5: LTD < prev LTD",           "longTermDebt[Y0] < longTermDebt[Y-1]"),
                 ("F6: Δ Current Ratio > 0",      "CurrentRatio[Y0] > CurrentRatio[Y-1]"),
                 ("F7: No new shares issued",     "Shares[Y0] ≤ Shares[Y-1]"),
                 ("── Efficiency ──",             ""),
@@ -3567,8 +3567,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         ta_p= fv(bs_prev.get("totalAssets")) if bs_prev else None
         ta_avg = (ta + ta_p)/2 if ta and ta_p else ta
         re  = fv(bs_d.get("retainedEarnings"))
-        ltd = (fv(bs_d.get("longTermDebt")) or 0) + (fv(bs_d.get("shortTermDebt")) or 0) + (fv(bs_d.get("capitalLeaseObligations")) or 0)
-        ltd_p=((fv(bs_prev.get("longTermDebt")) or 0) + (fv(bs_prev.get("shortTermDebt")) or 0) + (fv(bs_prev.get("capitalLeaseObligations")) or 0)) if bs_prev else ltd
+        ltd = (fv(bs_d.get("longTermDebt")) or 0)
+        ltd_p=(fv(bs_prev.get("longTermDebt")) or 0) if bs_prev else ltd
         ca  = fv(bs_d.get("totalCurrentAssets"))
         cl  = fv(bs_d.get("totalCurrentLiabilities"))
         ca_p= fv(bs_prev.get("totalCurrentAssets")) if bs_prev else None
@@ -3581,8 +3581,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         gp_p = fv(a_is.get(years[1], {}).get("grossProfit")) if len(years)>1 else None
         shares = fv(bs_d.get("commonStockSharesOutstanding"))
         shares_p = fv(bs_prev.get("commonStockSharesOutstanding")) if bs_prev else None
-        # F1: ROA > 0
-        if ni and ta_avg and ta_avg != 0 and ni/ta_avg > 0: score += 1
+        # F1: NI > 0 (Finqube-aligned)
+        if ni and ni > 0: score += 1
         # F2: CFO > 0
         if cfo and cfo > 0: score += 1
         # F3: ΔROA > 0
@@ -3594,10 +3594,8 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
             if ni_p and ta_avg_p and ta_avg_p != 0 and roa_c > ni_p/ta_avg_p: score += 1
         # F4: CFO > NI (accrual)
         if cfo and ni and cfo > ni: score += 1
-        # F5: Δleverage < 0 (lower debt ratio)
-        if ta and ta_p:
-            lev_c = ltd/ta; lev_p = ltd_p/ta_p
-            if lev_c < lev_p: score += 1
+        # F5: longTermDebt < prev longTermDebt (Finqube-aligned — absolute LTD)
+        if ltd < ltd_p: score += 1
         # F6: Δliquidity > 0 (current ratio improved)
         if ca and cl and ca_p and cl_p:
             if (ca/cl) > (ca_p/cl_p): score += 1
