@@ -3279,12 +3279,12 @@ def compute_drilldown(label: str, data: dict, hl: dict, val: dict, price_data: d
                 (f"  netIncome  [{y0[:4]}]",                                                    _raw(ni0)),
                 (f"F2: CFO > 0",                                                                tick(f2)),
                 (f"  totalCashFromOperatingActivities  [{y0[:4]}]",                            _raw(cfo0)),
-                (f"F3: ROA improved",                                                           tick(f3)),
-                (f"  ROA [{y0[:4]}]  =  NI {_raw(ni0)} ÷ Avg Assets {_raw(ta_avg0)}",             f"{pn(roa0)} %"),
-                (f"  ROA [{y1[:4] if y1 else '—'}]  =  NI {_raw(ni1)} ÷ Avg Assets {_raw(ta_avg1)}", f"{pn(roa1)} %"),
-                (f"F4: CFO > Net Income",                                                       tick(f4)),
+                (f"F3: CFO > Net Income",                                                       tick(f4)),
                 (f"  CFO  [{y0[:4]}]",                                                         _raw(cfo0)),
                 (f"  Net Income  [{y0[:4]}]",                                                   _raw(ni0)),
+                (f"F4: ROA improved",                                                           tick(f3)),
+                (f"  ROA [{y0[:4]}]  =  NI {_raw(ni0)} ÷ Avg Assets {_raw(ta_avg0)}",             f"{pn(roa0)} %"),
+                (f"  ROA [{y1[:4] if y1 else '—'}]  =  NI {_raw(ni1)} ÷ Avg Assets {_raw(ta_avg1)}", f"{pn(roa1)} %"),
                 ("── Leverage / Liquidity ──",                                                  ""),
                 (f"F5: LTD reduced",                                                            tick(f5)),
                 (f"  longTermDebt  [{y0b[:4] if y0b else '—'}]",                               _raw(ltd0)),
@@ -3659,15 +3659,15 @@ def compute_health_score(data: dict, hl: dict, price_data: dict = None) -> dict:
         if ni and ni > 0: score += 1
         # F2: CFO > 0
         if cfo and cfo > 0: score += 1
-        # F3: ΔROA > 0
+        # F3: CFO > NI (accrual) — Finqube order
+        if cfo and ni and cfo > ni: score += 1
+        # F4: ΔROA > 0 — Finqube order
         if ni and ta_avg and ta_avg != 0:
             roa_c = ni/ta_avg
             ni_p = fv(a_is.get(years[1], {}).get("netIncome")) if len(years)>1 else None
             ta_pp = fv(a_bs.get(years[2], {}).get("totalAssets")) if len(years_bs)>2 else None
             ta_avg_p = (ta_p+ta_pp)/2 if ta_p and ta_pp else ta_p
             if ni_p and ta_avg_p and ta_avg_p != 0 and roa_c > ni_p/ta_avg_p: score += 1
-        # F4: CFO > NI (accrual)
-        if cfo and ni and cfo > ni: score += 1
         # F5: longTermDebt < prev longTermDebt (Finqube-aligned — absolute LTD)
         if ltd < ltd_p: score += 1
         # F6: Δliquidity > 0 (current ratio improved)
